@@ -22,6 +22,7 @@ test("init in a fresh repo writes the factory files, a local remote and the push
   const out = node(CLI, "init", "--yes");
   assert.match(out, /local bare remote/);
   assert.match(out, /Adopt agentic-factory \(ADR-0001\), pushed to origin\/main/);
+  assert.match(fs.readFileSync(path.join(tmp, "docs/adr/0001-adopt-agentic-factory.md"), "utf8"), /^# ADR-0001:/m);
   for (const f of ["factory.config.json", "AGENTS.md", "docs/coordinator.md", "docs/dev-workflow.md", "docs/review-protocol.md", "docs/adr/0001-adopt-agentic-factory.md", ".githooks/pre-push", "tools/factory-guardrails.mjs", ".factory/controller/CONTROLLER.md", ".factory/controller/skills/orchestration/SKILL.md", ".agents/skills/ponytail/SKILL.md"]) assert.ok(fs.existsSync(path.join(tmp, f)), f);
   assert.equal(git("config", "core.hooksPath"), ".githooks");
   assert.equal(git("remote"), "origin");
@@ -163,6 +164,47 @@ test("a fresh clone armed with init --yes rejects an unreviewed push", () => {
   assert.equal(execFileSync("git", ["config", "core.hooksPath"], { cwd: clone, encoding: "utf8" }).trim(), ".githooks", "a clone arms the hooks");
   fs.writeFileSync(path.join(clone, "src/clone.js"), "export const c = 1;\n"); execFileSync("git", ["add", "src/clone.js"], { cwd: clone }); execFileSync("git", ["commit", "-qm", "clone feature"], { cwd: clone });
   const r = spawnSync("git", ["push", "-q", "origin", "main"], { cwd: clone, encoding: "utf8" }); assert.notEqual(r.status, 0); assert.match(r.stderr, /Push to main rejected/);
+});
+
+test("a repo with its own pre-commit keeps it and still gets the review gate (hooks.mode merge); own ADR numbering is respected", () => {
+  const own = fs.mkdtempSync(path.join(os.tmpdir(), "af-own-"));
+  const g = (...a) => { const r = spawnSync("git", a, { cwd: own, encoding: "utf8" }); if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`); return r.stdout.trim(); };
+  g("init", "-q", "-b", "main"); g("config", "user.email", "o@example.com"); g("config", "user.name", "o");
+  fs.mkdirSync(path.join(own, ".githooks")); fs.writeFileSync(path.join(own, ".githooks/pre-commit"), "#!/bin/sh\necho OWN-HOOK-RAN >&2\n"); fs.chmodSync(path.join(own, ".githooks/pre-commit"), 0o755);
+  fs.mkdirSync(path.join(own, "docs/adr"), { recursive: true }); fs.writeFileSync(path.join(own, "docs/adr/0001-first.md"), "# ADR-0001: First\n\nStatus: accepted\nDecided by: o (2026-01-01)\n");
+  fs.writeFileSync(path.join(own, "package.json"), JSON.stringify({ name: "own", scripts: { test: "echo ok" } }));
+  g("add", "-A"); g("commit", "-qm", "init");
+  const out = execFileSync("node", [CLI, "init", "--yes"], { cwd: own, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } });
+  assert.match(out, /hooks\.mode = "merge"/); assert.match(out, /Adopt agentic-factory \(ADR-0002\)/);
+  assert.ok(fs.existsSync(path.join(own, "docs/adr/0002-adopt-agentic-factory.md")), "adoption ADR under the next free number");
+  assert.ok(fs.existsSync(path.join(own, "docs/adr/0000-template.md")), "ADR template written");
+  assert.match(fs.readFileSync(path.join(own, ".githooks/pre-commit"), "utf8"), /OWN-HOOK-RAN[\s\S]*factory-guardrails\.mjs static-checks/, "own line kept, factory lines appended");
+  fs.writeFileSync(path.join(own, "x.js"), "export const x = 1;\n"); g("add", "x.js");
+  const c = spawnSync("git", ["commit", "-qm", "x"], { cwd: own, encoding: "utf8" }); assert.equal(c.status, 0, c.stderr); assert.match(c.stderr, /OWN-HOOK-RAN/);
+  const p = spawnSync("git", ["push", "-q", "origin", "main"], { cwd: own, encoding: "utf8" }); assert.notEqual(p.status, 0); assert.match(p.stderr, /Push to main rejected/);
+  assert.match(execFileSync("node", [CLI, "doctor"], { cwd: own, encoding: "utf8", env: { ...process.env, HOME: home } }), /factory guardrails wired \(merge\)/);
+});
+
+test("a repo with its own pre-commit and pre-push keeps them untouched (hooks.mode own) and init says so", () => {
+  const own = fs.mkdtempSync(path.join(os.tmpdir(), "af-own2-"));
+  const g = (...a) => execFileSync("git", a, { cwd: own, encoding: "utf8" }).trim();
+  g("init", "-q", "-b", "main"); g("config", "user.email", "o@example.com"); g("config", "user.name", "o");
+  fs.mkdirSync(path.join(own, ".githooks")); for (const h of ["pre-commit", "pre-push"]) { fs.writeFileSync(path.join(own, `.githooks/${h}`), "#!/bin/sh\nexit 0\n"); fs.chmodSync(path.join(own, `.githooks/${h}`), 0o755); }
+  fs.writeFileSync(path.join(own, "package.json"), JSON.stringify({ name: "own2", scripts: { test: "echo ok" } })); g("add", "-A"); g("commit", "-qm", "init");
+  const out = execFileSync("node", [CLI, "init", "--yes"], { cwd: own, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } });
+  assert.match(out, /HOOKS: this repo has its own pre-commit and pre-push; the factory hooks are NOT installed/);
+  assert.equal(fs.readFileSync(path.join(own, ".githooks/pre-push"), "utf8"), "#!/bin/sh\nexit 0\n"); assert.ok(!fs.existsSync(path.join(own, "tools/factory-guardrails.mjs")));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(own, "factory.config.json"), "utf8")).hooks.mode, "own");
+});
+
+test("update derives and records adoptedOn for a project adopted before the field existed", () => {
+  const cfgPath = path.join(tmp, "factory.config.json"); const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")); const recorded = cfg.project.adoptedOn; delete cfg.project.adoptedOn; fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
+  const adr = fs.readFileSync(path.join(tmp, "docs/adr/0001-adopt-agentic-factory.md"), "utf8");
+  const out = execFileSync("node", [CLI, "update"], { cwd: tmp, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1", FACTORY_TODAY: "2030-01-01" } });
+  assert.match(out, /recorded project.adoptedOn = \d{4}-\d{2}-\d{2}/);
+  assert.equal(JSON.parse(fs.readFileSync(cfgPath, "utf8")).project.adoptedOn, recorded, "the adoption day is derived from git, not from the clock");
+  assert.equal(fs.readFileSync(path.join(tmp, "docs/adr/0001-adopt-agentic-factory.md"), "utf8"), adr);
+  tidy();
 });
 
 test("update keeps the recorded decision dates", () => {

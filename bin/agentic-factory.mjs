@@ -43,9 +43,10 @@ function detect() {
   const name = path.basename(repo || cwd);
   const pkg = fs.existsSync("package.json") ? JSON.parse(fs.readFileSync("package.json", "utf8")) : {};
   const scripts = pkg.scripts ?? {};
-  // Package manager: the lockfile decides; without one, the first of pnpm/npm/yarn on PATH, else npm. The hooks run
-  // these commands on every code commit, so never guess one that is not installed.
-  const pm = fs.existsSync("pnpm-lock.yaml") ? "pnpm" : fs.existsSync("yarn.lock") ? "yarn" : fs.existsSync("package-lock.json") ? "npm" : ["pnpm", "npm", "yarn"].find(has) ?? "npm";
+  // Package manager: the lockfile decides; else package.json → packageManager (corepack) or engines; else the first of
+  // pnpm/npm/yarn on PATH, else npm. init runs this manager once and commits its lockfile, so never guess wrong.
+  const declared = /^(pnpm|npm|yarn)\b/.exec(pkg.packageManager ?? "")?.[1] ?? ["pnpm", "yarn", "npm"].find((m) => pkg.engines?.[m]);
+  const pm = fs.existsSync("pnpm-lock.yaml") ? "pnpm" : fs.existsSync("yarn.lock") ? "yarn" : fs.existsSync("package-lock.json") ? "npm" : declared ?? ["pnpm", "npm", "yarn"].find(has) ?? "npm";
   const run = (s) => (scripts[s] ? `${pm} ${pm === "npm" ? "run " : ""}${s}` : "");
   const figma = (() => { try { const r = spawnSync("curl", ["-s", "-m", "1", "-o", "/dev/null", "-w", "%{http_code}", "http://127.0.0.1:3845/mcp"], { encoding: "utf8" }); return /^(2|4)/.test(r.stdout); } catch { return false; } })();
   return {
@@ -138,7 +139,7 @@ async function init() {
   c.hosts.controller = { host: await ask("8. Where does the Controller run?", c.hosts.workers.map((h) => ({ label: h.kind === "local" ? "On this machine (a second agent session next to the Front agent)" : `On ${h.name} (unattended, survives this machine sleeping)`, value: h.name })), c.hosts.workers.at(-1).name), controllerDir: "~/controller" };
   c.capacity.calibration.mode = await ask("9. Capacity: the limits per host are starting values. Calibrate them automatically?", [{ label: "Auto: start low, raise step by step while the host stays quiet, lower on pressure; the audit verifies", value: "auto" }, { label: "Manual: use the configured limits as they are", value: "manual" }], "auto");
   c.agents.calibration = await ask("   Models: calibrate the tier per role from measured pass rates and rounds?", [{ label: "Auto", value: "auto" }, { label: "Manual: only recommend", value: "manual" }], "auto");
-  say(`\n10. Commands the hooks, Testers and waves will run (detected from package.json with ${d.pm}):`);
+  say(`\n10. Commands the hooks, Testers and waves will run (package manager: ${d.pm}, from ${d.hasLock ? "the lockfile" : "package.json or PATH"}; edit factory.config.json to change):`);
   for (const k of ["install", "typecheck", "lint", "unit", "verify", "e2e"]) c.commands[k] = await askText(`    ${k}?`, d.commands[k] ?? c.commands[k] ?? "");
   if (yes) for (const k of ["install", "typecheck", "lint", "unit", "verify", "e2e"]) say(`    ${k}: ${c.commands[k] || "(none)"}`);
   c.commands.release = d.commands.release.length ? d.commands.release : c.commands.release;
@@ -156,8 +157,9 @@ async function init() {
   // A Node project without a lockfile gets one now, committed with the adoption: the hooks' lint would otherwise
   // install on first use and leave an untracked lockfile in every worktree, and waves could not install frozen.
   let lockfile = "";
+  if (fs.existsSync("package.json") && !d.hasLock && !has(d.pm)) say(`\nNo lockfile and \`${d.pm}\` (the manager package.json names) is not installed: no install run; commands.install stays a plain install. Install ${d.pm} and run \`agentic-factory update\`.`);
   if (fs.existsSync("package.json") && !d.hasLock && has(d.pm)) {
-    say(`\nNo lockfile: running \`${d.pm} install\` once so the lockfile can be committed with the adoption.`);
+    say(`\nNo lockfile: running \`${d.pm} install\` once (manager: ${d.pm}) so the lockfile can be committed with the adoption.`);
     const r = spawnSync(d.pm, ["install"], { stdio: "ignore" });
     lockfile = ["pnpm-lock.yaml", "package-lock.json", "yarn.lock"].find(fs.existsSync) ?? "";
     if (r.status === 0 && lockfile) c.commands.install = d.pm === "pnpm" ? "pnpm install --frozen-lockfile" : d.pm === "npm" ? "npm ci" : "yarn install --frozen-lockfile";
@@ -177,8 +179,12 @@ async function init() {
     manifest.files[rel] = hash(content); say(`  write  ${rel}`);
   };
   say("\nWriting:");
+  const mode = hookMode(); c.hooks = { mode };
+  if (mode === "own") say("  HOOKS: this repo has its own pre-commit and pre-push; the factory hooks are NOT installed. Your hooks must enforce the review gate on main themselves (hooks.mode = \"own\" in factory.config.json).");
+  if (mode === "merge") say("  HOOKS: this repo has its own pre-commit; the factory's guardrail lines are appended to it and the missing hooks are written (hooks.mode = \"merge\").");
   write("factory.config.json", JSON.stringify(c, null, 2) + "\n");
-  for (const rel of walk(path.join(ROOT, "templates"))) if (!skipTemplate(rel)) write(rel, render(fs.readFileSync(path.join(ROOT, "templates", rel), "utf8"), vars), /\.githooks\/|tools\//.test(rel) ? 0o755 : undefined);
+  for (const rel of walk(path.join(ROOT, "templates"))) if (!skipTemplate(rel, mode)) write(templateTarget(rel), render(fs.readFileSync(path.join(ROOT, "templates", rel), "utf8"), vars), /\.githooks\/|tools\//.test(rel) ? 0o755 : undefined);
+  if (mode === "merge" && mergeOwnPreCommit()) say("  merge  .githooks/pre-commit (factory guardrail lines appended)");
   write("docs/dev-workflow.md", absolutizeDocLinks(render(fs.readFileSync(path.join(ROOT, "docs", c.project.language === "de" ? "de/workflow.md" : "workflow.md"), "utf8"), vars), c.project.language));
   for (const rel of walk(path.join(ROOT, "skills"))) write(path.join(".agents/skills", rel), fs.readFileSync(path.join(ROOT, "skills", rel), "utf8"));
   if (!fs.existsSync(".claude")) fs.mkdirSync(".claude");
@@ -198,7 +204,7 @@ async function init() {
   // The adoption commit: only the files init wrote, committed with the ADR reference and pushed BEFORE the hooks are
   // armed, so origin/<main> carries AGENTS.md, the handbooks and the hooks for the first workers and the first wave.
   // A re-run on an initialised project is an update: no adoption commit (the hooks are armed; it could not be pushed).
-  const adopted = hadManifest ? "" : commitAdoption([...Object.keys(manifest.files), ...(lockfile ? [lockfile] : [])], c.project.mainBranch);
+  const adopted = hadManifest ? "" : commitAdoption([...Object.keys(manifest.files), ...(lockfile ? [lockfile] : [])], c.project.mainBranch, vars.ADOPTION_ADR);
   if (hadManifest) say("  already initialised: files refreshed, nothing committed (commit the changes yourself, or use `agentic-factory update`)");
   sh("git", ["config", "core.hooksPath", ".githooks"]);
   if (installNow) { say("\nUser-level skills:"); installSkills(); }
@@ -207,7 +213,7 @@ async function init() {
   const remote = c.hosts.workers.find((h) => h.kind === "remote");
   const ctl = c.hosts.workers.find((h) => h.name === c.hosts.controller.host);
   const steps = [
-    adopted ? `Read docs/dev-workflow.md (the process) and AGENTS.md (the agents' rules). The adoption commit "Adopt agentic-factory (ADR-0001)" is on ${adopted}. From now on protected files need an ADR reference in the commit message; try a commit without one to see the hook speak.` : `Read docs/dev-workflow.md (the process) and AGENTS.md (the agents' rules). Commit the new files with a message that references the adoption ADR, e.g. \`git commit -m "Adopt agentic-factory (ADR-0001)"\`, and push to origin so workers and waves see them.`,
+    adopted ? `Read docs/dev-workflow.md (the process) and AGENTS.md (the agents' rules). The adoption commit "Adopt agentic-factory (${vars.ADOPTION_ADR})" is on ${adopted}.${mode === "own" ? " Your own hooks stay in force; the factory hooks were not installed." : ` From now on protected files need an ADR reference in the commit message; try a commit without one to see the hook speak. A new or proposed ADR is committed by citing ${vars.ADOPTION_ADR} in the message; once accepted, cite the ADR itself.`}` : `Read docs/dev-workflow.md (the process) and AGENTS.md (the agents' rules). Commit the new files with a message that references the adoption ADR, e.g. \`git commit -m "Adopt agentic-factory (${vars.ADOPTION_ADR})"\`, and push to origin so workers and waves see them.`,
     remote && `Set up ${remote.name}: copy .factory/server/ there and follow docs/server-setup.md in the factory repo. Logins (gh, ${c.agents.default}, tailscale${c.agents.runner === "orca" ? ", Orca pairing" : ""}) are yours. Then put its Orca repo id into factory.config.json → hosts.workers[].orcaRepoId and run \`agentic-factory update\` to refresh the bundles.`,
     `Skills at user level, on EVERY host that runs a Controller or Front agent: ${installNow ? "done here" : "`agentic-factory install-skills` here"}${remote ? `; on ${remote.name}: \`mkdir -p ~/.claude/skills ~/.agents/skills && cp -R ~/controller/skills/* ~/.claude/skills/ && cp -R ~/controller/skills/* ~/.agents/skills/\`` : ""}. Without the Orca skills (orchestration, orca-cli) the agents cannot start, watch or release workers.`,
     c.agents.runner === "orca" && !orcaRunning && `Orca: ${d.tools.orca ? `start it (\`${ORCA_BIN} open --json\`) and register the repo (\`${ORCA_BIN} repo add --path <repo> --json\`, id into hosts.workers[].orcaRepoId)` : "install it (https://orca.earendil.works), then register the repo and put its id into hosts.workers[].orcaRepoId"}; the Orca skills load their guide from the binary (\`${ORCA_BIN} skills get orchestration\`).`,
@@ -229,6 +235,7 @@ function templateVars(c) {
   return {
     // DATE is the adoption day, recorded once in factory.config.json: a later update must not rewrite recorded decisions.
     PROJECT: c.project.name, HUMAN: c.project.humanName, MAIN: c.project.mainBranch, BRANCH_PREFIX: c.project.branchPrefix ?? "agents/", DATE: c.project.adoptedOn ?? (process.env.FACTORY_TODAY ?? new Date().toISOString().slice(0, 10)),
+    ADOPTION_ADR: `ADR-${adoptionAdrNumber()}`,
     VERIFY: c.commands.verify || "the verify command", E2E: c.commands.e2e || "the browser suite", RELEASE: (c.commands.release ?? []).join(" and ") || "the release gates",
     UI_LANGUAGE: c.project.language === "de" ? "German" : "English", LANGUAGE_NAME: c.project.language === "de" ? "German" : "English",
     MAX_ROUNDS: String(c.reviews.maxRounds), SUITE_MAX: String(ctl.capacity?.suiteWorkersMax ?? c.capacity.suiteWorkersMax), READONLY_MAX: String(ctl.capacity?.readOnlyWorkersMax ?? c.capacity.readOnlyWorkersMax),
@@ -255,24 +262,44 @@ function templateVars(c) {
 const render = (text, vars) => text.replace(/\{\{([A-Z_]+)\}\}/g, (m, k) => (k in vars ? vars[k] : m));
 // Templates that an existing project may already have in its own form: the adoption ADR is skipped when the project
 // already has an ADR 0001 (its numbering is its own); the ADR template is skipped when docs/adr/ already exists.
-// A project with its own hooks (a .githooks/pre-commit that does not call factory-guardrails) keeps them: neither the
-// factory hooks nor tools/factory-guardrails.mjs are written, so two guardrail sets never coexist.
-const ownHooks = () => fs.existsSync(".githooks/pre-commit") && !fs.readFileSync(".githooks/pre-commit", "utf8").includes("factory-guardrails");
-const skipTemplate = (rel) => (/^docs\/adr\/0001-/.test(rel) && fs.existsSync("docs/adr") && fs.readdirSync("docs/adr").some((f) => /^(ADR-)?0001[-.]/.test(f) && !f.includes("adopt-agentic-factory")))
-  || (/^docs\/adr\/0000-template\.md$/.test(rel) && fs.existsSync("docs/adr") && fs.readdirSync("docs/adr").length > 0 && !fs.existsSync("docs/adr/0000-template.md"))
-  || ((/^\.githooks\//.test(rel) || rel === "tools/factory-guardrails.mjs") && ownHooks());
+// Hooks in a project that already has some. Three modes, decided once and recorded in factory.config.json → hooks.mode:
+//   factory  no .githooks yet: the factory hooks are written
+//   merge    an own pre-commit but no own pre-push: the factory's guardrail lines are appended to the own pre-commit and
+//            the missing hooks are written, so the review gate exists and the own checks keep running
+//   own      own pre-commit AND own pre-push (the project has its own review gate, like the originating project): nothing
+//            is written, init says so loudly, doctor checks only that the own hooks are armed
+const hookMode = () => {
+  const has = (h) => fs.existsSync(`.githooks/${h}`);
+  if (!has("pre-commit")) return "factory";
+  if (fs.readFileSync(".githooks/pre-commit", "utf8").includes("factory-guardrails")) return "factory";
+  return has("pre-push") ? "own" : "merge";
+};
+const ownAdr = () => fs.existsSync("docs/adr") && fs.readdirSync("docs/adr").some((f) => /^(ADR-)?0001[-.]/.test(f) && !f.includes("adopt-agentic-factory"));
+// The adoption ADR takes the next free number when the project already numbers its ADRs.
+const adoptionAdrNumber = () => { if (!fs.existsSync("docs/adr")) return "0001"; const nums = fs.readdirSync("docs/adr").map((f) => /^(?:ADR-)?(\d{4})[-.]/.exec(f)?.[1]).filter(Boolean).map(Number); const existing = fs.readdirSync("docs/adr").find((f) => f.includes("adopt-agentic-factory")); if (existing) return /(\d{4})/.exec(existing)[1]; return String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4, "0"); };
+const skipTemplate = (rel, mode = hookMode()) => ((/^\.githooks\//.test(rel) || rel === "tools/factory-guardrails.mjs") && mode === "own")
+  || (/^\.githooks\/pre-commit$/.test(rel) && mode === "merge");   // merged into the own pre-commit instead
+// The adoption ADR template is written under the project's next free number.
+const templateTarget = (rel) => (/^docs\/adr\/0001-adopt-agentic-factory\.md$/.test(rel) ? `docs/adr/${adoptionAdrNumber()}-adopt-agentic-factory.md` : rel);
+const GUARD_LINES = ["node tools/factory-guardrails.mjs test-count", "node tools/factory-guardrails.mjs staged-safety", "node tools/factory-guardrails.mjs static-checks"];
+function mergeOwnPreCommit() {
+  const p = ".githooks/pre-commit"; const cur = fs.readFileSync(p, "utf8");
+  if (cur.includes("factory-guardrails")) return false;
+  fs.writeFileSync(p, cur.replace(/\s*$/, "\n") + "\n# agentic-factory guardrails (appended by init; the lines above are the project's own checks)\n" + GUARD_LINES.join("\n") + "\n");
+  fs.chmodSync(p, 0o755); return true;
+}
 // The workflow guide copied into a project links to sibling docs that are not copied; point those links at the factory repo.
 const FACTORY_DOCS_URL = "https://github.com/bussard76/agentic-factory/blob/main/docs";
 const absolutizeDocLinks = (text, lang) => text.replace(/\]\((\.\.\/)?([a-z-]+\.md)(#[^)]*)?\)/g, (m, up, f, hash) => `](${FACTORY_DOCS_URL}/${up || lang === "en" ? "" : "de/"}${f}${hash ?? ""})`);
-function commitAdoption(files, branch) {
+function commitAdoption(files, branch, adr = "ADR-0001") {
   const r = spawnSync("git", ["add", "--", ".gitignore", ".factory/manifest.json", ".claude", "docs/reviews/.gitkeep", "docs/reports/.gitkeep", "docs/handoffs/.gitkeep", ...files.filter((f) => !f.startsWith(".factory/") && fs.existsSync(f))], { stdio: "ignore" });
   if (r.status !== 0) return "";
   if (spawnSync("git", ["diff", "--cached", "--quiet"]).status === 0) return "";
-  const c = spawnSync("git", ["commit", "-q", "-m", "Adopt agentic-factory (ADR-0001)"], { encoding: "utf8" });
+  const c = spawnSync("git", ["commit", "-q", "-m", `Adopt agentic-factory (${adr})`], { encoding: "utf8" });
   if (c.status !== 0) { say(`  adoption commit failed: ${(c.stderr || c.stdout).trim().slice(0, 200)}`); return ""; }
   const p = spawnSync("git", ["push", "-q", "-u", "origin", branch], { encoding: "utf8" });
   if (p.status !== 0) { say(`  adoption commit created locally; push failed: ${(p.stderr || "").trim().slice(0, 200)}`); return "this branch (not pushed)"; }
-  say(`  commit Adopt agentic-factory (ADR-0001), pushed to origin/${branch}`);
+  say(`  commit Adopt agentic-factory (${adr}), pushed to origin/${branch}`);
   return `origin/${branch}`;
 }
 function walk(dir, base = dir) { return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name), base) : [path.relative(base, path.join(dir, e.name))])); }
@@ -290,6 +317,17 @@ async function update() {
 }
 async function initNonInteractiveRefresh() {
   const c = JSON.parse(fs.readFileSync("factory.config.json", "utf8"));
+  // Projects adopted before adoptedOn existed: derive the adoption day once (first commit of the manifest, else the
+  // adoption ADR's Date line, else today) and persist it, so the recorded decision dates stop following the clock.
+  if (!c.project.adoptedOn) {
+    const fromGit = sh("git", ["log", "--diff-filter=A", "--format=%as", "-1", "--", ".factory/manifest.json"]);
+    const adrFile = fs.existsSync("docs/adr") ? fs.readdirSync("docs/adr").find((f) => f.includes("adopt-agentic-factory")) : null;
+    const fromAdr = adrFile ? /^Date:\s*(\d{4}-\d{2}-\d{2})/m.exec(fs.readFileSync(path.join("docs/adr", adrFile), "utf8"))?.[1] : null;
+    c.project.adoptedOn = fromGit || fromAdr || process.env.FACTORY_TODAY || new Date().toISOString().slice(0, 10);
+    say(`  recorded project.adoptedOn = ${c.project.adoptedOn} in factory.config.json (decision dates stay fixed)`);
+  }
+  if (!c.hooks) c.hooks = { mode: hookMode() };
+  fs.writeFileSync("factory.config.json", JSON.stringify(c, null, 2) + "\n");
   const vars = templateVars(c);
   const manifest = JSON.parse(fs.existsSync(".factory/manifest.json") ? fs.readFileSync(".factory/manifest.json", "utf8") : '{"files":{}}');
   let written = 0, kept = 0;
@@ -303,7 +341,9 @@ async function initNonInteractiveRefresh() {
     }
     fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, content); if (mode) fs.chmodSync(target, mode); manifest.files[rel] = hash(content); written++; say(`  update ${rel}`);
   };
-  for (const rel of walk(path.join(ROOT, "templates"))) if (!skipTemplate(rel)) write(rel, render(fs.readFileSync(path.join(ROOT, "templates", rel), "utf8"), vars), /\.githooks\/|tools\//.test(rel) ? 0o755 : undefined);
+  const mode = c.hooks.mode;
+  for (const rel of walk(path.join(ROOT, "templates"))) if (!skipTemplate(rel, mode)) write(templateTarget(rel), render(fs.readFileSync(path.join(ROOT, "templates", rel), "utf8"), vars), /\.githooks\/|tools\//.test(rel) ? 0o755 : undefined);
+  if (mode === "merge" && mergeOwnPreCommit()) say("  merge  .githooks/pre-commit (factory guardrail lines appended)");
   write("docs/dev-workflow.md", absolutizeDocLinks(render(fs.readFileSync(path.join(ROOT, "docs", c.project.language === "de" ? "de/workflow.md" : "workflow.md"), "utf8"), vars), c.project.language));
   for (const rel of walk(path.join(ROOT, "skills"))) write(path.join(".agents/skills", rel), fs.readFileSync(path.join(ROOT, "skills", rel), "utf8"));
   for (const rel of walk(path.join(ROOT, "controller"))) write(path.join(".factory/controller", rel), render(fs.readFileSync(path.join(ROOT, "controller", rel), "utf8"), vars), /gate$|\.sh$/.test(rel) ? 0o755 : undefined);
@@ -330,7 +370,9 @@ function doctor() {
   const c = JSON.parse(fs.readFileSync("factory.config.json", "utf8")); ok(`factory.config.json (project ${c.project.name}, factory ${c.factoryVersion})`);
   sh("git", ["config", "core.hooksPath"]) === ".githooks" ? ok("core.hooksPath=.githooks") : bad("core.hooksPath=.githooks (git config core.hooksPath .githooks)");
   for (const h of ["pre-commit", "commit-msg", "pre-push"]) fs.existsSync(`.githooks/${h}`) && (fs.statSync(`.githooks/${h}`).mode & 0o111) ? ok(`hook ${h}`) : bad(`hook .githooks/${h} executable`);
-  fs.existsSync("tools/factory-guardrails.mjs") ? ok("tools/factory-guardrails.mjs") : bad("tools/factory-guardrails.mjs");
+  const hmode = c.hooks?.mode ?? "factory";
+  if (hmode === "own") info("hooks.mode = own: the project's own hooks must enforce the review gate; the factory guardrails are not installed");
+  else fs.existsSync("tools/factory-guardrails.mjs") && fs.readFileSync(".githooks/pre-commit", "utf8").includes("factory-guardrails") ? ok(`factory guardrails wired (${hmode})`) : bad("tools/factory-guardrails.mjs wired into .githooks/pre-commit");
   for (const f of ["AGENTS.md", "docs/coordinator.md", "docs/dev-workflow.md", "docs/review-protocol.md", "docs/architect-protocol.md", "docs/debt.md"]) fs.existsSync(f) ? ok(f) : bad(f);
   fs.existsSync(".agents/skills/ponytail/SKILL.md") ? ok(".agents/skills") : bad(".agents/skills");
   for (const t of [c.agents.default, c.agents.fallback?.agent].filter(Boolean)) has(t) ? ok(`${t} CLI`) : info(`${t} CLI not on this machine`);

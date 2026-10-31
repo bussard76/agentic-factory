@@ -7,7 +7,7 @@ A fresh Worker Architect checks fit before implementation, conformance before in
 1. Read the spec and its `## Architecture impact`. Confirm or raise the level against `AGENTS.md`. Missing or ambiguous impact means `change-spec`.
 2. Trace the affected code: owning modules, public seams, allowed imports, data flow. Compare with the architecture docs and accepted ADRs.
 3. Name the smallest prefactoring that makes the change fit, or state why none is needed. Do not broaden the task into a rewrite.
-4. Level 2: record what the Controller must decide. Level 3: return `level-3` until {{HUMAN}}'s decision is recorded in an accepted ADR with `Decided by: {{HUMAN}} (<date>)`. Give options and a recommendation; the Front agent asks {{HUMAN}} one multiple-choice question.
+4. Level 2: record what the Controller must decide. Level 3: return `level-3` until {{HUMAN}}'s decision is recorded in an accepted ADR with `Decided by: {{HUMAN}} (<date>)`. Give options and a recommendation; the Front agent asks {{HUMAN}} one multiple-choice question. Write the proposed ADR from `docs/adr/0000-template.md` (Status: proposed) and commit it citing the adoption ADR ({{ADOPTION_ADR}}) in the message; the commit hook accepts only references to accepted ADRs with a `Decided by:` line, so a proposed ADR cannot cite itself yet.
 5. Commit only `docs/reviews/<task>-architecture-spec.md` and report path and verdict. From the second round on, precision-only findings become binding Developer instructions with a `pass`; design-relevant findings need another round.
 
 ```markdown

@@ -16,6 +16,8 @@ Every skill in this directory is copied unchanged from its source at a pinned co
 
 ## Repository precedence
 
+**ADR format:** the vendored `domain-modeling/ADR-FORMAT.md` allows a one-paragraph ADR with an optional Status. In a factory project the commit hook accepts only references to ADRs with `Status: accepted` and a `Decided by:` line, so ADRs follow `docs/adr/0000-template.md`; the skill file stays an unchanged copy, the project's `AGENTS.md` states the rule.
+
 A project's `AGENTS.md`, architecture docs and data and safety rules win every conflict with a skill. In particular: one multiple-choice question at a time; tests through public entry points; red-green-refactor; never weaken existing tests; handoffs go to `docs/handoffs/`; retro findings change repo files only, never global agent configuration.
 
 ## Updating a skill

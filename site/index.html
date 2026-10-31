@@ -112,7 +112,7 @@
     <div class="grid" style="margin-top:24px">
       <div class="stat card"><span class="big">1</span><small>Ansprechpartner für den Menschen</small></div>
       <div class="stat card"><span class="big">0</span><small>Pushes nach main ohne bestandenes Review. Git lehnt sie ab.</small></div>
-      <div class="stat card"><span class="big">2</span><small>Review-Runden, dann wird integriert. Der Rest wird Schuld mit Kategorie.</small></div>
+      <div class="stat card"><span class="big">2</span><small>Review-Runden (Standard, einstellbar), dann wird integriert. Der Rest wird Schuld mit Kategorie.</small></div>
       <div class="stat card"><span class="big">24/7</span><small>optional: Nachts bauen, tags planen. Oder durchgehend. Der Rhythmus ist eine Einstellung.</small></div>
     </div>
   </section>
@@ -154,7 +154,7 @@
         <div class="rules">
           <div class="rule"><div><b>Immer dabei: Code-Qualität und Architektur</b>werden in jedem Review geprüft. Ein Architekturverstoß blockiert, Qualitätsbefunde werden behoben oder Schuld.</div></div>
           <div class="rule"><div><b>Nicht im Alltag: Last und Sicherheit</b>Sie bremsen die Entwicklung, darum laufen sie in der Härtungsphase und vor jedem Release, zwingend: keine Freigabe, solange eine dieser Schulden offen ist.</div></div>
-          <div class="rule"><div><b>Nach zwei Runden wird integriert</b>wenn die Funktion läuft. Offene Punkte werden Schuld plus Abnahme auf dem Preview.</div></div>
+          <div class="rule"><div><b>Nach der eingestellten Zahl von Runden wird integriert</b>(standardmäßig zwei), wenn die Funktion läuft. Offene Punkte werden Schuld plus Abnahme auf dem Preview.</div></div>
           <div class="rule"><div><b>Git erzwingt das Review</b>Ein Push nach main ohne bestandenes unabhängiges Review wird vom Hook abgelehnt. <code>--no-verify</code> ist verboten.</div></div>
           <div class="rule"><div><b>Teststufen</b>Developer prüfen gezielt. Tester und Waves prüfen voll. Docker, Sicherheit und Last beim Release, als Bedingung der Freigabe.</div></div>
         </div>
