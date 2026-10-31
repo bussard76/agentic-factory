@@ -112,6 +112,8 @@ The Controller picks the ticket up on its next cycle (every 10 minutes, or immed
 
 Try pushing something to `main` by hand without a review. The pre-push hook refuses it and tells you why.
 
+The exact branch and worktree mechanics of one ticket, step by step, are in [workflow.md](workflow.md#branches-and-worktrees-the-mechanics-of-one-ticket).
+
 ## 8. Accept on the preview
 
 If you enabled the preview, `front-agent/preview-update.sh` keeps a separate clone on the current `main` and restarts your app on the configured port every time `main` moves. Load it as a launchd agent (macOS) from `preview.plist.template`, or run it from cron. Test the new behaviour there; findings go to the Front agent and become tickets.

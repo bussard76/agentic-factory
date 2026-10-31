@@ -79,6 +79,51 @@ flowchart TD
 
 **Bugs** take the same path. First a test must show the bug; no reproduction, no fix.
 
+## Branches and worktrees: the mechanics of one ticket
+
+Every ticket, whether a GitHub issue or a task file, becomes exactly one branch and one worktree per worker. Nothing is built in the main checkout.
+
+| Step | Who | Where | What happens |
+|---|---|---|---|
+| 1. Ticket is `ready` | Front agent | issue `#12` or `docs/tasks/T12-<slug>.md` | goal, outside-in evidence, level, acceptance; a line in `inbox.md` |
+| 2. Spec review | Architect (read-only) | branch `agents/t12-specreview` from `main` | commits only `docs/reviews/T12-architecture-spec.md`; `Verdict: pass` |
+| 3. Build | Developer | **new worktree** `<workspaces>/<project>/t12/` on **new branch** `agents/t12` from `origin/main` | checklist of every acceptance item in the report; one item at a time: failing test, implementation, commit, **push after each item**; targeted checks only; self-review against the spec; merge `origin/main` at the end; report `docs/reports/T12-….md`; `worker_done` with branch and SHA |
+| 4. Review round 1 | Tester (fresh context, read-only) | temporary branch from the reviewed SHA with `origin/main` merged in; findings on `agents/t12-review-1` | runs the full gates itself through `gate`; checks the flows; commits only `docs/reviews/T12-review-1.md` with `Reviewed commit: <SHA>` and `Verdict` |
+| 5a. `fail` | Developer | **the same worktree and branch** `agents/t12` | fixes each finding test-first, commits, pushes; "Rework 1" in the report; a new Tester writes `T12-review-2.md` on `agents/t12-review-2` |
+| 5b. `pass` | Architect (level 2/3 only) | `agents/t12-conformance` from the passed SHA | coarse boundary check, `T12-architecture-conformance.md` |
+| 6. Wave | Controller | worktree `<workspaces>/<project>/coordinator-integration/`, branch `integration` reset to `origin/main` | merges the passed branches (octopus, else one by one), runs the full gates once, **pushes `integration` to `main`**; the pre-push hook verifies that every commit is covered by a `Verdict: pass` review whose SHA is in its history |
+| 7. Preview and acceptance | human | the preview clone on the human's machine | follows `main` automatically; findings become new tickets |
+| 8. Cleanup | Controller, every cycle | all worker hosts | closes the worker's terminal, releases the dispatch, removes worktree `t12/` once its branch is merged or safely on origin, deletes merged `agents/t12*` branches, closes the issue or sets `Status: integrated` |
+
+```mermaid
+gitGraph
+  commit id: "main"
+  branch agents/t12
+  commit id: "item 1 (test+impl)"
+  commit id: "item 2"
+  commit id: "report, merge main"
+  branch agents/t12-review-1
+  commit id: "T12-review-1.md: fail"
+  checkout agents/t12
+  commit id: "rework 1"
+  branch agents/t12-review-2
+  commit id: "T12-review-2.md: pass"
+  checkout main
+  branch integration
+  merge agents/t12 id: "wave: merge, full gates"
+  checkout main
+  merge integration id: "push integration:main"
+```
+
+Rules that make this safe:
+
+- **One worker, one worktree, one branch.** Several tickets run in parallel because their worktrees do not touch. The Controller never changes git state inside a running worker's worktree.
+- **Push after every item.** A server restart loses nothing; the Controller restarts the worker in its worktree with a resume order.
+- **Review branches are never overwritten.** Round numbers are part of the name, so the history of a ticket is complete.
+- **Workers never push to `main`.** Only the wave does, and only with the review coverage the hook checks.
+- **Branch names carry the ticket**: `agents/t12`, `agents/t12-review-<n>`, `agents/t12-conformance`, `agents/t12-specreview`. The prefix comes from `project.branchPrefix`. In GitHub-issue mode the number is the issue number.
+- **Worktree names carry the ticket too**, so `ls <workspaces>/<project>` is the list of work in flight. More entries than tasks plus a few means cleanup is overdue.
+
 ## When what is checked
 
 | Stage | Who | What |

@@ -83,6 +83,51 @@ flowchart TD
 
 **Fehler** laufen denselben Weg. Zuerst muss ein Test den Fehler zeigen, ohne Nachstellung gibt es keinen Fix.
 
+## Branches und Worktrees: die Mechanik eines Tickets
+
+Jedes Ticket, ob GitHub-Issue oder Task-Datei, wird zu genau einem Branch und einem Worktree pro Worker. Im Haupt-Checkout wird nie gebaut.
+
+| Schritt | Wer | Wo | Was passiert |
+|---|---|---|---|
+| 1. Ticket ist `ready` | Front-Agent | Issue `#12` oder `docs/tasks/T12-<slug>.md` | Ziel, Outside-in-Nachweise, Stufe, Abnahme; eine Zeile in `inbox.md` |
+| 2. Spec-Review | Architekt (nur lesend) | Branch `agents/t12-specreview` von `main` | committet nur `docs/reviews/T12-architecture-spec.md`; `Verdict: pass` |
+| 3. Bauen | Developer | **neuer Worktree** `<workspaces>/<projekt>/t12/` auf **neuem Branch** `agents/t12` von `origin/main` | Checkliste aller Abnahmepunkte im Bericht; Punkt für Punkt: fehlschlagender Test, Umsetzung, Commit, **Push nach jedem Punkt**; nur gezielte Prüfungen; Selbst-Review gegen die Spec; am Ende `origin/main` hereinmergen; Bericht `docs/reports/T12-….md`; `worker_done` mit Branch und SHA |
+| 4. Review Runde 1 | Tester (frischer Kontext, nur lesend) | temporärer Branch vom geprüften SHA mit hereingemergtem `origin/main`; Befund auf `agents/t12-review-1` | lässt die vollen Gates selbst über `gate` laufen; prüft die Abläufe; committet nur `docs/reviews/T12-review-1.md` mit `Reviewed commit: <SHA>` und `Verdict` |
+| 5a. `fail` | Developer | **derselbe Worktree und Branch** `agents/t12` | behebt jeden Befund testgetrieben, committet, pusht; „Rework 1“ im Bericht; ein neuer Tester schreibt `T12-review-2.md` auf `agents/t12-review-2` |
+| 5b. `pass` | Architekt (nur Stufe 2/3) | `agents/t12-conformance` vom bestandenen SHA | grobe Grenzprüfung, `T12-architecture-conformance.md` |
+| 6. Wave | Controller | Worktree `<workspaces>/<projekt>/coordinator-integration/`, Branch `integration` auf `origin/main` zurückgesetzt | führt die bestandenen Branches zusammen (Octopus, sonst einzeln), lässt die vollen Gates einmal laufen, **pusht `integration` nach `main`**; der Pre-Push-Hook prüft, dass jeder Commit durch ein Review mit `Verdict: pass` gedeckt ist, dessen SHA in seiner Historie liegt |
+| 7. Preview und Abnahme | Mensch | der Preview-Klon auf dem eigenen Rechner | folgt `main` automatisch; Befunde werden neue Tickets |
+| 8. Aufräumen | Controller, jeder Zyklus | alle Worker-Hosts | schließt das Terminal des Workers, gibt den Dispatch frei, entfernt den Worktree `t12/`, sobald sein Branch gemergt oder sicher auf origin ist, löscht gemergte `agents/t12*`-Branches, schließt das Issue oder setzt `Status: integrated` |
+
+```mermaid
+gitGraph
+  commit id: "main"
+  branch agents/t12
+  commit id: "Punkt 1 (Test+Code)"
+  commit id: "Punkt 2"
+  commit id: "Bericht, main gemergt"
+  branch agents/t12-review-1
+  commit id: "T12-review-1.md: fail"
+  checkout agents/t12
+  commit id: "Rework 1"
+  branch agents/t12-review-2
+  commit id: "T12-review-2.md: pass"
+  checkout main
+  branch integration
+  merge agents/t12 id: "Wave: mergen, volle Gates"
+  checkout main
+  merge integration id: "push integration:main"
+```
+
+Regeln, die das sicher machen:
+
+- **Ein Worker, ein Worktree, ein Branch.** Mehrere Tickets laufen parallel, weil sich ihre Worktrees nicht berühren. Der Controller ändert nie Git-Zustand im Worktree eines laufenden Workers.
+- **Push nach jedem Punkt.** Ein Server-Neustart verliert nichts; der Controller startet den Worker in seinem Worktree mit einer Fortsetzungs-Anweisung neu.
+- **Review-Branches werden nie überschrieben.** Die Rundennummer steht im Namen, so bleibt die Geschichte eines Tickets vollständig.
+- **Worker pushen nie nach `main`.** Das tut nur die Wave, und nur mit der Review-Deckung, die der Hook prüft.
+- **Branch-Namen tragen das Ticket:** `agents/t12`, `agents/t12-review-<n>`, `agents/t12-conformance`, `agents/t12-specreview`. Das Präfix kommt aus `project.branchPrefix`. Im Issue-Modus ist die Nummer die Issue-Nummer.
+- **Worktree-Namen tragen das Ticket ebenfalls.** `ls <workspaces>/<projekt>` ist damit die Liste der laufenden Arbeit. Mehr Einträge als Aufgaben plus ein paar bedeutet: Aufräumen ist überfällig.
+
 ## Wann was geprüft wird
 
 | Stufe | Wer | Was |

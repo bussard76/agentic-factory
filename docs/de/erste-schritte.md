@@ -112,6 +112,8 @@ Der Controller nimmt das Ticket im nächsten Zyklus auf (alle 10 Minuten oder so
 
 Versuche einmal, von Hand ohne Review nach `main` zu pushen. Der Pre-Push-Hook lehnt ab und sagt warum.
 
+Die genaue Branch- und Worktree-Mechanik eines Tickets, Schritt für Schritt, steht in [workflow.md](workflow.md#branches-und-worktrees-die-mechanik-eines-tickets).
+
 ## 8. Auf dem Preview abnehmen
 
 Wenn du den Preview aktiviert hast, hält `front-agent/preview-update.sh` einen separaten Klon auf dem aktuellen `main` und startet deine App auf dem konfigurierten Port neu, sobald `main` sich bewegt. Lade ihn als launchd-Agent (macOS) aus `preview.plist.template` oder per cron. Teste das neue Verhalten dort; Befunde gehen an den Front-Agent und werden Tickets.
