@@ -1,0 +1,71 @@
+# Factory review 2
+
+Independent review of agentic-factory at HEAD, round 2. Static reading of the whole repository plus the tests and an isolated end-to-end experiment (temporary `HOME`, `FACTORY_SKIP_ORCA=1`, no network, no ssh, no Orca state). Round 1 is `docs/reviews/factory-review-1.md`; deferred items are in `debt.md` (F01–F09).
+
+## (a) Round-1 verification
+
+| # | Round-1 proposal | Status | Evidence at HEAD |
+|---|---|---|---|
+| 1 | Review coverage fails closed | fixed, with a regression | `templates/tools/factory-guardrails.mjs:117,123-124` check `cat-file -e` and `merge-base --is-ancestor` by exit status; `:137-141` fails closed on git errors. The added `onlyReviewsAfter` rejects every multi-task wave (P1). |
+| 2 | Cleanup must not delete untracked work | fixed | `controller/cleanup.mjs:22` removes nothing when terminals cannot be listed; `:31` uses `status --porcelain` (untracked included); `:44` removes without `--force`. Residual: `:59` (P6). |
+| 3 | Capacity exception under pressure | fixed | `controller/capacity.mjs:33-44` builds the pressure list before calibration; `:66` builds reasons after it. |
+| 4 | Fresh local repository reaches the first wave | partly | `bin/agentic-factory.mjs:63-72` creates `~/.factory-remotes/<name>.git` and pushes the pre-adoption branch. The adoption commit itself cannot be pushed (P2); a two-task wave is rejected (P1). |
+| 5 | Local Front-agent operation | partly | `front-agent/hosts.mjs:13-18`, `statuswatch.mjs:18-23`, `relay.mjs:14` resolve the controller host and use the filesystem locally. `front-agent/FRONT_AGENT.md:3,14` still says `ssh {{SSH_ALIAS}}`, rendered as `ssh local` (`bin/agentic-factory.mjs:213`) (P9). |
+| 6 | Preserve user files on init/update | partly | `bin/agentic-factory.mjs:142-146,235-239` keep unknown or changed files and write the new version to `.factory/new/`. No diff is shown although `README.md:43` and `docs/onboarding.md:3` promise one (P10). |
+| 7 | Waves must not report success on push failure | fixed | `controller/integ-wave.sh:7` (`pipefail`), `:14-15` fail fast, `:40` propagates the push status. |
+| 8 | Worker startup verification | not fixed (deferred F09) | `controller/start.mjs:53` ignores the `onHost` result; `:53,60` single-quote `~/…` remote paths (P14). Terminal runner is marked experimental. |
+| 9 | Calibration `--days` default | fixed | `controller/calibrate-models.mjs:12-14`. The identical bug remains in `controller/wait.mjs:8` (P4). |
+| 10 | macOS gate without `flock` | fixed | `controller/gate.mjs` (ticket files, node only), `controller/gate:5`; `test/smoke.test.mjs:70-73`. Stale references remain (P13). |
+| 11 | No silently approved empty gates | partly (F04) | `controller/integ-wave.sh:10` refuses an empty `VERIFY_CMD`; `init` still accepts an empty verify command (`bin/agentic-factory.mjs:127`); `controller/wave.mjs:13` substitutes `true` when the key is missing (P11). |
+| 12 | Test-count guardrail | deferred (F03) | `README.md:64` names it a heuristic; code unchanged. |
+| 13 | Secret scan | deferred (F02) | `README.md:63`. |
+| 14 | Review independence, server-side protection | deferred (F01) | `README.md:62`. |
+| 15 | Preview cleanup | deferred (F08) | `front-agent/preview-update.sh:25-26` unchanged. |
+| 16 | `--dry` genuinely dry | fixed | `controller/cleanup.mjs:18,37,58`. |
+| 17 | Init for existing repos and commands | fixed | `bin/agentic-factory.mjs:59` (`rev-parse`), `:78` (actual branch), `:37` (`-` clears a command). |
+| 18 | Calibration evidence | deferred (F06) | Read-only quiet period added, `controller/capacity.mjs:59`. |
+| 19 | Onboarding instructions | fixed | `docs/getting-started.md:15,19,53-67` and `docs/de/erste-schritte.md` identical in structure (141 lines each). |
+| 20 | EN/DE sync and generated links | partly | Boundary defined in `docs/workflow.md:32,148`; `:78` and `docs/de/workflow.md:82` still say the human tests "with real data"; EN links at `docs/workflow.md:44,136,151,202,206` dangle in the generated `docs/dev-workflow.md` (P12). |
+| 21 | Origin-specific defaults | fixed | `factory.config.example.json` uses `my-app`/`build-server`; `server/installimage.example.conf:2,8`; `docs/onboarding.md:5-21` matches the wizard order in `bin/agentic-factory.mjs:76-135`. |
+| 22 | Observable gate queue, journaled calibration | fixed (F07 remains) | `controller/capacity.mjs:19` counts ticket files, `:52` journals every cap change. `docs/testing.md:16` still describes a "doorman lock" (P13). |
+| 23 | Executable regression coverage | fixed (F05 remains) | `test/smoke.test.mjs` (6 tests); `bin/agentic-factory.mjs:320` keeps the source root. Coverage gaps let P1, P4 and P6 through. |
+
+## (b) Test results
+
+- `node --test test/smoke.test.mjs`: 6 tests, 6 pass, 0 fail (5.5 s).
+- `node bin/agentic-factory.mjs selfcheck`: `selfcheck ok`, exit 0.
+- Experiment (fresh repo, `init --yes`, adoption commit, two task branches each with a passing review on its own `agents/t<n>-review-1` branch, waves merged as `controller/integ-wave.sh` does):
+  - push of the adoption commit to `main`: **rejected** by the review gate (`Push to main rejected`)
+  - wave of one task plus its review branch: pushed
+  - wave of the task branch without its review branch: rejected
+  - wave of **two** reviewed tasks: **rejected**, both task commits listed as uncovered
+  - wave of one reviewed task **after `main` moved**: **rejected**
+  - `node wait.mjs` without `--hours`: exits at once with `no event after NaNh`
+  - `capacity.mjs --verbose` on this 64 GB Mac: `start`, `availGb 16.8` (total memory divided by four)
+
+## (c) Remaining and new proposals, prioritized
+
+1. **The review gate rejects every multi-task wave and every wave after `main` moved.** `templates/tools/factory-guardrails.mjs:117,137-141`: `onlyReviewsAfter(r.sha, tip)` diffs the whole tree between the reviewed SHA and the pushed tip, so a second task's files (or commits that reached `main` after the review) count as unreviewed changes. The documented wave trigger is two passed tasks (`docs/workflow.md:77`), so the first real wave fails and the newcomer sees "Commits without a passing independent review" for reviewed work. Change: delete `onlyReviewsAfter`; per non-merge commit require an ancestor relation to a passing review SHA that is itself an ancestor of the tip (lines 117, 123-124 already do this), and keep the merge own-change check in `commitFiles` (`:125-131`) as the guard against unreviewed changes in merges. Add two smoke tests: a two-task wave and a wave after `main` moved.
+2. **The adoption commit cannot reach `origin`.** `docs/getting-started.md:46-53` commits the adoption but never pushes, and a push is rejected because `bin/agentic-factory.mjs:169` enables the hooks before the user pushes while the adoption commit changes `AGENTS.md`, `tools/` and `.githooks/`. Workers branch from `origin/<main>` (`controller/templates/mkspec.mjs:36`) and the wave resets to `origin/<main>` (`controller/integ-wave.sh:15`), so the first wave runs on a tree without `AGENTS.md`, hooks and handbooks. Change: let `init` create the commit `Adopt agentic-factory (ADR-0001)` and push it before setting `core.hooksPath` (the same ordering it already uses for the initial push at `:69`), print that it did, and move the "try a commit without the ADR reference" exercise to a later edit. Test: after `init --yes`, `origin/<main>` contains `AGENTS.md`.
+3. **Nobody says the wave must merge the passing review branch.** The Tester commits its findings on `agents/t<n>-review-<round>` (`controller/templates/mkspec.mjs:69`), the gate reads reviews from the pushed tree (`factory-guardrails.mjs:134`), yet `controller/CONTROLLER.md:44,61`, `docs/workflow.md:94` and the gitGraph at `:98-116` merge only the task branch. The experiment confirms the push is rejected. Change: state in `CONTROLLER.md` step "Tester passed" and in `docs/workflow.md:94` (both languages) that the wave merges `origin/agents/t<n>` **and** `origin/agents/t<n>-review-<round>` of the passing round; let `controller/wave.mjs` append the review branch when given `--review <branch>`.
+4. **`wait.mjs` exits immediately without `--hours`.** `controller/wait.mjs:8` reads `process.argv[-1 + 1]`, the node path, so `hours` is `NaN` and the loop never runs; the Controller's event wait (`CONTROLLER.md:41`) is dead unless a flag is passed. Same defect as round-1 #9. Change: parse like `controller/calibrate-models.mjs:12-14`; add a smoke test that `wait.mjs --hours 0.0003` with the terminal runner returns `no event after` after the window, not before.
+5. **Capacity never allows a suite worker on a 16 or 24 GB Mac.** `controller/capacity.mjs:16` reports `hw.memsize / 4` as "available" (16 GB → 4.2 GB, 24 GB → 6.3 GB) and `:36` compares it with `availableMemoryMinGb: 8` (`factory.config.example.json:121`), so `memHot` is permanently true and the verdict is `wait` with no way out; `docs/getting-started.md:3` promises an all-local first wave. Change: on macOS compute available memory from `vm_stat` (free + inactive + speculative pages × page size) or skip the available-memory rule when neither PSI nor `MemAvailable` exists, and say so in `reason`; unit-test the verdict with fixture probes.
+6. **Orca workers are never forgotten, so the calibrated cap fills up with ghosts.** `controller/cleanup.mjs:59` deletes only entries with a dead `pid`; Orca workers have `terminal`, not `pid` (`controller/start.mjs:46`). `controller/capacity.mjs:28-29` counts every entry in `workers.json`, so after two workers have ever started on the local host (`suiteMax` starts at 2) every later verdict is `wait: suite workers 2/2`. Change: in cleanup also drop entries whose terminal is absent or `exited` in the `terms` list already fetched at `:20`, and count only live entries in capacity; test with a `workers.json` fixture.
+7. **The controller bundle ships the factory repo's runtime state.** `controller/capacity-state.local.json`, `controller/gate-slots.json`, `controller/gate-slots.local.json`, `controller/journal.ndjson` and `controller/specs/t01-dev.txt` are tracked (commit `05ee1fe`) and copied into every project by `bin/agentic-factory.mjs:160,246`. A new project starts with a foreign calibration state (`quietSince` of 2026-10-31), three foreign journal events the auditor will read, and a stray spec. Change: `git rm` them, ignore `controller/*.json` except `factory.config.json`, `controller/journal.ndjson`, `controller/specs/`, and make `selfcheck` fail when such files are present.
+8. **The project name must equal the directory name, silently.** `bin/agentic-factory.mjs:108` sets `projectsDir` to the parent of `cwd`, and `:195` plus `controller/lib.mjs:46` build `PROJECT_DIR` as `projectsDir/<project.name>`. Answering question 1 with any other name (`:76`) points the Controller, `steering/tasks.mjs:9` and every `git pull` at a directory that does not exist. Change: record the local project directory explicitly (`hosts.workers[].projectDir`, default `cwd`) or validate `name === basename(cwd)` and say why.
+9. **`FRONT_AGENT.md` tells a local Front agent to ssh to `local`.** `front-agent/FRONT_AGENT.md:3,14` render `{{SSH_ALIAS}}`, which `bin/agentic-factory.mjs:213` sets to the literal `local` when no remote exists. Change: a `CONTROLLER_LOCATION` and an `INBOX_CMD` variable (`cat >> ~/controller/inbox.md` locally, `ssh <alias> '…'` remotely), rendered from `hosts.controller.host`.
+10. **No diff is shown although the docs promise one.** `README.md:43` ("never touches an existing file without showing the diff") and `docs/onboarding.md:3` ("shows diffs and asks before overwriting") versus `bin/agentic-factory.mjs:146,239`, which keep the file and write `.factory/new/` without asking or diffing. Change: either print a `diff --stat` line per kept file and say "review .factory/new/", or correct both sentences.
+11. **A missing `commands.verify` key still yields a green wave.** `controller/wave.mjs:13` passes `CMDS.verify ?? "true"`, bypassing the refusal in `controller/integ-wave.sh:10` for a hand-edited config. Change: `?? ""`.
+12. **Preview and links in the generated workflow guide.** `docs/workflow.md:78` and `docs/de/workflow.md:82` say the human tests "with real data", contradicting `:32` and `:148` (own environment, private copy, read-only). In an English project the generated `docs/dev-workflow.md` links to `outside-in.md`, `reviews.md`, `testing.md`, `capacity.md`, `decisions.md`, `improvement.md` (`docs/workflow.md:44,136,151,202,206`), which `init` does not copy (`bin/agentic-factory.mjs:155`). Change: reword line 78 to "in their own environment, on a private copy where data is involved"; either copy those six docs into `docs/factory/` or replace the links with the factory repository URL during `render`.
+13. **Stale gate and Linux-only pieces in the local path.** `docs/testing.md:16` describes a "per-pool doorman lock"; `controller/loadlog.sh:12` counts `*-doorman.lock`, which no longer exists, so `lockwaiters` is always 0; `server/4-verify.sh:8` still requires `flock`; `loadlog.sh:7-12` uses `/proc/loadavg` and `free`, so the line `docs/getting-started.md:68` starts on a Mac writes empty fields every minute. Change: count `ticket-*` files under `$TMPDIR/<project>-gate-*/`, drop `flock` from the verify list, and give `loadlog.sh` a `sysctl`/`vm_stat` branch or print "load log needs Linux" once.
+14. **Terminal-runner remote paths never expand `~`.** `controller/start.mjs:53,60` single-quote `~/orca/workspaces/…`, so `mkdir -p '~/…'` creates a directory literally named `~` on the remote host. Experimental runner, low priority; fix together with F09 by expanding paths with `$HOME` on the target.
+
+## (d) Verdict
+
+Verdict: fail
+
+Reason: items 1, 2, 4 and 6 each break a newcomer's first wave on the documented all-local path (two reviewed tasks cannot be pushed to `main`; the adoption commit cannot reach `origin`; the event wait exits at once; the capacity cap fills with finished workers), and item 5 does the same on common Mac hardware. None weakens a guardrail silently; item 1 makes the guardrail stricter than the process.
+
+## (e) Reviewed commit
+
+Reviewed commit: c0fa64ce0f90b0ea5763283ee244cbde79ef0284
