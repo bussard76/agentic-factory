@@ -95,6 +95,10 @@ Keep it short and factual, in {{LANGUAGE_NAME}}. Never put real data or secrets 
 
 Append one JSON line per event to `~/controller/journal.ndjson` with `node journal.mjs`. Types: start, done, review, rerun, stall, nudge, wave, escalation, decision, retro, gate, capacity, cleanup. Reasons: functional, coverage, load-timeout, environment, spec-gap, security, early-stop, other. The auditor lives on this file.
 
+## Project-specific rules (from `docs/controller-rules.md` in the project)
+
+{{PROJECT_RULES}}
+
 ## Restart after a server reboot
 
 All agents are gone. Inspect every worktree under `{{WORKSPACES}}`, compare with `workers.json`, and restart each unfinished worker in its worktree with a resume order (`start.mjs --worktree <dir> --force` with a spec that says what is already done). Because every worker pushes regularly, nothing is lost.

@@ -45,6 +45,8 @@ mkdir -p "$HOME/projects" "$HOME/orca/workspaces" "$HOME/controller"
 for r in "${REPOS[@]}"; do
   [ -d "$HOME/projects/$r/.git" ] || git clone "https://github.com/$OWNER/$r.git" "$HOME/projects/$r"
   ( cd "$HOME/projects/$r"
+    # The hooks are per clone: arm them here, this checkout is where the waves push from.
+    [ -f .githooks/pre-commit ] && git config core.hooksPath .githooks
     [ -f pnpm-lock.yaml ] && pnpm install --frozen-lockfile || true
     [ -f package-lock.json ] && npm ci || true
     # Playwright browsers where the project uses them

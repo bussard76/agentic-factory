@@ -11,6 +11,8 @@ TITLE="$1"; SUMMARY="$2"; shift 2; BR="$*"
 MAIN="${MAIN:-main}"; GATE="${GATE:-$HOME/.local/bin/gate}"
 [ -n "${VERIFY_CMD:-}" ] || { echo "VERIFY-MISSING: commands.verify is empty; a wave without a verification command is not allowed"; exit 1; }
 [ -n "$BR" ] || { echo "NO-BRANCHES"; exit 1; }
+# This script resets and cleans the directory it runs in (untracked files included). Only the integration worktree.
+[ "$(basename "$PWD")" = "coordinator-integration" ] || [ "${WAVE_WORKTREE_OK:-}" = "1" ] || { echo "WRONG-DIRECTORY: $PWD is not the coordinator-integration worktree (set WAVE_WORKTREE_OK=1 to override)"; exit 1; }
 strip() { sed "s/\x1b\[[0-9;]*m//g"; }
 git merge --abort 2>/dev/null; git reset -q --hard 2>/dev/null
 git fetch -q origin || { echo "FETCH-FAILED"; exit 1; }

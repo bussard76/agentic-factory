@@ -75,9 +75,15 @@ function stagedSafety() {
 function staticChecks() {
   const paths = stagedPaths();
   if (isDocsOnly(paths)) { console.log("[factory] documentation-only commit: static checks skipped"); return; }
-  // A merge commit in a wave: the merged commits passed these checks on their branches and the wave runs the full gates
-  // right after; running lint/typecheck here would only install into the integration worktree and block later merges.
-  if (spawnSync("git", ["rev-parse", "-q", "--verify", "MERGE_HEAD"], { stdio: "ignore" }).status === 0) { console.log("[factory] merge commit: static checks skipped (the wave runs the full gates)"); return; }
+  // A clean merge commit (the staged tree IS the automatic merge of HEAD and MERGE_HEAD, nothing edited by hand): the
+  // merged commits passed these checks on their branches and the wave runs the full gates right after. A merge with
+  // hand edits (conflict resolution, a smuggled file) is checked like any commit.
+  if (spawnSync("git", ["rev-parse", "-q", "--verify", "MERGE_HEAD"], { stdio: "ignore" }).status === 0) {
+    const staged = tryGit("write-tree").trim();
+    const auto = spawnSync("git", ["merge-tree", "--write-tree", "HEAD", "MERGE_HEAD"], { encoding: "utf8" });
+    if (auto.status === 0 && staged && auto.stdout.trim().split("\n")[0] === staged) { console.log("[factory] clean merge commit: static checks skipped (the wave runs the full gates)"); return; }
+    console.log("[factory] merge commit with hand edits: static checks run");
+  }
   for (const key of ["typecheck", "lint"]) {
     const cmd = commands[key];
     if (!cmd) continue;
@@ -96,8 +102,9 @@ function protectedFiles(messagePath) {
   if (!hits.length) return;
   const message = readFileSync(messagePath, "utf8");
   const refs = [...message.matchAll(/\bADR-(\d{4})\b/g)].map((m) => m[1]);
-  const accepted = refs.some((n) => listFiles("index").some((p) => new RegExp(`^docs/adr/(?:ADR-)?${n}[-.].*\\.md$`).test(p) && /^Status:\s*accepted/m.test(show("index", p))));
-  if (!accepted) fail(`Protected files changed without an accepted ADR reference in the commit message:\n${hits.join("\n")}\nAdd "ADR-NNNN" of an accepted ADR (Status: accepted) to the message.`);
+  // The referenced ADR must be in the index, accepted, and carry a non-empty "Decided by:" line.
+  const accepted = refs.some((n) => listFiles("index").some((p) => new RegExp(`^docs/adr/(?:ADR-)?${n}[-.].*\\.md$`).test(p) && /^Status:\s*accepted/m.test(show("index", p)) && /^Decided by:\s*\S/m.test(show("index", p))));
+  if (!accepted) fail(`Protected files changed without an accepted ADR reference in the commit message:\n${hits.join("\n")}\nAdd "ADR-NNNN" of an accepted ADR (Status: accepted, with a "Decided by:" line) to the message.`);
 }
 
 // --- review-gate -------------------------------------------------------------------------------

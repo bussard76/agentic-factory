@@ -29,8 +29,11 @@ export const MODELS = config.agents?.models ?? {};
 export const FALLBACK = config.agents?.fallback ?? {};
 
 // --- hosts -------------------------------------------------------------------------------------
+// A host's kind is relative to where these scripts run: the Controller runs on hosts.controller.host, so that host is
+// local for the Controller even when the Front agent (on the human's machine) reaches it over ssh.
+const controllerHostName = config.hosts?.controller?.host ?? "local";
 const workerHosts = (config.hosts?.workers?.length ? config.hosts.workers : [{ name: "local", kind: "local" }]).map((h) => ({
-  name: h.name, kind: h.kind ?? (h.ssh ? "remote" : "local"), ssh: h.ssh, sshConfig: h.sshConfig,
+  name: h.name, kind: h.name === controllerHostName ? "local" : h.kind ?? (h.ssh ? "remote" : "local"), ssh: h.ssh, sshConfig: h.sshConfig,
   projectDir: h.projectDir,   // explicit checkout path on that host; default <projectsDir>/<project name>
   projectsDir: h.projectsDir ?? "~/projects", workspacesDir: h.workspacesDir ?? "~/orca/workspaces",
   orcaEnvironment: h.orcaEnvironment ?? "", orcaRepoId: h.orcaRepoId ?? "",
@@ -56,8 +59,8 @@ export function onHost(h, command, opts = {}) {
 }
 // The project checkout the Controller itself reads (docs, tasks): on the controller's own host.
 const ctl = config.hosts?.controller ?? {};
-const ctlHost = workerHosts.find((h) => h.name === (ctl.host ?? "local")) ?? workerHosts[0];
-export const PROJECT_DIR = ctlHost.kind === "local" ? projectDirOn(ctlHost) : projectDirOn({ ...ctlHost, kind: "local", projectDir: ctl.projectDir ?? ctlHost.projectDir, projectsDir: ctl.projectsDir ?? ctlHost.projectsDir });
+const ctlHost = workerHosts.find((h) => h.name === controllerHostName) ?? workerHosts[0];
+export const PROJECT_DIR = projectDirOn({ ...ctlHost, kind: "local", projectDir: ctl.projectDir ?? ctlHost.projectDir, projectsDir: ctl.projectsDir ?? ctlHost.projectsDir });
 export const CONTROLLER_DIR = expand(ctl.controllerDir ?? "~/controller");
 
 // --- orca --------------------------------------------------------------------------------------

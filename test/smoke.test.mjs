@@ -90,7 +90,7 @@ test("a wave of two reviewed tasks is accepted, one without its review branch is
 // The wave environment exactly as controller/wave.mjs builds it from the generated config.
 function waveEnv() {
   const cfg = JSON.parse(fs.readFileSync(path.join(tmp, "factory.config.json"), "utf8"));
-  return { ...process.env, MAIN: cfg.project.mainBranch, INSTALL_CMD: cfg.commands.install ?? "", VERIFY_CMD: cfg.commands.verify ?? "", E2E_CMD: cfg.commands.e2e ?? "", GATE: path.join(ROOT, "controller/gate"), TRAILER: "", HOME: home, FACTORY_PROJECT: "smoke" };
+  return { ...process.env, MAIN: cfg.project.mainBranch, INSTALL_CMD: cfg.commands.install ?? "", VERIFY_CMD: cfg.commands.verify ?? "", E2E_CMD: cfg.commands.e2e ?? "", GATE: path.join(ROOT, "controller/gate"), TRAILER: "", HOME: home, FACTORY_PROJECT: "smoke", WAVE_WORKTREE_OK: "1" };
 }
 function runWave(title, branches) {
   const integ = path.join(tmp, "..", path.basename(tmp) + "-integration");
@@ -102,7 +102,12 @@ function runWave(title, branches) {
 
 test("integ-wave.sh with the Controller's own environment pushes a two-task wave, also when a task adds an ADR and a dependency", () => {
   const cfg = JSON.parse(fs.readFileSync(path.join(tmp, "factory.config.json"), "utf8"));
-  assert.match(cfg.commands.install, /^(pnpm|npm|yarn) install$/, "no lockfile: a plain install, not a frozen one");
+  const lock = ["pnpm-lock.yaml", "package-lock.json", "yarn.lock"].find((f) => fs.existsSync(path.join(tmp, f)));
+  if (lock) { assert.match(cfg.commands.install, /frozen-lockfile|npm ci/, "lockfile created at init: frozen install"); assert.match(git("ls-tree", "--name-only", "origin/main"), new RegExp(lock), "lockfile committed with the adoption"); }
+  else assert.match(cfg.commands.install, /^(pnpm|npm|yarn) install$/, "no lockfile: a plain install, not a frozen one");
+  // The wave script refuses to run outside the integration worktree.
+  const wrong = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "x", "y", "origin/main"], { cwd: tmp, encoding: "utf8", env: { ...waveEnv(), WAVE_WORKTREE_OK: "" } });
+  assert.notEqual(wrong.status, 0); assert.match(wrong.stdout, /WRONG-DIRECTORY/);
   const [t7, r7] = reviewedTask("t7"), [t8, r8] = reviewedTask("t8");
   for (const b of [t7, r7, t8, r8]) git("push", "-q", "origin", b);
   const r = runWave("Wave 7+8", [t7, r7, t8, r8]);
@@ -113,7 +118,10 @@ test("integ-wave.sh with the Controller's own environment pushes a two-task wave
   // A local file: dependency keeps the install offline.
   fs.mkdirSync(path.join(tmp, "vendor/tiny"), { recursive: true }); fs.writeFileSync(path.join(tmp, "vendor/tiny/package.json"), '{ "name": "tiny", "version": "1.0.0" }\n');
   const pkg = JSON.parse(fs.readFileSync(path.join(tmp, "package.json"), "utf8")); pkg.dependencies = { tiny: "file:vendor/tiny" }; fs.writeFileSync(path.join(tmp, "package.json"), JSON.stringify(pkg, null, 2) + "\n");
-  git("add", "docs/adr/0002-use-left-pad.md", "vendor/tiny/package.json", "package.json"); git("commit", "-qm", "t11: adopt tiny (ADR-0002)");
+  // A Developer who adds a dependency updates the lockfile in the same commit (the wave installs frozen).
+  const pm = lock === "pnpm-lock.yaml" ? "pnpm" : lock === "yarn.lock" ? "yarn" : lock ? "npm" : null;
+  if (pm) spawnSync(pm, ["install"], { cwd: tmp, stdio: "ignore" });
+  git("add", "docs/adr/0002-use-left-pad.md", "vendor/tiny/package.json", "package.json", ...(lock && fs.existsSync(path.join(tmp, lock)) ? [lock] : [])); git("commit", "-qm", "t11: adopt tiny (ADR-0002)");
   const sha11 = git("rev-parse", "HEAD");
   git("checkout", "-q", "-b", "agents/t11-review-1");
   fs.writeFileSync(path.join(tmp, "docs/reviews/t11-review-1.md"), `# t11 review, round 1\n\nVerdict: pass\nReviewed commit: ${sha11}\n`); git("add", "docs/reviews/t11-review-1.md"); git("commit", "-qm", "t11 review");   // a Tester commits only its findings file
@@ -127,6 +135,41 @@ test("integ-wave.sh with the Controller's own environment pushes a two-task wave
   git("merge", "-q", "--no-ff", "--no-edit", t9, r9, t10, r10);
   const bad = gitTry("push", "-q", "origin", "integration:main"); assert.notEqual(bad.status, 0); assert.match(bad.stderr + bad.stdout, /octopus/);
   tidy(); git("checkout", "-q", "main");
+});
+
+test("a hand-edited merge commit runs the static checks; a clean merge skips them", () => {
+  tidy(); git("checkout", "-q", "-B", "main", "origin/main");
+  const cfgPath = path.join(tmp, "factory.config.json"); const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+  const saved = cfg.commands.lint; cfg.commands.lint = "sh -c 'exit 1'"; fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");   // lint fails from now on
+  git("checkout", "-q", "-b", "agents/merge-src", "origin/main"); fs.writeFileSync(path.join(tmp, "src/m.js"), "export const m = 1;\n"); git("add", "src/m.js");
+  assert.notEqual(gitTry("commit", "-qm", "plain commit with failing lint").status, 0, "a plain commit is blocked by lint");
+  cfg.commands.lint = saved; fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n"); git("commit", "-qm", "m feature");
+  cfg.commands.lint = "sh -c 'exit 1'"; fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
+  git("checkout", "-q", "-B", "integration-x", "origin/main");
+  git("merge", "-q", "--no-ff", "--no-commit", "agents/merge-src"); fs.writeFileSync(path.join(tmp, "src/smuggled.js"), "bad\n"); git("add", "src/smuggled.js");
+  const r = gitTry("commit", "-qm", "merge with a smuggled file"); assert.notEqual(r.status, 0, "hand-edited merge must run lint"); assert.match(r.stderr + r.stdout, /hand edits|lint failed/);
+  git("merge", "--abort"); git("merge", "-q", "--no-ff", "--no-commit", "agents/merge-src");
+  const ok = gitTry("commit", "-qm", "clean merge"); assert.equal(ok.status, 0, ok.stderr + ok.stdout); assert.match(ok.stdout + ok.stderr, /clean merge commit/);
+  cfg.commands.lint = saved; fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
+  tidy(); git("checkout", "-q", "main");
+});
+
+test("a fresh clone armed with init --yes rejects an unreviewed push", () => {
+  const clone = fs.mkdtempSync(path.join(os.tmpdir(), "af-clone-"));
+  const bare = git("remote", "get-url", "origin");
+  execFileSync("git", ["clone", "-q", bare, clone]); execFileSync("git", ["config", "user.email", "c@example.com"], { cwd: clone }); execFileSync("git", ["config", "user.name", "c"], { cwd: clone });
+  const out = execFileSync("node", [CLI, "init", "--yes"], { cwd: clone, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } });
+  assert.match(out, /Already initialised/);
+  assert.equal(execFileSync("git", ["config", "core.hooksPath"], { cwd: clone, encoding: "utf8" }).trim(), ".githooks", "a clone arms the hooks");
+  fs.writeFileSync(path.join(clone, "src/clone.js"), "export const c = 1;\n"); execFileSync("git", ["add", "src/clone.js"], { cwd: clone }); execFileSync("git", ["commit", "-qm", "clone feature"], { cwd: clone });
+  const r = spawnSync("git", ["push", "-q", "origin", "main"], { cwd: clone, encoding: "utf8" }); assert.notEqual(r.status, 0); assert.match(r.stderr, /Push to main rejected/);
+});
+
+test("update keeps the recorded decision dates", () => {
+  const adr = fs.readFileSync(path.join(tmp, "docs/adr/0001-adopt-agentic-factory.md"), "utf8");
+  execFileSync("node", [CLI, "update"], { cwd: tmp, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1", FACTORY_TODAY: "2030-01-01" } });
+  assert.equal(fs.readFileSync(path.join(tmp, "docs/adr/0001-adopt-agentic-factory.md"), "utf8"), adr, "the adoption ADR keeps its date");
+  tidy();
 });
 
 test("reviewer standards need review coverage, ordinary docs do not", () => {
@@ -183,7 +226,7 @@ test("wait.mjs honours --hours and rejects a missing value", () => {
 });
 
 test("controller scripts run against the generated config", () => {
-  const env = { ...process.env, FACTORY_CONFIG: path.join(tmp, ".factory/controller/factory.config.json") };
+  const env = { ...process.env, FACTORY_CONFIG: path.join(tmp, ".factory/controller/factory.config.json"), ORCA_CLI_COMMAND: "/usr/bin/false" };   // never the developer's real Orca
   const ctl = path.join(tmp, ".factory/controller");
   const run = (...a) => execFileSync("node", a, { cwd: ctl, encoding: "utf8", env }).trim();
   const verdict = JSON.parse(run("capacity.mjs", "--verbose"));

@@ -53,7 +53,7 @@ Judge security findings against an attacker **without write access to the human'
 The template hooks (`templates/.githooks`, `templates/tools/factory-guardrails.mjs`) give every project:
 
 - **pre-commit:** test count must not drop; no whitespace errors or conflict markers; a staged-secret scan; the project's static checks
-- **commit-msg:** protected files (architecture docs, ADRs, hooks, dependency lists, contracts) change only when the message references an accepted `ADR-NNNN`
+- **commit-msg:** protected files (`AGENTS.md`, `ARCHITECTURE.md`, `docs/adr/**`, the hooks, the guardrail script) change only when the message references an accepted `ADR-NNNN` that carries a `Decided by:` line; new dependencies are a level-2 decision of the Architect's spec review, not hook-protected
 - **pre-push to `main`:** every non-documentation commit must be covered by a findings file under `docs/reviews/` with `Verdict: pass` and a `Reviewed commit:` SHA that is an ancestor of the pushed tip; after the reviewed commit only `docs/reviews/` may change
 
 `--no-verify` is forbidden everywhere. The hook checks recorded coverage; the Controller remains responsible for the reviewer's independence.

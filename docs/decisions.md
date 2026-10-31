@@ -13,7 +13,7 @@ An agent's private memory is never the only record. The Front agent and the Cont
 
 ## Architecture decisions
 
-Level-3 changes need an **ADR** in `docs/adr/NNNN-<slug>.md` with options, a recommendation and, once decided, `Decided by: <human> (<date>), option <x>`. The push gate rejects an accepted ADR without that line and rejects deleting an accepted ADR; supersede it with a new one instead. Protected files (architecture docs, ADRs, hooks, dependency lists, contracts) change only with an `ADR-NNNN` reference in the commit message.
+Level-3 changes need an **ADR** in `docs/adr/NNNN-<slug>.md` with options, a recommendation and, once decided, `Decided by: <human> (<date>), option <x>`. Protected files (`AGENTS.md`, `ARCHITECTURE.md`, `docs/adr/**`, the hooks and the guardrail script) change only when the commit message references an ADR that is accepted **and** carries that `Decided by:` line; the commit hook checks both. Never delete an accepted ADR; supersede it with a new one.
 
 ## Shared level-2 decisions
 

@@ -21,7 +21,7 @@ Architecture impact: level 3 — introduces the review gate, protected files, th
 
 ## Decision
 
-Option A. The rules live in `AGENTS.md`, `docs/coordinator.md`, `docs/review-protocol.md` and `docs/architect-protocol.md`; the process for people in `docs/dev-workflow.md`. Protected files (`AGENTS.md`, `ARCHITECTURE.md`, `docs/adr/**`, `.githooks/**`, `tools/factory-guardrails.mjs`, root dependency lists) change only with an accepted ADR reference.
+Option A. The rules live in `AGENTS.md`, `docs/coordinator.md`, `docs/review-protocol.md` and `docs/architect-protocol.md`; the process for people in `docs/dev-workflow.md`. Protected files (`AGENTS.md`, `ARCHITECTURE.md`, `docs/adr/**`, `.githooks/**`, `tools/factory-guardrails.mjs`) change only when the commit message references an accepted ADR that carries a `Decided by:` line. New dependencies are a level-2 change decided in the Architect's spec review, not hook-protected.
 
 ## Consequences
 

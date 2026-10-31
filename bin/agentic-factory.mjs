@@ -84,6 +84,7 @@ async function init() {
   const c = JSON.parse(fs.readFileSync(path.join(ROOT, "factory.config.example.json"), "utf8"));
   delete c.$comment;
   c.factoryVersion = PKG.version;
+  c.project.adoptedOn = process.env.FACTORY_TODAY ?? new Date().toISOString().slice(0, 10);
   c.project.name = await askText("1. Project name (used for branches, worktrees, locks, the preview)?", d.name);
   c.project.repo = await askText("   Repository?", d.repo || `github.com/<owner>/${c.project.name}`);
   c.project.mainBranch = sh("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).replace("origin/", "") || sh("git", ["branch", "--show-current"]) || "main";
@@ -152,6 +153,16 @@ async function init() {
   // --- write -----------------------------------------------------------------------------------
   const hadManifest = fs.existsSync(".factory/manifest.json");
   const manifest = { factoryVersion: PKG.version, files: {} };
+  // A Node project without a lockfile gets one now, committed with the adoption: the hooks' lint would otherwise
+  // install on first use and leave an untracked lockfile in every worktree, and waves could not install frozen.
+  let lockfile = "";
+  if (fs.existsSync("package.json") && !d.hasLock && has(d.pm)) {
+    say(`\nNo lockfile: running \`${d.pm} install\` once so the lockfile can be committed with the adoption.`);
+    const r = spawnSync(d.pm, ["install"], { stdio: "ignore" });
+    lockfile = ["pnpm-lock.yaml", "package-lock.json", "yarn.lock"].find(fs.existsSync) ?? "";
+    if (r.status === 0 && lockfile) c.commands.install = d.pm === "pnpm" ? "pnpm install --frozen-lockfile" : d.pm === "npm" ? "npm ci" : "yarn install --frozen-lockfile";
+    else say("  install did not produce a lockfile; keeping the plain install command");
+  }
   const vars = templateVars(c);
   const write = (rel, content, mode) => {
     const target = path.join(cwd, rel);
@@ -167,7 +178,7 @@ async function init() {
   };
   say("\nWriting:");
   write("factory.config.json", JSON.stringify(c, null, 2) + "\n");
-  for (const rel of walk(path.join(ROOT, "templates"))) write(rel, render(fs.readFileSync(path.join(ROOT, "templates", rel), "utf8"), vars), /\.githooks\/|tools\//.test(rel) ? 0o755 : undefined);
+  for (const rel of walk(path.join(ROOT, "templates"))) if (!skipTemplate(rel)) write(rel, render(fs.readFileSync(path.join(ROOT, "templates", rel), "utf8"), vars), /\.githooks\/|tools\//.test(rel) ? 0o755 : undefined);
   write("docs/dev-workflow.md", absolutizeDocLinks(render(fs.readFileSync(path.join(ROOT, "docs", c.project.language === "de" ? "de/workflow.md" : "workflow.md"), "utf8"), vars), c.project.language));
   for (const rel of walk(path.join(ROOT, "skills"))) write(path.join(".agents/skills", rel), fs.readFileSync(path.join(ROOT, "skills", rel), "utf8"));
   if (!fs.existsSync(".claude")) fs.mkdirSync(".claude");
@@ -187,7 +198,7 @@ async function init() {
   // The adoption commit: only the files init wrote, committed with the ADR reference and pushed BEFORE the hooks are
   // armed, so origin/<main> carries AGENTS.md, the handbooks and the hooks for the first workers and the first wave.
   // A re-run on an initialised project is an update: no adoption commit (the hooks are armed; it could not be pushed).
-  const adopted = hadManifest ? "" : commitAdoption(Object.keys(manifest.files), c.project.mainBranch);
+  const adopted = hadManifest ? "" : commitAdoption([...Object.keys(manifest.files), ...(lockfile ? [lockfile] : [])], c.project.mainBranch);
   if (hadManifest) say("  already initialised: files refreshed, nothing committed (commit the changes yourself, or use `agentic-factory update`)");
   sh("git", ["config", "core.hooksPath", ".githooks"]);
   if (installNow) { say("\nUser-level skills:"); installSkills(); }
@@ -216,7 +227,8 @@ function templateVars(c) {
   const projectDir = ctl.projectDir ?? (ctl.kind === "local" ? path.join(ctl.projectsDir, c.project.name) : `${ctl.projectsDir}/${c.project.name}`);
   const orca = c.agents.runner === "orca";
   return {
-    PROJECT: c.project.name, HUMAN: c.project.humanName, MAIN: c.project.mainBranch, BRANCH_PREFIX: c.project.branchPrefix ?? "agents/", DATE: new Date().toISOString().slice(0, 10),
+    // DATE is the adoption day, recorded once in factory.config.json: a later update must not rewrite recorded decisions.
+    PROJECT: c.project.name, HUMAN: c.project.humanName, MAIN: c.project.mainBranch, BRANCH_PREFIX: c.project.branchPrefix ?? "agents/", DATE: c.project.adoptedOn ?? (process.env.FACTORY_TODAY ?? new Date().toISOString().slice(0, 10)),
     VERIFY: c.commands.verify || "the verify command", E2E: c.commands.e2e || "the browser suite", RELEASE: (c.commands.release ?? []).join(" and ") || "the release gates",
     UI_LANGUAGE: c.project.language === "de" ? "German" : "English", LANGUAGE_NAME: c.project.language === "de" ? "German" : "English",
     MAX_ROUNDS: String(c.reviews.maxRounds), SUITE_MAX: String(ctl.capacity?.suiteWorkersMax ?? c.capacity.suiteWorkersMax), READONLY_MAX: String(ctl.capacity?.readOnlyWorkersMax ?? c.capacity.readOnlyWorkersMax),
@@ -236,9 +248,19 @@ function templateVars(c) {
     INBOX_CMD: ctl.kind === "local" ? "`cat >> ~/controller/inbox.md`" : `\`ssh ${ctl.ssh} 'cat >> ~/controller/inbox.md'\``,
     PREVIEW_PLIST: `de.${c.project.name}.preview`, PREVIEW_LABEL: `de.${c.project.name}.preview`, PREVIEW_SCRIPT: `${os.homedir()}/front-agent/${c.project.name}/preview-update.sh`, HOME: os.homedir(),
     COMMIT_PATTERN: `mv .env ../.${c.project.name}.env; git add …; git commit …; mv ../.${c.project.name}.env .env`,
+    // Project-specific Controller rules live in the project (docs/controller-rules.md) and are rendered into CONTROLLER.md.
+    PROJECT_RULES: fs.existsSync("docs/controller-rules.md") ? fs.readFileSync("docs/controller-rules.md", "utf8").trim() : "_None yet. Put project-specific hard rules, data boundaries, known flakes and decision pointers into `docs/controller-rules.md`; `agentic-factory update` renders them here._",
   };
 }
 const render = (text, vars) => text.replace(/\{\{([A-Z_]+)\}\}/g, (m, k) => (k in vars ? vars[k] : m));
+// Templates that an existing project may already have in its own form: the adoption ADR is skipped when the project
+// already has an ADR 0001 (its numbering is its own); the ADR template is skipped when docs/adr/ already exists.
+// A project with its own hooks (a .githooks/pre-commit that does not call factory-guardrails) keeps them: neither the
+// factory hooks nor tools/factory-guardrails.mjs are written, so two guardrail sets never coexist.
+const ownHooks = () => fs.existsSync(".githooks/pre-commit") && !fs.readFileSync(".githooks/pre-commit", "utf8").includes("factory-guardrails");
+const skipTemplate = (rel) => (/^docs\/adr\/0001-/.test(rel) && fs.existsSync("docs/adr") && fs.readdirSync("docs/adr").some((f) => /^(ADR-)?0001[-.]/.test(f) && !f.includes("adopt-agentic-factory")))
+  || (/^docs\/adr\/0000-template\.md$/.test(rel) && fs.existsSync("docs/adr") && fs.readdirSync("docs/adr").length > 0 && !fs.existsSync("docs/adr/0000-template.md"))
+  || ((/^\.githooks\//.test(rel) || rel === "tools/factory-guardrails.mjs") && ownHooks());
 // The workflow guide copied into a project links to sibling docs that are not copied; point those links at the factory repo.
 const FACTORY_DOCS_URL = "https://github.com/bussard76/agentic-factory/blob/main/docs";
 const absolutizeDocLinks = (text, lang) => text.replace(/\]\((\.\.\/)?([a-z-]+\.md)(#[^)]*)?\)/g, (m, up, f, hash) => `](${FACTORY_DOCS_URL}/${up || lang === "en" ? "" : "de/"}${f}${hash ?? ""})`);
@@ -281,7 +303,7 @@ async function initNonInteractiveRefresh() {
     }
     fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, content); if (mode) fs.chmodSync(target, mode); manifest.files[rel] = hash(content); written++; say(`  update ${rel}`);
   };
-  for (const rel of walk(path.join(ROOT, "templates"))) write(rel, render(fs.readFileSync(path.join(ROOT, "templates", rel), "utf8"), vars), /\.githooks\/|tools\//.test(rel) ? 0o755 : undefined);
+  for (const rel of walk(path.join(ROOT, "templates"))) if (!skipTemplate(rel)) write(rel, render(fs.readFileSync(path.join(ROOT, "templates", rel), "utf8"), vars), /\.githooks\/|tools\//.test(rel) ? 0o755 : undefined);
   write("docs/dev-workflow.md", absolutizeDocLinks(render(fs.readFileSync(path.join(ROOT, "docs", c.project.language === "de" ? "de/workflow.md" : "workflow.md"), "utf8"), vars), c.project.language));
   for (const rel of walk(path.join(ROOT, "skills"))) write(path.join(".agents/skills", rel), fs.readFileSync(path.join(ROOT, "skills", rel), "utf8"));
   for (const rel of walk(path.join(ROOT, "controller"))) write(path.join(".factory/controller", rel), render(fs.readFileSync(path.join(ROOT, "controller", rel), "utf8"), vars), /gate$|\.sh$/.test(rel) ? 0o755 : undefined);
@@ -293,6 +315,9 @@ async function initNonInteractiveRefresh() {
   manifest.factoryVersion = PKG.version;
   fs.writeFileSync(".factory/manifest.json", JSON.stringify(manifest, null, 2) + "\n");
   appendGitignore(IGNORES(fs.existsSync("package.json")));   // projects initialised by an older factory get the current ignore list
+  // Every checkout of an adopted project (a fresh clone, the server checkout the waves push from) must arm the hooks:
+  // core.hooksPath is per clone, not committed.
+  if (fs.existsSync(".githooks/pre-commit")) sh("git", ["config", "core.hooksPath", ".githooks"]);
   say(`${written} updated, ${kept} kept (locally changed). Review .factory/new/ and merge what you want.`);
 }
 

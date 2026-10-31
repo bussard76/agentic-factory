@@ -2,7 +2,7 @@
 
 Status: proposed | accepted | superseded by ADR-NNNN
 Date: <YYYY-MM-DD>
-Decided by: <human> (<date>), option <x>   ← required once accepted; the push gate checks it
+Decided by: <human> (<date>), option <x>   ← required once accepted; the commit hook accepts only ADR references that carry this line
 Architecture impact: level 3 — <modules, contracts, data flows or technology affected>
 
 ## Context

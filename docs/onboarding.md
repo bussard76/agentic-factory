@@ -26,7 +26,7 @@ After the answers, `init`:
 2. copies `templates/` into the repo, filling placeholders (`AGENTS.md`, `CODING_STANDARDS.md`, `docs/coordinator.md`, `docs/dev-workflow.md`, `docs/review-protocol.md`, `docs/architect-protocol.md`, `docs/debt.md`, `docs/adr/`, `docs/tasks/`, `design/`, `.githooks/`, `tools/factory-guardrails.mjs`)
 3. copies `skills/` into `.agents/skills/` and links `.claude/skills` to it
 4. sets `core.hooksPath=.githooks`
-5. writes the bundles `.factory/controller/` (`CONTROLLER.md` filled in, scripts, templates, user-level skills), `.factory/front-agent/` and `.factory/server/`, ignored by git and ready to copy to their hosts
+5. writes the bundles `.factory/controller/` (`CONTROLLER.md` filled in, scripts, templates, user-level skills), `.factory/front-agent/` and `.factory/server/`, ignored by git and ready to copy to their hosts. Project-specific Controller rules (data boundaries, known flakes, decision pointers) go into `docs/controller-rules.md` in the project and are rendered into `CONTROLLER.md`. A project with its own git hooks keeps them: the factory hooks and `tools/factory-guardrails.mjs` are not written when `.githooks/pre-commit` exists without them
 6. prints the human's checklist: server setup, logins (GitHub, agent CLIs, Tailscale), Orca pairing, loading the preview service, starting the Controller with its start order
 
 `doctor` checks the same things later: hooks installed, config valid, server reachable, tools present, `status.md` fresh.
