@@ -246,10 +246,27 @@ test("init on an empty repository (no commit yet) works and names the project af
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-empty-"));
   const g = (...a) => execFileSync("git", a, { cwd: dir, encoding: "utf8" }).trim();
   g("init", "-q", "-b", "main"); g("config", "user.email", "e@example.com"); g("config", "user.name", "e");
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "empty", scripts: { test: "echo ok" } }));
   const out = execFileSync("node", [CLI, "init", "--yes"], { cwd: dir, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } });
-  assert.match(out, /Adopt agentic-factory \(ADR-0001\), pushed to origin\/main/);
+  assert.match(out, /Adopt agentic-factory \(ADR-0001\), pushed to origin\/main/); assert.match(out, /add\s+package\.json \(untracked/);
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "factory.config.json"), "utf8")).project.name, path.basename(dir));
-  assert.match(g("ls-tree", "--name-only", "origin/main"), /AGENTS\.md/);
+  const tree = g("ls-tree", "--name-only", "origin/main"); assert.match(tree, /AGENTS\.md/); assert.match(tree, /package\.json/, "the manifest the install command needs is on origin");
+  assert.equal(g("status", "--porcelain"), "", "nothing left untracked");
+  // Starting over at the same path without a commit: the stale bare is foreign, init stops cleanly.
+  fs.rmSync(path.join(dir, ".git"), { recursive: true }); g("init", "-q", "-b", "main"); g("config", "user.email", "e@example.com"); g("config", "user.name", "e");
+  for (const f of fs.readdirSync(dir)) if (f !== "package.json" && f !== ".git") fs.rmSync(path.join(dir, f), { recursive: true, force: true });
+  const r = spawnSync("node", [CLI, "init", "--yes"], { cwd: dir, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } });
+  assert.notEqual(r.status, 0); assert.match(r.stdout, /holds a different history/); assert.equal(g("remote"), "");
+});
+
+test("a relative filesystem remote names the project after its directory", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-rel-"));
+  const g = (...a) => execFileSync("git", a, { cwd: dir, encoding: "utf8" }).trim();
+  g("init", "-q", "-b", "main"); g("config", "user.email", "r@example.com"); g("config", "user.name", "r");
+  execFileSync("git", ["init", "-q", "--bare", path.join(dir, "..", `${path.basename(dir)}-rel.git`)]); g("remote", "add", "origin", `../${path.basename(dir)}-rel.git`);
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "rel", scripts: { test: "echo ok" } })); g("add", "-A"); g("commit", "-qm", "init");
+  execFileSync("node", [CLI, "init", "--yes"], { cwd: dir, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } });
+  const c = JSON.parse(fs.readFileSync(path.join(dir, "factory.config.json"), "utf8")); assert.equal(c.project.name, path.basename(dir)); assert.match(c.project.repo, /^local:\//);
 });
 
 test("a foreign local bare remote makes init stop cleanly, without a dangling origin", () => {
