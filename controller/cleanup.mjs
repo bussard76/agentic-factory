@@ -11,7 +11,7 @@ const dry = process.argv.includes("--dry"), allowPushed = process.argv.includes(
 const hosts = process.argv.includes("--all") ? HOSTS : [argHost(process.argv)];
 const workers = readJson("workers.json", {});
 const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
-let removed = 0, kept = 0, pruned = 0;
+let removed = 0, kept = 0, pruned = 0, released = 0;
 for (const host of hosts) {
   const WS = workspacesOn(host), PD = projectDirOn(host);
   const g = (...a) => onHost(host, `git -C ${q(PD)} ${a.map(q).join(" ")}`).trim();
@@ -62,11 +62,16 @@ if (!dry) {
     try { terms = JSON.parse(trySh(ORCA, ["terminal", "list", ...orcaEnvArgsOn(host), "--json"]) || "null")?.result?.terminals ?? null; } catch {}
     if (terms === null) continue;   // unknown state: forget nothing on this host
     const live = new Set(terms.filter((t) => t.status !== "exited").map((t) => t.handle));
-    for (const [k, w] of Object.entries(workers)) if ((w.host ?? "local") === host.name && w.terminal && !live.has(w.terminal)) delete workers[k];
+    for (const [k, w] of Object.entries(workers)) {
+      if ((w.host ?? "local") !== host.name || !w.terminal || live.has(w.terminal)) continue;
+      // The worker is gone: release its dispatch so Orca does not keep it as an owner, then forget it.
+      if (w.dispatch) { const r = trySh(ORCA, ["orchestration", "worker-release", "--dispatch", w.dispatch, ...orcaEnvArgsOn(host), "--json"]); if (!/"ok": *true/.test(r)) trySh(ORCA, ["orchestration", "worker-abandon", "--dispatch", w.dispatch, ...orcaEnvArgsOn(host), "--json"]); released++; }
+      delete workers[k];
+    }
   }
   for (const [k, w] of Object.entries(workers)) if (w.pid && !alive(w.pid)) delete workers[k];
   writeJson("workers.json", workers);
-  journal("cleanup", "controller", { note: `removed ${removed}, kept ${kept}, pruned ${pruned}` });
+  journal("cleanup", "controller", { note: `removed ${removed}, kept ${kept}, pruned ${pruned}, released ${released}` });
 }
-console.log(`cleanup${dry ? " (dry)" : ""}: removed ${removed}, kept ${kept}, pruned remote ${pruned}`);
+console.log(`cleanup${dry ? " (dry)" : ""}: removed ${removed} worktrees, kept ${kept}, pruned ${pruned} remote branches, released ${released} dispatches`);
 function alive(pid) { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } }

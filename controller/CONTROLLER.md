@@ -43,7 +43,7 @@ Workers can be **Codex**, **Claude Code** or **Pi** (`--agent` in `start.mjs`; d
 | `node capacity.mjs [--verbose]` | the start verdict and adaptive gate slots |
 | `node wave.mjs "<title>" "<summary>" origin/<branch>…` then `node wavewait.mjs` | integration wave: merge, full gates once, push to `{{MAIN}}` |
 | `node runscript.mjs <script> "<title>"` | run a bash script in the integration worktree |
-| `node cleanup.mjs [--dry] [--prune-remote]` | remove finished worktrees, close terminals, prune merged branches |
+| `node cleanup.mjs --all --prune-remote [--dry] [--pushed]` | every cycle: close terminals of finished workers, release their dispatches, remove merged worktrees, prune merged remote branches, forget finished workers |
 | `node journal.mjs <type> <task> k=v…` | append a journal event |
 | `node steering/{{STEERING_SCRIPT}} …` | list, claim and update tickets |
 | `bash loadlog.sh &` (once per boot) | load, memory and pressure once a minute into `~/load.log` |
@@ -63,7 +63,7 @@ On every worker event, and otherwise every 10 minutes:
    - **Question or escalation:** decide it if it is level 1/2 and covered by the recorded rules; write the decision into the task or the decisions file. Otherwise "Needs {{HUMAN}}".
    - **Stall, early stop, repeated self-caused error, escalation on the ladder, escaped defect:** nudge, and start a Retro (`mkspec retro`, `--readonly`) per the triggers in `docs/coordinator.md`.
 3. **Fill free capacity** by the verdict of `capacity.mjs`, in this order: critical path, rework and Testers of nearly finished tasks, waves, new development (ready tickets, then the handover queue), debt and improvements (at most {{FAST_LANE_MAX}} fast-lane task at a time).
-4. **Clean up:** `node cleanup.mjs` at the end of EVERY cycle. Close terminals of finished workers, release dispatches, remove merged or pushed worktrees (WIP branch first if anything is uncommitted), delete merged branches, keep active and paused tasks. Counts go into `status.md`.
+4. **Clean up:** `node cleanup.mjs --all --prune-remote` at the end of EVERY cycle, on every host. It closes the terminals of finished workers, releases their dispatches, removes worktrees whose branch is merged (push a WIP branch first if anything is uncommitted; `--pushed` also removes merely pushed ones), deletes merged `{{BRANCH_PREFIX}}*` branches on origin, forgets finished workers, and keeps active and paused tasks. The counts (worktrees removed/kept, branches pruned, dispatches released) go into `status.md`. If `ls {{WORKSPACES}} | wc -l` exceeds the number of active tasks plus three, clean up before you start anything new.
 5. **Audit:** every night after the last wave, and on clusters (three same-reason failures or three stalls in an hour): `mkspec audit <since>` on a read-only worker. Put the top findings into `status.md` under "Audit" and into the morning handover. Level-1 improvements go through the fast lane; the next audit checks their metric.
 6. **Write `~/controller/status.md`** (format below). Always overwrite it completely and update its timestamp.
 
