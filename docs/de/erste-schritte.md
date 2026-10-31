@@ -37,7 +37,7 @@ Es entstehen:
 | `AGENTS.md`, `CODING_STANDARDS.md` | die Regeln der Agenten und die Maßstäbe des Reviewers |
 | `docs/coordinator.md`, `docs/dev-workflow.md`, `docs/review-protocol.md`, `docs/architect-protocol.md`, `docs/debt.md` | die Handbücher, ausgefüllt für dein Projekt |
 | `docs/adr/0001-adopt-agentic-factory.md`, `docs/tasks/T00-template.md` | der Einführungs-ADR und die Ticket-Vorlage |
-| `.githooks/`, `tools/factory-guardrails.mjs` | die Git-Schutzregeln, schon aktiv (`core.hooksPath`) |
+| `.githooks/` (oder das bestehende Hook-Verzeichnis des Projekts), `tools/factory-guardrails.mjs` | die Git-Schutzregeln, schon aktiv (`core.hooksPath`); eigene Hooks bleiben als `<hook>.own` erhalten und laufen zuerst |
 | `.agents/skills/` (+ Link `.claude/skills`) | die mitgelieferten Skills |
 | `.factory/controller/`, `.factory/front-agent/`, `.factory/server/` | die Bündel für Controller, Front-Agent und einen späteren Server; von git ignoriert (`update` erzeugt sie neu, auf die Hosts kommen sie von Hand); nur `.factory/manifest.json` wird committet |
 

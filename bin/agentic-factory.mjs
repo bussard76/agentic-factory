@@ -73,13 +73,16 @@ async function init() {
   // Every script fetches origin and merges origin/<main>. A repo without a remote gets a local bare one, so the
   // first wave works on a single machine; replace it with a real remote any time (git remote set-url origin …).
   if (!sh("git", ["remote"])) {
-    const bare = path.join(os.homedir(), ".factory-remotes", `${d.name}.git`);
+    // Keyed by name plus a hash of the absolute path, so two projects with the same directory name never share a remote.
+    const bare = path.join(os.homedir(), ".factory-remotes", `${d.name}-${hash(cwd).slice(0, 6)}.git`);
     fs.mkdirSync(path.dirname(bare), { recursive: true });
-    if (!fs.existsSync(bare)) spawnSync("git", ["init", "-q", "--bare", bare]);
+    const existed = fs.existsSync(bare);
+    if (!existed) spawnSync("git", ["init", "-q", "--bare", bare]);
     spawnSync("git", ["remote", "add", "origin", bare]);
     const branch = sh("git", ["branch", "--show-current"]) || "main";
-    spawnSync("git", ["push", "-q", "-u", "origin", branch], { stdio: "ignore" });
-    say(`No remote found: created a local bare remote at ${bare} and set it as origin (replace it later with git remote set-url origin <url>).`);
+    const p = spawnSync("git", ["push", "-q", "-u", "origin", branch], { encoding: "utf8" });
+    if (p.status !== 0) { say(`The existing local bare remote ${bare} holds a different history; remove it or point origin elsewhere (git remote set-url origin <url>), then run init again.`); process.exit(1); }
+    say(`No remote found: ${existed ? "using the existing" : "created a"} local bare remote at ${bare} as origin (replace it later with git remote set-url origin <url>).`);
     d.repo = `local:${bare}`;
   }
   const c = JSON.parse(fs.readFileSync(path.join(ROOT, "factory.config.example.json"), "utf8"));
@@ -242,6 +245,7 @@ function templateVars(c) {
     // DATE is the adoption day, recorded once in factory.config.json: a later update must not rewrite recorded decisions.
     PROJECT: c.project.name, HUMAN: c.project.humanName, MAIN: c.project.mainBranch, BRANCH_PREFIX: c.project.branchPrefix ?? "agents/", DATE: c.project.adoptedOn ?? (process.env.FACTORY_TODAY ?? new Date().toISOString().slice(0, 10)),
     ADOPTION_ADR: `ADR-${adoptionAdrNumber()}`,
+    HOOKS_DIR: c.hooks?.dir ?? ".githooks",
     HOOK_ENFORCEMENT: (c.hooks?.mode ?? "factory") === "own"
       ? `**hooks.mode = own:** this project keeps its own hooks in \`${c.hooks?.dir ?? c.hooks?.ownDir ?? ".githooks"}\`; they, not the factory's, must enforce the commit checks and the review gate on \`${c.project.mainBranch}\`. The factory does not verify them.`
       : `Enforced by the factory hooks in \`${c.hooks?.dir ?? ".githooks"}/\` (\`tools/factory-guardrails.mjs\`)${(c.hooks?.mode ?? "factory") === "merge" ? "; the project's own hooks run first as `<hook>.own` next to them" : ""}.`,
@@ -279,13 +283,23 @@ const render = (text, vars) => text.replace(/\{\{([A-Z_]+)\}\}/g, (m, k) => (k i
 //            directory and core.hooksPath stays where the project put it (a husky `prepare` script cannot disarm them)
 //   own      only on request (init --keep-own-hooks): nothing is written, the project's hooks must enforce the gate
 const HOOK_NAMES = ["pre-commit", "commit-msg", "pre-push", "pre-merge-commit"];
+// Only the repository's own (--local) core.hooksPath counts, and only when it points inside the worktree: a user-level
+// value (dotfiles, a global secret scanner) is never touched or taken over; the local .githooks overrides it.
 function hooksSetup() {
-  const p = sh("git", ["config", "core.hooksPath"]);
+  const local = sh("git", ["config", "--local", "core.hooksPath"]);
+  const effective = sh("git", ["config", "core.hooksPath"]);
+  if (!local && effective) say(`  NOTE: a global core.hooksPath (${effective}) is in effect; init sets the repository's own hooks path and leaves the global hooks untouched.`);
+  const p = local;
+  const inside = p && !path.isAbsolute(p) && !path.resolve(cwd, p).startsWith("..") && path.resolve(cwd, p).startsWith(cwd + path.sep);
+  if (p && !inside) { say(`  NOTE: core.hooksPath=${p} points outside this repository; it is not used as the hooks directory (the factory uses .githooks).`); return { dir: ".githooks", hooksPath: ".githooks", layout: "githooks" }; }
   if (p && /\/_\/?$/.test(p) && fs.existsSync(path.dirname(p))) return { dir: path.dirname(p), hooksPath: p, layout: "husky" };   // husky v9: .husky/_ runs .husky/<hook>
   if (p && p !== ".githooks" && fs.existsSync(p)) return { dir: p, hooksPath: p, layout: "custom" };
   return { dir: ".githooks", hooksPath: ".githooks", layout: "githooks" };
 }
-const ownHookFiles = (setup) => HOOK_NAMES.filter((h) => fs.existsSync(path.join(setup.dir, h)) && !fs.readFileSync(path.join(setup.dir, h), "utf8").includes("factory-guardrails"));
+// Factory hooks carry a marker line; everything else in the hooks directory is the project's own.
+const HOOK_MARKER = "# agentic-factory hook";
+const isFactoryHook = (file) => { const t = fs.readFileSync(file, "utf8"); return t.includes(HOOK_MARKER) || t.includes("factory-guardrails"); };
+const ownHookFiles = (setup) => HOOK_NAMES.filter((h) => fs.existsSync(path.join(setup.dir, h)) && !isFactoryHook(path.join(setup.dir, h)));
 const hookMode = (setup = hooksSetup()) => (flag("--keep-own-hooks") ? "own" : ownHookFiles(setup).length ? "merge" : "factory");
 const ownHooksDir = () => hooksSetup().dir;
 const ownAdr = () => fs.existsSync("docs/adr") && fs.readdirSync("docs/adr").some((f) => /^(ADR-)?0001[-.]/.test(f) && !f.includes("adopt-agentic-factory"));
@@ -309,8 +323,8 @@ function keepOwnHooks(setup) {
 const FACTORY_DOCS_URL = "https://github.com/bussard76/agentic-factory/blob/main/docs";
 const absolutizeDocLinks = (text, lang) => text.replace(/\]\((\.\.\/)?([a-z-]+\.md)(#[^)]*)?\)/g, (m, up, f, hash) => `](${FACTORY_DOCS_URL}/${up || lang === "en" ? "" : "de/"}${f}${hash ?? ""})`);
 function commitAdoption(files, branch, adr = "ADR-0001") {
-  const r = spawnSync("git", ["add", "--", ".gitignore", ".factory/manifest.json", ".claude", "docs/reviews/.gitkeep", "docs/reports/.gitkeep", "docs/handoffs/.gitkeep", ...files.filter((f) => !f.startsWith(".factory/") && fs.existsSync(f))], { stdio: "ignore" });
-  if (r.status !== 0) return "";
+  const r = spawnSync("git", ["add", "--", ".gitignore", ".factory/manifest.json", ".claude", "docs/reviews/.gitkeep", "docs/reports/.gitkeep", "docs/handoffs/.gitkeep", ...files.filter((f) => !f.startsWith(".factory/") && fs.existsSync(f))], { encoding: "utf8" });
+  if (r.status !== 0) { say(`  adoption commit not made: git add failed: ${(r.stderr || "").trim().slice(0, 200)}`); return ""; }
   if (spawnSync("git", ["diff", "--cached", "--quiet"]).status === 0) return "";
   // Hooks may already be armed (a repo with its own hooks, or core.hooksPath set earlier): this one commit and push
   // run without them, because the review gate they install would reject the very commit that installs it.
@@ -409,7 +423,9 @@ function doctor() {
     fs.existsSync("tools/factory-guardrails.mjs") ? ok("tools/factory-guardrails.mjs") : bad("tools/factory-guardrails.mjs");
     // Every gate must be present AND wired: pre-commit (checks), commit-msg (protected files), pre-push (review gate).
     for (const h of ["pre-commit", "commit-msg", "pre-push"]) exe(`${hdir}/${h}`) && fs.readFileSync(`${hdir}/${h}`, "utf8").includes("factory-guardrails") ? ok(`hook ${hdir}/${h} wired (${hmode})`) : bad(`hook ${hdir}/${h} executable and calling tools/factory-guardrails.mjs`);
-    for (const h of HOOK_NAMES) if (fs.existsSync(`${hdir}/${h}.own`)) exe(`${hdir}/${h}.own`) ? ok(`own hook kept as ${hdir}/${h}.own`) : bad(`${hdir}/${h}.own executable`);
+    for (const h of HOOK_NAMES) if (fs.existsSync(`${hdir}/${h}.own`)) !exe(`${hdir}/${h}.own`) ? bad(`${hdir}/${h}.own executable`) : isFactoryHook(`${hdir}/${h}.own`) ? bad(`${hdir}/${h}.own is a factory hook mistaken for an own one; delete it`) : ok(`own hook kept as ${hdir}/${h}.own`);
+    // The directory core.hooksPath points to must exist: husky's .husky/_ is generated by the install and is absent in a fresh clone or worktree.
+    if (!fs.existsSync(wantPath)) bad(`hooks directory ${wantPath} missing${c.hooks?.layout === "husky" ? ` (husky generates it: run \`${c.commands?.install ?? "the install command"}\`)` : ""}: no hook runs here`);
   }
   for (const f of ["AGENTS.md", "docs/coordinator.md", "docs/dev-workflow.md", "docs/review-protocol.md", "docs/architect-protocol.md", "docs/debt.md"]) fs.existsSync(f) ? ok(f) : bad(f);
   fs.existsSync(".agents/skills/ponytail/SKILL.md") ? ok(".agents/skills") : bad(".agents/skills");

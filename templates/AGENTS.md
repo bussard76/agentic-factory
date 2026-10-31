@@ -15,7 +15,7 @@ Read first: `ARCHITECTURE.md` (if present), your task, and `docs/coordinator.md`
 - No code reaches `{{MAIN}}` without a passing independent review under `docs/review-protocol.md`. The reviewer is never the builder. {{HOOK_ENFORCEMENT}}
 - Reviewers work read-only and write only their findings file, committed separately under `docs/reviews/`.
 - Builders fix findings. If a finding appears incorrect, explain why to the coordinator.
-- `--no-verify` is forbidden.
+- `--no-verify` is forbidden, and so is every other way of skipping hooks (`HUSKY=0`, `core.hooksPath` changes, `git -c core.hooksPath=…`).
 
 ## Coordinator
 
@@ -31,7 +31,7 @@ Every task records `## Architecture impact` (level, modules and boundaries; leve
 | 2 | new or changed public export, new dependency, new route | checked by the Architect; ask the coordinator with a one-paragraph rationale; continue only after the answer |
 | 3 | new module, changed responsibilities or allowed imports, different data flow, new technology, contract or protocol change | escalate; the coordinator gets {{HUMAN}}'s decision; do not implement until the accepted ADR says `Decided by: {{HUMAN}}` |
 
-**Protected files** (the commit hook blocks changes unless the message references `ADR-NNNN` of an accepted ADR that carries a `Decided by:` line): `ARCHITECTURE.md`, `AGENTS.md`, `docs/adr/**`, `.githooks/**`, `tools/factory-guardrails.mjs`. A **new or proposed ADR** is itself under `docs/adr/`: commit it by citing the adoption ADR ({{ADOPTION_ADR}}) in the message; once {{HUMAN}} has accepted it, cite it directly. ADRs follow `docs/adr/0000-template.md` (Status, Date, Decided by, options, decision), not the shorter form in the vendored `domain-modeling` skill. New dependencies are not hook-protected; they are a level-2 change that the Architect's spec review decides, and the Tester checks that every new dependency is named in the task.
+**Protected files** (the commit hook blocks changes unless the message references `ADR-NNNN` of an accepted ADR that carries a `Decided by:` line): `ARCHITECTURE.md`, `AGENTS.md`, `docs/adr/**`, `{{HOOKS_DIR}}/**`, `tools/factory-guardrails.mjs`. A **new or proposed ADR** is itself under `docs/adr/`: commit it by citing the adoption ADR ({{ADOPTION_ADR}}) in the message; once {{HUMAN}} has accepted it, cite it directly. ADRs follow `docs/adr/0000-template.md` (Status, Date, Decided by, options, decision), not the shorter form in the vendored `domain-modeling` skill. New dependencies are not hook-protected; they are a level-2 change that the Architect's spec review decides, and the Tester checks that every new dependency is named in the task.
 
 ## Data rule
 

@@ -1,4 +1,5 @@
 #!/bin/sh
+# agentic-factory hook (pre-push)
 set -eu
 d=$(dirname "$0")
 # git feeds the ref updates on stdin once; keep them in a file so the project's own pre-push (pre-push.own) and the

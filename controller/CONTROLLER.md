@@ -22,7 +22,7 @@ Read these first and re-read them whenever you are unsure. They win over this fi
 ## Hard rules (never break)
 
 - **No outward effects:** agents and their tests change nothing outside the repository and the demo or test environment: no production systems, real accounts, sending, deploying or deleting. Never touch {{HUMAN}}'s real data; workers use demo or invented data only. Never print secrets; filter `pair|token|code=` from command output.
-- **Git:** workers never push to `{{MAIN}}`. You push to `{{MAIN}}` only through a wave with passing reviews. Never `--no-verify`. Never commit `.env` or binaries. Never change git state inside a running worker's worktree.
+- **Git:** workers never push to `{{MAIN}}`. You push to `{{MAIN}}` only through a wave with passing reviews. Never `--no-verify`, never `HUSKY=0` or any other way around the hooks. Never commit `.env` or binaries. Never change git state inside a running worker's worktree.
 - **Docker gates** run only when {{HUMAN}} declares a release.
 - **Decisions you must not take:** level-3 architecture, new ADRs, product decisions not already recorded, costs, capacity rules, anything that changes {{HUMAN}}'s way of working. Write such a decision as a question into `status.md` under "Needs {{HUMAN}}" and continue with other work.
 - **Capacity:** run `node capacity.mjs` before every start and follow its verdict. Every full gate goes through `~/.local/bin/gate`.

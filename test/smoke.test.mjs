@@ -231,6 +231,30 @@ test("husky v9 hooks are merged in place and the gate bites", () => {
   const c = spawnSync("git", ["commit", "-qm", "y"], { cwd: own, encoding: "utf8" }); assert.equal(c.status, 0, c.stderr); assert.match(c.stderr, /HUSKY9-RAN/);
   const p = spawnSync("git", ["push", "-q", "origin", "main"], { cwd: own, encoding: "utf8" }); assert.notEqual(p.status, 0); assert.match(p.stderr, /Push to main rejected/);
   const doc = spawnSync("node", [CLI, "doctor"], { cwd: own, encoding: "utf8", env: { ...process.env, HOME: home } }); assert.equal(doc.status, 0, doc.stdout); assert.match(doc.stdout, /hook \.husky\/pre-push wired \(merge\)/);
+  // The hooks directory is protected wherever it lives.
+  fs.appendFileSync(path.join(own, ".husky/pre-push"), "\n# tampered\n"); g("add", ".husky/pre-push");
+  const t = spawnSync("git", ["commit", "-qm", "weaken the gate"], { cwd: own, encoding: "utf8" }); assert.notEqual(t.status, 0, ".husky/pre-push is a protected path"); assert.match(t.stderr + t.stdout, /Protected files/);
+  g("checkout", "-q", "HEAD", "--", ".husky/pre-push"); g("reset", "-q");
+  // update on a merged repo changes nothing and does not mistake the factory's pre-merge-commit for an own hook.
+  const up = execFileSync("node", [CLI, "update"], { cwd: own, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } });
+  assert.match(up, /0 updated, 0 kept/); assert.ok(!fs.existsSync(path.join(own, ".husky/pre-merge-commit.own")), "no phantom .own file");
+});
+
+test("a global core.hooksPath is left alone: the factory uses .githooks, commits and pushes the adoption, the gate bites", () => {
+  const own = fs.mkdtempSync(path.join(os.tmpdir(), "af-global-"));
+  const ghome = fs.mkdtempSync(path.join(os.tmpdir(), "af-ghome-"));
+  const genv = { ...process.env, HOME: ghome, FACTORY_SKIP_ORCA: "1" };
+  const g = (...a) => { const r = spawnSync("git", a, { cwd: own, encoding: "utf8", env: genv }); if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`); return r.stdout.trim(); };
+  fs.mkdirSync(path.join(ghome, "hooks")); fs.writeFileSync(path.join(ghome, "hooks/pre-commit"), "#!/bin/sh\necho GLOBAL-HOOK >&2\n"); fs.chmodSync(path.join(ghome, "hooks/pre-commit"), 0o755);
+  g("init", "-q", "-b", "main"); g("config", "user.email", "g@example.com"); g("config", "user.name", "g"); g("config", "--global", "core.hooksPath", path.join(ghome, "hooks"));
+  fs.writeFileSync(path.join(own, "package.json"), JSON.stringify({ name: "glob", scripts: { test: "echo ok" } })); g("add", "-A"); g("commit", "-qm", "init");
+  const out = execFileSync("node", [CLI, "init", "--yes"], { cwd: own, encoding: "utf8", env: genv });
+  assert.match(out, /NOTE: a global core.hooksPath/); assert.match(out, /Adopt agentic-factory \(ADR-0001\), pushed to origin\/main/);
+  assert.ok(fs.existsSync(path.join(ghome, "hooks/pre-commit")), "the global hook file is untouched"); assert.ok(!fs.existsSync(path.join(ghome, "hooks/pre-commit.own")));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(own, "factory.config.json"), "utf8")).hooks.mode, "factory");
+  assert.equal(g("config", "--local", "core.hooksPath"), ".githooks");
+  fs.writeFileSync(path.join(own, "s.js"), 'const k = "sk-abcdefghijklmnopqrstuvwxyz1234567890";\n'); g("add", "s.js");
+  const bad = spawnSync("git", ["commit", "-qm", "secret"], { cwd: own, encoding: "utf8", env: genv }); assert.notEqual(bad.status, 0); assert.match(bad.stderr + bad.stdout, /secrets/);
 });
 
 test("own commit-msg and own pre-push are merged too: the protected-files gate and the review gate exist", () => {

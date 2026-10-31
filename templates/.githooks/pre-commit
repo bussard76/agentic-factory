@@ -1,4 +1,5 @@
 #!/bin/sh
+# agentic-factory hook (pre-commit)
 set -eu
 d=$(dirname "$0")
 # The project's own pre-commit (kept by init as pre-commit.own next to this file) runs first and must pass.

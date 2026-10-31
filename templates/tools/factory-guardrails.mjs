@@ -95,7 +95,9 @@ function staticChecks() {
 // --- protected-files ---------------------------------------------------------------------------
 // Protected paths change only with an accepted ADR reference in the commit message. Dependency lists are NOT protected
 // here: a new dependency is a level-2 change that the Architect's spec review decides (AGENTS.md "Change levels").
-const PROTECTED = /^(?:ARCHITECTURE\.md$|AGENTS\.md$|docs\/adr\/|\.githooks\/|tools\/factory-guardrails\.mjs$)/;
+// The hooks directory is protected wherever it lives (.githooks, or the project's own directory in merge mode).
+const HOOKS_DIR = (config.hooks?.dir ?? ".githooks").replace(/\/$/, "");
+const PROTECTED = new RegExp(`^(?:ARCHITECTURE\\.md$|AGENTS\\.md$|docs/adr/|\\.githooks/|${HOOKS_DIR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/|tools/factory-guardrails\\.mjs$)`);
 function protectedFiles(messagePath) {
   const changed = stagedPaths();
   const hits = changed.filter((p) => PROTECTED.test(p));
