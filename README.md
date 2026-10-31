@@ -24,7 +24,16 @@ One human. One agent that talks to them. One unattended controller that runs man
 
 ## Quick start
 
-Requirements: Node 22+, git, and at least one agent CLI (Codex, Claude Code or Pi). For the server-side controller you also want a Linux box; [`docs/server-setup.md`](docs/server-setup.md) sets one up in about an hour.
+**Requirements**
+
+| | |
+|---|---|
+| **Orca** (required) | [orca.earendil.works](https://orca.earendil.works). The runner: every worker gets its own worktree and terminal, the Controller and workers exchange structured messages, remote servers are paired over a private network. `init` stops if the Orca CLI is missing. The Orca skills (`orchestration`, `orca-cli`) must be installed at user level on every host that runs a Controller or Front agent (`agentic-factory install-skills`). |
+| **One agent CLI** | Codex, Claude Code or Pi, logged in. Workers, Controller and Front agent are sessions of these. |
+| **Node 22+, git** | the scripts and hooks |
+| optional | a Linux server for the Controller and workers ([`docs/server-setup.md`](docs/server-setup.md), about an hour); `gh` for GitHub-issue steering; Figma or Pencil for stage 1 of outside-in |
+
+A plain-terminal runner without Orca exists behind `init --experimental-terminal-runner`. It is unsupported and not what the docs describe.
 
 ```bash
 cd your-project
@@ -53,7 +62,7 @@ npx agentic-factory doctor    # check hosts, tools, hooks, user-level skills and
 - The git guardrails are **local hooks**. They stop honest mistakes; they are not a security boundary. Protect `main` on the server side too (branch protection, a CI check). See [`debt.md`](debt.md).
 - The staged-secret scan knows a handful of common patterns. Add a maintained scanner for anything sensitive.
 - The test-count guard is a heuristic: it counts test calls in test files. A dummy test keeps the count.
-- `terminal` runner mode and GitHub-issue steering have had less mileage than `orca` mode with task files.
+- GitHub-issue steering has had less mileage than task files; the plain-terminal runner is experimental and unsupported.
 - An independent review of this repo and its findings are in `docs/reviews/`; what is not fixed yet is in [`debt.md`](debt.md).
 
 ## How it works, in one picture
@@ -106,7 +115,7 @@ Version 0.1.0, extracted on 2026-10-31 from a project that has run this way sinc
 - the numbers in the config (capacity, models, rounds) are starting values that the factory calibrates from measurements
 - a remote server is an option, not a must; so is the day/night rhythm; so is Orca
 
-The tools target Linux servers (Orca or plain terminals) and macOS for the Front agent. Expect rough edges in `terminal` runner mode; `orca` mode is the one in daily use.
+The tools target Linux servers and macOS, with Orca as the runner everywhere.
 
 ## License
 

@@ -21,6 +21,8 @@ const hash = (s) => createHash("sha256").update(s).digest("hex").slice(0, 16);
 const say = (s = "") => console.log(s);
 
 const rl = yes ? null : readline.createInterface({ input: process.stdin, output: process.stdout });
+// The Orca executable: ORCA_CLI_COMMAND if set; on Linux outside an Orca terminal `orca-ide` (bare `orca` is the GNOME screen reader there).
+const ORCA_BIN = process.env.ORCA_CLI_COMMAND ?? (process.platform === "linux" && !process.env.ORCA_TERMINAL && has("orca-ide") ? "orca-ide" : "orca");
 async function ask(question, options, def) {
   // One question at a time, recommended option first. With --yes, the default is taken.
   if (yes) return def;
@@ -83,9 +85,19 @@ async function init() {
   c.steering.mode = await ask("4. Where do tickets live?", [
     { label: "GitHub issues (labels, native blocking; wayfinder maps visible in the tracker)", value: "github-issues" },
     { label: "Task files docs/tasks/T<n>-*.md (everything in git, no tracker)", value: "orca-tasks" }], d.github && d.tools.gh ? "github-issues" : "orca-tasks");
-  c.agents.runner = await ask("5. How are workers run?", [
-    { label: "Orca: own worktree and terminal per worker, structured messages, remote servers via pairing", value: "orca" },
-    { label: "Plain terminals: git worktrees plus codex/claude/pi processes, no Orca needed", value: "terminal" }], d.tools.orca ? "orca" : "terminal");
+  // Orca is a prerequisite: workers, worktrees, terminals, messages and remote hosts all run through it.
+  // The plain-terminal runner exists for experiments only (--experimental-terminal-runner).
+  const skipOrca = process.env.FACTORY_SKIP_ORCA === "1";   // tests only: never touch the local Orca
+  c.agents.runner = flag("--experimental-terminal-runner") ? "terminal" : "orca";
+  let orcaRunning = false;
+  if (c.agents.runner === "orca" && !skipOrca) {
+    if (!d.tools.orca) {
+      say(`\nOrca is required and its CLI (orca / orca-ide) is not on this machine. Install Orca (https://orca.earendil.works), start it, then run init again.\n(For experiments without Orca: --experimental-terminal-runner. Unsupported.)`);
+      process.exit(1);
+    }
+    orcaRunning = /"ok":\s*true/.test(sh(ORCA_BIN, ["status", "--json"]));
+    say(orcaRunning ? `5. Orca: installed and running (${ORCA_BIN}).` : `5. Orca: installed but not running. Start it with \`${ORCA_BIN} open --json\`; the repo is registered with Orca when it runs.`);
+  } else if (c.agents.runner === "terminal") say("5. Runner: plain terminals (experimental, unsupported).");
   c.agents.default = await ask("6. Default agent CLI for workers?", [{ label: "Codex", value: "codex" }, { label: "Claude Code", value: "claude" }, { label: "Pi", value: "pi" }], d.tools.codex ? "codex" : d.tools.claude ? "claude" : "pi");
   if (c.agents.default === "claude") { c.agents.models = { small: "haiku", default: "sonnet", large: "opus" }; c.agents.fallback = { agent: "codex", models: { small: "gpt-6-luna", default: "gpt-6.1-terra", large: "gpt-6.1-sol" }, quotaThresholdPercent: 10 }; }
   for (const t of ["small", "default", "large"]) c.agents.models[t] = await askText(`   Model for the "${t}" tier (as the ${c.agents.default} CLI names it; a starting value, calibrated later)?`, c.agents.models[t]);
@@ -102,6 +114,13 @@ async function init() {
     remoteHost.orcaEnvironment = c.agents.runner === "orca" ? remoteHost.name : "";
   }
   c.hosts.workers = where === "local" ? [localHost] : where === "both" ? [localHost, remoteHost] : [remoteHost];
+  // Register this repo with the local Orca so the local host has its repo id (remote hosts register on the server).
+  if (c.agents.runner === "orca" && orcaRunning && !skipOrca && where !== "remote") {
+    const list = sh(ORCA_BIN, ["repo", "list", "--json"]);
+    let id = (list.match(new RegExp(`"id":\\s*"([0-9a-f-]{36})"[^{}]*"path":\\s*"${cwd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`)) ?? [])[1];
+    if (!id) { const added = sh(ORCA_BIN, ["repo", "add", "--path", cwd, "--json"]); id = (added.match(/"id":\s*"([0-9a-f-]{36})"/g) ?? []).map((m) => m.match(/[0-9a-f-]{36}/)[0]).at(-1); }
+    if (id) { localHost.orcaRepoId = id; say(`   Registered with Orca: repo id ${id}.`); } else say("   Could not register the repo with Orca; set hosts.workers[].orcaRepoId by hand (orca repo add --path <repo> --json).");
+  }
   c.hosts.controller = { host: await ask("8. Where does the Controller run?", c.hosts.workers.map((h) => ({ label: h.kind === "local" ? "On this machine (a second agent session next to the Front agent)" : `On ${h.name} (unattended, survives this machine sleeping)`, value: h.name })), c.hosts.workers.at(-1).name), controllerDir: "~/controller" };
   c.capacity.calibration.mode = await ask("9. Capacity: the limits per host are starting values. Calibrate them automatically?", [{ label: "Auto: start low, raise step by step while the host stays quiet, lower on pressure; the audit verifies", value: "auto" }, { label: "Manual: use the configured limits as they are", value: "manual" }], "auto");
   c.agents.calibration = await ask("   Models: calibrate the tier per role from measured pass rates and rounds?", [{ label: "Auto", value: "auto" }, { label: "Manual: only recommend", value: "manual" }], "auto");
@@ -113,6 +132,7 @@ async function init() {
   c.design = { tool: await ask("13. Design tool for stage 1 of outside-in?", [{ label: "Figma via its local MCP server", value: "figma" }, { label: "Pencil", value: "pencil" }, { label: "None for now", value: "none" }], d.tools.figma ? "figma" : "none"), exportDir: "design" };
   say("\n14. Hard rules (they go into AGENTS.md and docs/coordinator.md):\n  - no real data or secrets in the repo, .env never committed\n  - the factory has no outward effects: nothing changes outside the repo and the demo environment\n  - workers never push to main; --no-verify is forbidden\n  - tests run on demo data or a private copy, never on the original\n  - no real model calls in tests");
   if ((await ask("   Confirm all of them?", [{ label: "Yes", value: "yes" }, { label: "No, stop here", value: "no" }], "yes")) !== "yes") { say("Stopped. Nothing written."); process.exit(1); }
+  const installNow = (await ask("15. Install the user-level skills on this machine now (needed by the Front agent here, and by the Controller if it runs here)?", [{ label: "Yes", value: "yes" }, { label: "Later (agentic-factory install-skills)", value: "no" }], "yes")) === "yes";
 
   // --- write -----------------------------------------------------------------------------------
   const manifest = { factoryVersion: PKG.version, files: {} };
@@ -149,6 +169,7 @@ async function init() {
   sh("git", ["config", "core.hooksPath", ".githooks"]);
   for (const dir of ["docs/reviews", "docs/reports", "docs/handoffs"]) { fs.mkdirSync(dir, { recursive: true }); if (!fs.existsSync(path.join(dir, ".gitkeep"))) fs.writeFileSync(path.join(dir, ".gitkeep"), ""); }
   appendGitignore([".factory/new/", ".build/", ".env", ".env.*", "!.env.example", ".scratch/"]);
+  if (installNow) { say("\nUser-level skills:"); installSkills(); }
 
   // --- the human's checklist -----------------------------------------------------------------
   const remote = c.hosts.workers.find((h) => h.kind === "remote");
@@ -156,7 +177,8 @@ async function init() {
   const steps = [
     `Read docs/dev-workflow.md (the process) and AGENTS.md (the agents' rules). Commit the new files with a message that references the adoption ADR, e.g. \`git commit -m "Adopt agentic-factory (ADR-0001)"\`; protected files need that reference.`,
     remote && `Set up ${remote.name}: copy .factory/server/ there and follow docs/server-setup.md in the factory repo. Logins (gh, ${c.agents.default}, tailscale${c.agents.runner === "orca" ? ", Orca pairing" : ""}) are yours. Then put its Orca repo id into factory.config.json → hosts.workers[].orcaRepoId and run \`agentic-factory update\` to refresh the bundles.`,
-    `Skills at user level, on EVERY host that runs a Controller or Front agent: \`agentic-factory install-skills\` here${remote ? `; on ${remote.name}: \`mkdir -p ~/.claude/skills ~/.agents/skills && cp -R ~/controller/skills/* ~/.claude/skills/ && cp -R ~/controller/skills/* ~/.agents/skills/\`` : ""}. Without the Orca skills (orchestration, orca-cli) the agents cannot start, watch or release workers.`,
+    `Skills at user level, on EVERY host that runs a Controller or Front agent: ${installNow ? "done here" : "`agentic-factory install-skills` here"}${remote ? `; on ${remote.name}: \`mkdir -p ~/.claude/skills ~/.agents/skills && cp -R ~/controller/skills/* ~/.claude/skills/ && cp -R ~/controller/skills/* ~/.agents/skills/\`` : ""}. Without the Orca skills (orchestration, orca-cli) the agents cannot start, watch or release workers.`,
+    c.agents.runner === "orca" && !orcaRunning && `Orca: ${d.tools.orca ? `start it (\`${ORCA_BIN} open --json\`) and register the repo (\`${ORCA_BIN} repo add --path <repo> --json\`, id into hosts.workers[].orcaRepoId)` : "install it (https://orca.earendil.works), then register the repo and put its id into hosts.workers[].orcaRepoId"}; the Orca skills load their guide from the binary (\`${ORCA_BIN} skills get orchestration\`).`,
     `Controller: copy .factory/controller/ to ${ctl.kind === "local" ? "~/controller on this machine" : `${ctl.name}:~/controller`}, install the gate (\`mkdir -p ~/.local/bin && install -m 755 ~/controller/gate ~/.local/bin/gate\`; it needs only node), start \`bash ~/controller/loadlog.sh &\`, then start an agent session there with: "Read ~/controller/CONTROLLER.md and act as the Controller."`,
     `Front agent: copy .factory/front-agent/ to ~/front-agent/${c.project.name} on this machine and start your agent session with: "Read ~/front-agent/${c.project.name}/FRONT_AGENT.md and act as the Front agent."`,
     c.hosts.frontAgent.preview.enabled && `Preview: clone the repo to ~/Development/${c.project.name}-preview, fill ${c.hosts.frontAgent.preview.envFile}, then load the launchd agent from .factory/front-agent/preview.plist.template (fill the paths) with \`launchctl bootstrap gui/$(id -u) <plist>\`.`,

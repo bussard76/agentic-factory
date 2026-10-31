@@ -1,6 +1,6 @@
 # Orca: client, server and remote workers
 
-[Orca](https://orca.earendil.works) is the runner the factory uses by default. It gives every worker its own git worktree and terminal, carries structured messages between the Controller and its workers (`worker_done`, `escalation`, `question`), and lets a client on the human's machine steer a headless server over a private network. The factory works without it (`agents.runner: terminal`), but Orca mode is the one with the most mileage.
+[Orca](https://orca.earendil.works) is the factory's runner and a **prerequisite**. It gives every worker its own git worktree and terminal, carries structured messages between the Controller and its workers (`worker_done`, `escalation`, `question`), and lets a client on the human's machine steer a headless server over a private network. `init` stops when the Orca CLI is missing. (A plain-terminal runner exists behind `init --experimental-terminal-runner`; it is unsupported.)
 
 ## The pieces
 
@@ -52,6 +52,6 @@ orca skills get orca-cli
 
 That keeps the instructions in step with the installed Orca version on each host. On Linux outside an Orca-managed terminal the binary is `orca-ide`; bare `orca` there is the GNOME screen reader.
 
-## Without Orca
+## Without Orca (experimental, unsupported)
 
-`agents.runner: terminal` replaces the pieces above with git worktrees, plain agent processes started with the spec as their first prompt, an `events/` directory the workers write `DONE`/`ESCALATE` lines into, and log-based stall detection. See [steering-modes.md](steering-modes.md). The messages, roles and rules stay the same; what you lose is the remote terminal view, structured dispatch authority and the sidebar.
+`init --experimental-terminal-runner` sets `agents.runner: terminal`: git worktrees, plain agent processes started with the spec as their first prompt, an `events/` directory the workers write `DONE`/`ESCALATE` lines into, and log-based stall detection. It exists for experiments and has had no production mileage. The documented workflow assumes Orca.

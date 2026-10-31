@@ -31,4 +31,4 @@ Strengths: everything is in git, works offline, no tracker needed. Weakness: not
 | stall detection | terminal screen reads | log mtime and process state |
 | cleanup | `orca worktree rm` | `git worktree remove` |
 
-`terminal` mode exists so the factory can be shared and tried without Orca. `orca` mode is the one with the most mileage.
+Orca is the prerequisite and the only supported runner. `terminal` mode exists behind `init --experimental-terminal-runner` for experiments and has no production mileage.

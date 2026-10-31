@@ -8,7 +8,7 @@
 | 2 | **Who is the human, and in which language do they want to read?** | the handbooks address the human by name; `docs/dev-workflow.md` is written in the human's language, agent files stay English | user name; `de` |
 | 3 | **Rhythm:** day plan / night build, continuous, or custom quiet hours | when the Controller may start new work | day plan / night build |
 | 4 | **Steering mode:** GitHub issues or task files | where tickets live and how the frontier is shown; see [steering-modes.md](steering-modes.md) | GitHub issues if a GitHub remote and `gh` exist, else task files |
-| 5 | **Runner:** Orca or plain terminals | how workers are launched and observed | Orca if the `orca` CLI is installed, else terminal |
+| 5 | **Orca check** (no question) | Orca is the prerequisite: `init` stops if the CLI is missing, reports whether the service runs, and registers the repo with the local Orca (fills `orcaRepoId`). `--experimental-terminal-runner` bypasses this for experiments | – |
 | 6 | **Default agent and models:** Codex, Claude Code or Pi; the three model tiers as the CLI names them | models by complexity, the escalation ladder; the names are starting values, calibrated later | the installed CLI; its three tiers |
 | 7 | **Where workers run:** only this machine, this machine plus one remote host, or only a remote host (name, ssh alias, ssh config) | a remote server is an option, not a must; more hosts can be added in the config later | only this machine |
 | 8 | **Where the Controller runs** | the Front agent reads `status.md` there; a remote Controller survives this machine sleeping | the last worker host |
@@ -18,6 +18,7 @@
 | 12 | **Review rounds** before a working feature is integrated | back pressure without endless loops | 2 |
 | 13 | **Design tool:** Figma MCP, Pencil, none | stage 1 of outside-in and the export convention `design/<feature>/` | Figma if its MCP endpoint answers locally |
 | 14 | **Hard rules to confirm** (printed as one list): no real data or secrets in the repo, no outward effects from the factory, workers never push to `main`, `--no-verify` forbidden, tests on demo data only, no real model calls in tests | one confirmation for the list; they end up in `AGENTS.md` and `docs/coordinator.md` | confirmed |
+| 15 | **Install the user-level skills on this machine now?** | the Front agent (and a local Controller) run outside the repo and need `orchestration`, `orca-cli`, `retro`, `writing-for-agents` and the coordination skills in `~/.claude/skills` / `~/.agents/skills` | yes |
 
 After the answers, `init`:
 

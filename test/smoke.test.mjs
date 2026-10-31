@@ -11,7 +11,8 @@ const CLI = path.join(ROOT, "bin/agentic-factory.mjs");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "af-smoke-"));
 const git = (...a) => execFileSync("git", a, { cwd: tmp, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const gitTry = (...a) => spawnSync("git", a, { cwd: tmp, encoding: "utf8" });
-const node = (...a) => execFileSync("node", a, { cwd: tmp, encoding: "utf8", env: { ...process.env, HOME: tmp } }).trim();
+// FACTORY_SKIP_ORCA keeps the test from touching the developer's real Orca (no repo registration).
+const node = (...a) => execFileSync("node", a, { cwd: tmp, encoding: "utf8", env: { ...process.env, HOME: tmp, FACTORY_SKIP_ORCA: "1" } }).trim();
 
 test("init in a fresh repo writes the factory files and a local remote", () => {
   git("init", "-q", "-b", "main"); git("config", "user.email", "t@example.com"); git("config", "user.name", "t");
