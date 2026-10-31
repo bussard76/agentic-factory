@@ -13,7 +13,9 @@ const end = Date.now() + hours * 3600e3;
 if (RUNNER === "orca") {
   let ack;
   while (Date.now() < end) {
-    const j = orcaJson(["orchestration", "check", "--wait", "--types", "worker_done,escalation,question", "--timeout-ms", "900000", ...(ack ? ["--ack", ack] : [])]);
+    let j;
+    try { j = orcaJson(["orchestration", "check", "--wait", "--types", "worker_done,escalation,question", "--timeout-ms", "900000", ...(ack ? ["--ack", ack] : [])]); }
+    catch (e) { console.log(`orca check failed (${String(e.message).split("\n")[0].slice(0, 120)}), retrying in 30 s`); await new Promise((r) => setTimeout(r, 30000)); continue; }
     ack = undefined;
     const msgs = j.result?.messages ?? [];
     const real = msgs.filter((m) => m.type !== "heartbeat" && !(m.type === "status" && /Setup succeeded/.test(m.subject ?? "")));

@@ -25,7 +25,7 @@ cd ~/pfad/zu/deinem-projekt
 agentic-factory init
 ```
 
-`init` stellt eine Frage nach der anderen, die empfohlene Antwort zuerst. Für den ersten Versuch nimm die Vorgaben, mit einer Ausnahme: Antworte bei den Hosts mit **„Nur auf diesem Rechner“**. Die Fragen und ihr Grund stehen in [onboarding.md](../onboarding.md).
+`init` stellt eine Frage nach der anderen, die empfohlene Antwort zuerst. Für den ersten Versuch nimm die Vorgaben, mit einer Ausnahme: Antworte bei den Hosts mit **„Nur auf diesem Rechner“**. Die Sprache des Leitfadens richtet sich nach deinem `LANG` (Deutsch oder Englisch); die Befehle, die die Hooks ausführen, werden vor der Bestätigung angezeigt. Die Fragen und ihr Grund stehen in [onboarding.md](../onboarding.md).
 
 Hat das Repo noch kein Remote, legt `init` ein **lokales Bare-Remote** an (`~/.factory-remotes/<projekt>.git`) und setzt es als `origin`, weil alle Skripte über `origin` holen und pushen. Ersetze es jederzeit durch ein echtes Remote: `git remote set-url origin <url>`.
 
@@ -39,7 +39,7 @@ Es entstehen:
 | `docs/adr/0001-adopt-agentic-factory.md`, `docs/tasks/T00-template.md` | der Einführungs-ADR und die Ticket-Vorlage |
 | `.githooks/`, `tools/factory-guardrails.mjs` | die Git-Schutzregeln, schon aktiv (`core.hooksPath`) |
 | `.agents/skills/` (+ Link `.claude/skills`) | die mitgelieferten Skills |
-| `.factory/controller/`, `.factory/front-agent/`, `.factory/server/` | die Bündel für Controller, Front-Agent und einen späteren Server |
+| `.factory/controller/`, `.factory/front-agent/`, `.factory/server/` | die Bündel für Controller, Front-Agent und einen späteren Server; von git ignoriert (`update` erzeugt sie neu, auf die Hosts kommen sie von Hand); nur `.factory/manifest.json` wird committet |
 
 Lies `docs/dev-workflow.md` einmal. Das ist der ganze Prozess in klarer Sprache.
 

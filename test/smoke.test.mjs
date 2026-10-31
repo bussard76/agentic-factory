@@ -83,11 +83,56 @@ test("a wave of two reviewed tasks is accepted, one without its review branch is
   const bad = wave([t4]); assert.notEqual(bad.status, 0); assert.match(bad.stderr + bad.stdout, /Push to main rejected/);
 });
 
+test("integ-wave.sh itself pushes a two-task wave (one branch at a time) and rejects an octopus merge", () => {
+  const [t7, r7] = reviewedTask("t7"), [t8, r8] = reviewedTask("t8");
+  for (const b of [t7, r7, t8, r8]) git("push", "-q", "origin", b);
+  const integ = path.join(tmp, "..", path.basename(tmp) + "-integration");
+  git("worktree", "add", "-q", "-B", "integration", integ, "origin/main");
+  const env = { ...process.env, MAIN: "main", VERIFY_CMD: "echo verify-ok", GATE: path.join(ROOT, "controller/gate"), HOME: home, FACTORY_PROJECT: "smoke" };
+  const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "Wave 7+8", "two reviewed tasks", ...[t7, r7, t8, r8].map((b) => `origin/${b}`)], { cwd: integ, encoding: "utf8", env });
+  assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /PUSHED main/);
+  git("worktree", "remove", "--force", integ);
+  // An octopus merge of two reviewed tasks must be rejected by the gate.
+  const [t9, r9] = reviewedTask("t9"), [t10, r10] = reviewedTask("t10");
+  git("checkout", "-q", "-B", "integration", "origin/main");
+  git("merge", "-q", "--no-ff", "--no-edit", t9, r9, t10, r10);
+  const bad = gitTry("push", "-q", "origin", "integration:main"); assert.notEqual(bad.status, 0); assert.match(bad.stderr + bad.stdout, /octopus/);
+  git("checkout", "-q", "main");
+});
+
+test("reviewer standards need review coverage, ordinary docs do not", () => {
+  git("checkout", "-q", "-B", "main", "origin/main");
+  fs.appendFileSync(path.join(tmp, "docs/dev-workflow.md"), "\nA note.\n"); git("add", "-A"); git("commit", "-qm", "docs note");
+  assert.equal(gitTry("push", "-q", "origin", "main").status, 0, "plain docs are exempt");
+  fs.appendFileSync(path.join(tmp, "docs/review-protocol.md"), "\nA weaker rule.\n"); git("add", "-A"); git("commit", "-qm", "protocol change");
+  const r = gitTry("push", "-q", "origin", "main"); assert.notEqual(r.status, 0, "review-protocol.md needs coverage");
+  git("reset", "-q", "--hard", "origin/main");
+});
+
 test("a wave after main moved is accepted when its review branch is included", () => {
   const [t5, r5] = reviewedTask("t5");
   const [t6, r6] = reviewedTask("t6");
   assert.equal(wave([t6, r6]).status, 0);            // main moves
   const r = wave([t5, r5]); assert.equal(r.status, 0, r.stderr);   // t5 was reviewed before main moved
+});
+
+test("capacity counts every recorded Orca worker as live when the Orca CLI fails", () => {
+  const env = { ...process.env, FACTORY_CONFIG: path.join(tmp, ".factory/controller/factory.config.json"), ORCA_CLI_COMMAND: "/usr/bin/false" };
+  const ctl = path.join(tmp, ".factory/controller");
+  fs.writeFileSync(path.join(ctl, "workers.json"), JSON.stringify({ a: { host: "local", terminal: "term_x", name: "A · Worker Developer" }, b: { host: "local", terminal: "term_y", name: "B · Worker Developer" } }));
+  const v = JSON.parse(execFileSync("node", ["capacity.mjs", "--verbose"], { cwd: ctl, encoding: "utf8", env }));
+  assert.equal(v.measured.suite, 2); assert.match(v.reason, /counted as live/);
+  fs.unlinkSync(path.join(ctl, "workers.json"));
+});
+
+test("a second init run refreshes files without a new adoption commit", () => {
+  const before = git("rev-parse", "HEAD");
+  const out = node(CLI, "init", "--yes");
+  assert.match(out, /already initialised/); assert.equal(git("rev-parse", "HEAD"), before, "no new commit on a re-run");
+  // Refreshed files stay as working-tree changes for the human; nothing outside the factory's own files is touched.
+  const changed = git("status", "--porcelain").split("\n").filter(Boolean).map((l) => l.trim().replace(/^\S+\s+/, ""));   // git() trims, so parse the status code by whitespace
+  for (const f of changed) assert.match(f, /^(\.factory\/|factory\.config\.json|AGENTS\.md|CODING_STANDARDS\.md|docs\/|\.githooks\/|tools\/|\.agents\/|design\/|\.gitignore)/, `unexpected change: ${f}`);
+  git("checkout", "-q", "--", "."); git("clean", "-fdq", "-e", ".factory");
 });
 
 test("wait.mjs honours --hours and rejects a missing value", () => {

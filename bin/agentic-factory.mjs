@@ -43,7 +43,9 @@ function detect() {
   const name = path.basename(repo || cwd);
   const pkg = fs.existsSync("package.json") ? JSON.parse(fs.readFileSync("package.json", "utf8")) : {};
   const scripts = pkg.scripts ?? {};
-  const pm = fs.existsSync("pnpm-lock.yaml") ? "pnpm" : fs.existsSync("yarn.lock") ? "yarn" : fs.existsSync("package-lock.json") ? "npm" : "pnpm";
+  // Package manager: the lockfile decides; without one, the first of pnpm/npm/yarn on PATH, else npm. The hooks run
+  // these commands on every code commit, so never guess one that is not installed.
+  const pm = fs.existsSync("pnpm-lock.yaml") ? "pnpm" : fs.existsSync("yarn.lock") ? "yarn" : fs.existsSync("package-lock.json") ? "npm" : ["pnpm", "npm", "yarn"].find(has) ?? "npm";
   const run = (s) => (scripts[s] ? `${pm} ${pm === "npm" ? "run " : ""}${s}` : "");
   const figma = (() => { try { const r = spawnSync("curl", ["-s", "-m", "1", "-o", "/dev/null", "-w", "%{http_code}", "http://127.0.0.1:3845/mcp"], { encoding: "utf8" }); return /^(2|4)/.test(r.stdout); } catch { return false; } })();
   return {
@@ -77,7 +79,8 @@ async function init() {
   c.project.repo = await askText("   Repository?", d.repo || `github.com/<owner>/${c.project.name}`);
   c.project.mainBranch = sh("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).replace("origin/", "") || sh("git", ["branch", "--show-current"]) || "main";
   c.project.humanName = await askText("2. Who is the human the agents work for (name as the handbooks should address them)?", os.userInfo().username);
-  c.project.language = await ask("   In which language should the human-facing workflow guide be written?", [{ label: "Deutsch", value: "de" }, { label: "English", value: "en" }], "de");
+  const langDefault = /^de/i.test(process.env.LANG ?? process.env.LC_ALL ?? "") ? "de" : "en";
+  c.project.language = await ask("   In which language should the human-facing workflow guide be written?", [{ label: "English", value: "en" }, { label: "Deutsch", value: "de" }], langDefault);
   c.rhythm.mode = await ask("3. Working rhythm?", [
     { label: "Day: plan, test, decide. Night: the Controller builds unattended. Morning handover.", value: "day-plan-night-build" },
     { label: "Continuous: build whenever signed-off work exists; questions as they arise", value: "continuous" },
@@ -125,7 +128,9 @@ async function init() {
   c.hosts.controller = { host: await ask("8. Where does the Controller run?", c.hosts.workers.map((h) => ({ label: h.kind === "local" ? "On this machine (a second agent session next to the Front agent)" : `On ${h.name} (unattended, survives this machine sleeping)`, value: h.name })), c.hosts.workers.at(-1).name), controllerDir: "~/controller" };
   c.capacity.calibration.mode = await ask("9. Capacity: the limits per host are starting values. Calibrate them automatically?", [{ label: "Auto: start low, raise step by step while the host stays quiet, lower on pressure; the audit verifies", value: "auto" }, { label: "Manual: use the configured limits as they are", value: "manual" }], "auto");
   c.agents.calibration = await ask("   Models: calibrate the tier per role from measured pass rates and rounds?", [{ label: "Auto", value: "auto" }, { label: "Manual: only recommend", value: "manual" }], "auto");
-  for (const k of ["install", "typecheck", "lint", "unit", "verify", "e2e"]) c.commands[k] = await askText(`10. Command: ${k}? (empty to skip)`, d.commands[k] ?? c.commands[k] ?? "");
+  say(`\n10. Commands the hooks, Testers and waves will run (detected from package.json with ${d.pm}):`);
+  for (const k of ["install", "typecheck", "lint", "unit", "verify", "e2e"]) c.commands[k] = await askText(`    ${k}?`, d.commands[k] ?? c.commands[k] ?? "");
+  if (yes) for (const k of ["install", "typecheck", "lint", "unit", "verify", "e2e"]) say(`    ${k}: ${c.commands[k] || "(none)"}`);
   c.commands.release = d.commands.release.length ? d.commands.release : c.commands.release;
   c.hosts.frontAgent.preview.enabled = (await ask("11. Local preview that follows main on this machine (the human accepts there)?", [{ label: "Yes", value: "yes" }, { label: "No", value: "no" }], "yes")) === "yes";
   if (c.hosts.frontAgent.preview.enabled) { c.hosts.frontAgent.preview.port = Number(await askText("   Port?", "8180")); c.hosts.frontAgent.preview.command = await askText("   Start command?", d.scripts.dev ? `${d.pm} dev` : c.hosts.frontAgent.preview.command); c.hosts.frontAgent.preview.envFile = `~/.config/${c.project.name}/preview.env`; }
@@ -136,6 +141,7 @@ async function init() {
   const installNow = (await ask("15. Install the user-level skills on this machine now (needed by the Front agent here, and by the Controller if it runs here)?", [{ label: "Yes", value: "yes" }, { label: "Later (agentic-factory install-skills)", value: "no" }], "yes")) === "yes";
 
   // --- write -----------------------------------------------------------------------------------
+  const hadManifest = fs.existsSync(".factory/manifest.json");
   const manifest = { factoryVersion: PKG.version, files: {} };
   const vars = templateVars(c);
   const write = (rel, content, mode) => {
@@ -168,10 +174,13 @@ async function init() {
   fs.mkdirSync(".factory", { recursive: true });
   fs.writeFileSync(".factory/manifest.json", JSON.stringify(manifest, null, 2) + "\n");
   for (const dir of ["docs/reviews", "docs/reports", "docs/handoffs"]) { fs.mkdirSync(dir, { recursive: true }); if (!fs.existsSync(path.join(dir, ".gitkeep"))) fs.writeFileSync(path.join(dir, ".gitkeep"), ""); }
-  appendGitignore([".factory/new/", ".build/", ".env", ".env.*", "!.env.example", ".scratch/"]);
+  // The bundles are regenerated by `update` and copied to their hosts by hand; they do not belong in the project's history.
+  appendGitignore([".factory/new/", ".factory/controller/", ".factory/front-agent/", ".factory/server/", ".build/", ".env", ".env.*", "!.env.example", ".scratch/"]);
   // The adoption commit: only the files init wrote, committed with the ADR reference and pushed BEFORE the hooks are
   // armed, so origin/<main> carries AGENTS.md, the handbooks and the hooks for the first workers and the first wave.
-  const adopted = commitAdoption(Object.keys(manifest.files), c.project.mainBranch);
+  // A re-run on an initialised project is an update: no adoption commit (the hooks are armed; it could not be pushed).
+  const adopted = hadManifest ? "" : commitAdoption(Object.keys(manifest.files), c.project.mainBranch);
+  if (hadManifest) say("  already initialised: files refreshed, nothing committed (commit the changes yourself, or use `agentic-factory update`)");
   sh("git", ["config", "core.hooksPath", ".githooks"]);
   if (installNow) { say("\nUser-level skills:"); installSkills(); }
 
@@ -196,7 +205,7 @@ async function init() {
 function templateVars(c) {
   const ctl = c.hosts.workers.find((h) => h.name === c.hosts.controller.host) ?? c.hosts.workers[0];
   const remote = c.hosts.workers.find((h) => h.kind === "remote");
-  const projectDir = ctl.kind === "local" ? path.join(ctl.projectsDir, c.project.name) : `${ctl.projectsDir}/${c.project.name}`;
+  const projectDir = ctl.projectDir ?? (ctl.kind === "local" ? path.join(ctl.projectsDir, c.project.name) : `${ctl.projectsDir}/${c.project.name}`);
   const orca = c.agents.runner === "orca";
   return {
     PROJECT: c.project.name, HUMAN: c.project.humanName, MAIN: c.project.mainBranch, BRANCH_PREFIX: c.project.branchPrefix ?? "agents/", DATE: new Date().toISOString().slice(0, 10),

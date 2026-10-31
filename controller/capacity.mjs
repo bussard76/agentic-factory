@@ -27,7 +27,8 @@ const queue = { unit: num(kv.queue_unit) ?? 0, e2e: num(kv.queue_e2e) ?? 0 };
 const foreign = probe.split("\n").filter((l) => l.startsWith("proc=")).map((l) => l.slice(5).split("|")).filter(([pcpu, , cwd]) => Number(pcpu) >= 5 && cwd && !cwd.includes(`/${PROJECT}`)).reduce((s, [pcpu]) => s + Number(pcpu) / 100, 0);
 // Count only LIVE workers on this host: Orca workers whose terminal still exists and is not exited, terminal-runner
 // workers whose pid is alive. Finished workers must not fill the calibrated cap.
-const liveTerminals = RUNNER === "orca" ? (() => { try { return new Set(JSON.parse(trySh(ORCA, ["terminal", "list", ...orcaEnvArgsOn(host), "--json"]) || "{}").result?.terminals?.filter((t) => t.status !== "exited").map((t) => t.handle) ?? []); } catch { return null; } })() : null;
+// null when the Orca CLI fails or answers without a terminal list: then every recorded worker counts as live (fail closed).
+const liveTerminals = RUNNER === "orca" ? (() => { try { const t = JSON.parse(trySh(ORCA, ["terminal", "list", ...orcaEnvArgsOn(host), "--json"]) || "null")?.result?.terminals; return Array.isArray(t) ? new Set(t.filter((x) => x.status !== "exited").map((x) => x.handle)) : null; } catch { return null; } })() : null;
 const alivePid = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } };
 const workers = Object.values(readJson("workers.json", {})).filter((w) => (w.host ?? "local") === host.name)
   .filter((w) => (w.terminal ? (liveTerminals ? liveTerminals.has(w.terminal) : true) : w.pid ? alivePid(w.pid) : false));
@@ -49,6 +50,7 @@ if (recentTimeouts) pressure.push(`${recentTimeouts} load timeouts in 30 min`);
 if (foreign > threads / 4) pressure.push(`foreign load ~${foreign.toFixed(1)}`);
 const hot = pressure.length > 0;
 const notes = memKnown ? [] : ["available memory unknown on this host: memory rule skipped"];
+if (RUNNER === "orca" && liveTerminals === null) notes.push("orca terminal list unavailable: every recorded worker counted as live");
 
 // --- calibrated caps --------------------------------------------------------------------------------------------------
 const stateName = `capacity-state.${host.name}.json`;

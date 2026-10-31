@@ -14,6 +14,6 @@ while true; do
   waiters=0; for d in "$TMP"/$PROJECT-gate-*/; do [ -d "$d" ] && waiters=$(( waiters + $(ls "$d" 2>/dev/null | grep -c '^ticket-') )); done
   printf '%s load=%s mem=%s/%sMB avail=%sMB psi_cpu=%s psi_mem=%s psi_io=%s agents=%s vitest=%s playwright=%s gatewaiters=%s\n' \
     "$(date +%H:%M)" "$load" "$used" "$total" "$avail" "$(psi cpu)" "$(psi memory)" "$(psi io)" \
-    "$(pgrep -c -f 'codex|claude|pi ' 2>/dev/null)" "$(pgrep -c -f vitest 2>/dev/null)" "$(pgrep -c -f playwright 2>/dev/null)" "$waiters" >> "$HOME/load.log"
+    "$(pgrep -f 'codex|claude|pi ' 2>/dev/null | wc -l | tr -d ' ')" "$(pgrep -f vitest 2>/dev/null | wc -l | tr -d ' ')" "$(pgrep -f playwright 2>/dev/null | wc -l | tr -d ' ')" "$waiters" >> "$HOME/load.log"
   sleep 60
 done

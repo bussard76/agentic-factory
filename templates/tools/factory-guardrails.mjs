@@ -24,7 +24,11 @@ function listFiles(revision) {
 }
 const show = (revision, path) => tryGit("show", `${revision === "index" ? "" : "HEAD"}:${path}`);
 const stagedPaths = () => git("diff", "--cached", "--name-only", "--no-renames", "-z").split("\0").filter(Boolean);
-const isDocsOnly = (paths) => paths.length > 0 && paths.every((p) => (p.startsWith("docs/") && !p.startsWith("docs/adr/")) || (/^[^/]+\.md$/.test(p) && !/^(AGENTS|ARCHITECTURE)\.md$/.test(p)));
+// Documentation-only commits skip static checks and need no review coverage on main, EXCEPT the files that set the
+// reviewers' standards: they change only through a reviewed task (fast lane with a Tester), like code.
+// docs/coordinator.md and docs/dev-workflow.md stay exempt: the human's process decisions are recorded there at once.
+const REVIEWED_DOCS = /^(docs\/review-protocol\.md|docs\/architect-protocol\.md|CODING_STANDARDS\.md)$/;
+const isDocsOnly = (paths) => paths.length > 0 && paths.every((p) => !REVIEWED_DOCS.test(p) && ((p.startsWith("docs/") && !p.startsWith("docs/adr/")) || (/^[^/]+\.md$/.test(p) && !/^(AGENTS|ARCHITECTURE)\.md$/.test(p))));
 
 // --- test-count --------------------------------------------------------------------------------
 const TEST_FILE = /\.(test|spec)\.[cm]?[jt]sx?$|_test\.(py|go)$|Test\.(java|kt)$/;
@@ -116,7 +120,7 @@ function reviewGate() {
       // the pushed tip (exit status, never output). Commits added after a review are not ancestors of its SHA and
       // therefore uncovered; merges are judged by their own changes above, so several reviewed tasks can share a wave.
       const covered = reviews.some((r) => shaExists(r.sha) && isAncestor(sha, r.sha) && isAncestor(r.sha, localSha));
-      if (!covered) uncovered.push(sha.slice(0, 10));
+      if (!covered) uncovered.push(files.some((f) => f.startsWith("<octopus")) ? `${sha.slice(0, 10)} (octopus merge: merge one branch at a time)` : sha.slice(0, 10));
     }
     if (uncovered.length) fail(`Push to ${MAIN} rejected. Commits without a passing independent review:\n${uncovered.join("\n")}\nA findings file under docs/reviews/ with "Verdict: pass" and "Reviewed commit: <40-char SHA>" must be in the pushed tree, and each commit must be an ancestor of a reviewed SHA (merge the review branch into the wave).`);
   }
@@ -125,9 +129,11 @@ const shaExists = (sha) => spawnSync("git", ["cat-file", "-e", `${sha}^{commit}`
 const isAncestor = (a, b) => spawnSync("git", ["merge-base", "--is-ancestor", a, b]).status === 0;
 function commitFiles(sha, isMerge) {
   if (!isMerge) return tryGit("diff-tree", "--no-commit-id", "--name-only", "-r", sha).trim().split("\n").filter(Boolean);
-  // A merge's own changes: what differs from the automatic merge of its parents.
+  // A merge's own changes: what differs from the automatic merge of its two parents. An octopus merge (three or more
+  // parents) has no such pair, so it is judged as all-unreviewed; waves merge one branch at a time for this reason.
   const parents = tryGit("rev-list", "--parents", "-n", "1", sha).trim().split(" ").slice(1);
   if (parents.length < 2) return [];
+  if (parents.length > 2) return ["<octopus merge: merge one branch at a time>"];
   const auto = tryGit("merge-tree", "--write-tree", parents[0], parents[1]).trim().split("\n")[0];
   return auto ? tryGit("diff", "--name-only", auto, sha).trim().split("\n").filter(Boolean) : ["<conflict>"];
 }
