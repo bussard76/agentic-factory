@@ -1,0 +1,12 @@
+# Publishes the intro page with GitLab Pages. The repo's own documents are linked to GitLab's rendered Markdown views.
+pages:
+  stage: deploy
+  script:
+    - mkdir -p public
+    - cp site/index.html public/index.html
+    - sed -i "s#\.\./docs/#$CI_PROJECT_URL/-/blob/$CI_DEFAULT_BRANCH/docs/#g; s#\.\./README\.md#$CI_PROJECT_URL/-/blob/$CI_DEFAULT_BRANCH/README.md#g" public/index.html
+  artifacts:
+    paths:
+      - public
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
