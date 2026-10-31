@@ -1,6 +1,10 @@
 # Publishes the intro page with GitLab Pages. The repo's own documents are linked to GitLab's rendered Markdown views.
+# Shared runners on this instance run tagged jobs only; adjust the tag and image to your instance.
 pages:
   stage: deploy
+  tags:
+    - docker
+  image: alpine:latest
   script:
     - mkdir -p public
     - cp site/index.html public/index.html
