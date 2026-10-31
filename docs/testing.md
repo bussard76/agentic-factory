@@ -11,7 +11,9 @@ Decided by the owner on 2026-10-30 after full suites for every Developer pushed 
 
 Docker runs **only** at release. Not per task, not per wave. This was corrected explicitly after it had crept back in once.
 
-**The release gate is mandatory, not optional (decided by the owner, 2026-10-31).** Functional checks are prioritised during development so the product moves fast; the deferred categories are paid before release: security tests (dependency audit, the threat-model checks, a security review of the release candidate), load tests (the flows under realistic concurrency), and the test and edge-case debt from the register. No release approval while any of these is open or failing, unless the human accepts a specific item in writing.
+**The release gate is mandatory, not optional (decided by the owner, 2026-10-31).** Functional checks are prioritised during development so the product moves fast; load and security tests do **not** run in daily task and wave gates, because they were observed to slow development down. They are paid before release: security tests (dependency audit, the threat-model checks, a security review of the release candidate), load tests (the flows under realistic concurrency), and the test and edge-case debt from the register. No release approval while any of these is open or failing, unless the human accepts a specific item in writing.
+
+**Always on, in every review:** code quality (`ponytail-review`, the coding standards) and architecture conformance (level, exports, dependencies, data flows, import boundaries). An architecture violation blocks; quality findings are fixed when trivial, otherwise they become debt with a follow-up.
 
 ## Gates run in fair slots
 

@@ -85,7 +85,7 @@ The human talks only to the Front agent and sees one status table. The Controlle
 
 ## Principles
 
-1. **Functionality first, hardening before release.** A review fails only when a specified flow does not work, data is lost, or a change would reach a real external system. Tests, edge cases, security, load and style become debt with a category and a follow-up, worked off in a hardening phase. That phase is not optional: security and load tests run before every release and are a condition of release approval.
+1. **Functionality first, hardening before release.** A review fails only when a specified flow does not work, data is lost, or a change would reach a real external system. Code quality and architecture conformance are checked in every review (an architecture violation blocks). Load and security tests do not run in daily gates, because they slow development down; they run in the hardening phase and before every release, as a condition of release approval.
 2. **Outside-in.** Agree the surface, then the data, then the logic, each signed off by the human, before any code.
 3. **Back pressure, not trust.** The reviewer is never the builder. The reviewer runs the gates itself. Git enforces review coverage on `main`.
 4. **Measure, then decide.** Capacity, flakiness and process changes come from the journal and the load log, not from feelings.

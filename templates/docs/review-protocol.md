@@ -18,6 +18,8 @@ The verdict is `fail` **only** for a real functional defect: a specified flow do
 
 Missing or weak tests, coverage gaps, edge cases, security, load and style are **debt candidates** with a category (`tests`, `edge-case`, `security`, `load`, `style`), a severity and a one-line proposal. They never fail the review. They are not dropped: every debt candidate goes into `docs/debt.md`, and the categories `security`, `load`, `tests` and `edge-case` are paid before release. The release gate is not passed while one of them is open, unless {{HUMAN}} accepts the item in writing.
 
+**Always checked, in every round:** code quality (`ponytail-review` on the full diff, `CODING_STANDARDS.md`) and architecture conformance (the stated level; every new export, dependency, data flow and import against the spec and the architecture docs). A wrong level or an unannounced architectural change is a `blocker`. Quality findings are `minor` unless trivial to fix now. **Not in daily rounds:** load tests, dependency audits and deep security hunting; they belong to the hardening phase and the release gate.
+
 ## Reviewer rules
 
 - **Read-only.** Do not edit, stash or reset implementation files. The only file you write is your findings file.

@@ -34,7 +34,15 @@ Everything else is a **debt candidate**, listed with a category, a severity and 
 
 Nothing is dropped. Debt is collected in `docs/debt.md` and worked off in a **hardening phase** once the functional surface has enough breadth. The human starts that phase; the Front agent proposes it.
 
-**Mandatory before release (decided by the owner, 2026-10-31).** Functional tests come first so the product moves fast. Load, security and the other deferred checks are not optional: they run before every release and are a **condition of release approval**. The release gate is not passed while a `security`, `load`, `tests` or `edge-case` debt item is open, unless the human has explicitly accepted it in writing in `docs/debt.md`. The Front agent proposes the hardening phase in time; the Controller reports the open debt by category in every status.
+## What runs when (decided by the owner, 2026-10-31)
+
+| Check | When | Effect |
+|---|---|---|
+| **Functional check** of the specified flows | every task, every wave | the review verdict |
+| **Code quality** (`ponytail-review`, `CODING_STANDARDS.md`) and **architecture conformance** (level, new exports, dependencies, data flows, import boundaries) | **always**, in every review | an architecture violation blocks; quality findings are fixed when trivial, otherwise recorded as debt with a follow-up |
+| **Load, security and the other deferred checks** (load tests, dependency audit, threat-model review, deep edge-case hunting) | **not in daily runs**: observed to slow development down. They run in the hardening phase and **before every release** | a **condition of release approval**: the release gate is not passed while a `security`, `load`, `tests` or `edge-case` debt item is open, unless the human accepts it in writing in `docs/debt.md` |
+
+Functional tests come first so the product moves fast; nothing is dropped. The Front agent proposes the hardening phase in time; the Controller reports the open debt by category in every status.
 
 ## Threat model for security findings
 
