@@ -44,13 +44,13 @@
         }
       },
       {
-        "name": "workhorse",
+        "name": "build-server",
         "kind": "remote",
-        "ssh": "workhorse",
+        "ssh": "build-server",
         "sshConfig": "",
         "projectsDir": "~/projects",
         "workspacesDir": "~/orca/workspaces",
-        "orcaEnvironment": "Workhorse",
+        "orcaEnvironment": "build-server",
         "orcaRepoId": "",
         "capacity": {
           "suiteWorkersMax": 8,

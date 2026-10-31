@@ -34,7 +34,7 @@ When capacity is short, the Controller starts in this order:
 4. new development
 5. debt and improvements
 
-`gate` logs wait time and run time per gate to the journal (`type: gate`); `loadlog.sh` writes load, memory, pressure and agent counts once a minute. The nightly audit reads both and answers: does more parallelism raise throughput, or only waiting?
+`gate` (`controller/gate.mjs`, Node only, no `flock`) queues waiters as ticket files per pool and host and lets only the oldest live ticket take a free slot, so gates on one host run first come, first served; stale tickets and slots of dead processes are swept. It logs wait time and run time per gate to the journal (`type: gate`); `loadlog.sh` writes load, memory, pressure and agent counts once a minute. The nightly audit reads both and answers: does more parallelism raise throughput, or only waiting?
 
 ## The caps are starting values: calibration
 

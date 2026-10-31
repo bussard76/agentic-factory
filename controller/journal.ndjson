@@ -1,0 +1,3 @@
+{"ts":"2026-10-31T12:23:58.521Z","type":"capacity","task":"controller","host":"local","note":"start/start cap 2","cpu":null,"mem":null,"avail_gb":16.8,"queue":0}
+{"ts":"2026-10-31T12:23:58.569Z","type":"decision","task":"T01","note":"x"}
+{"ts":"2026-10-31T12:23:58.864Z","type":"cleanup","task":"controller","note":"removed 0, kept 0, pruned 0"}

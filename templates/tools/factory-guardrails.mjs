@@ -112,12 +112,16 @@ function reviewGate() {
     for (const sha of [...commits, ...merges]) {
       const files = commitFiles(sha, merges.includes(sha));
       if (isDocsOnly(files) || files.every((f) => f.startsWith("docs/reviews/"))) continue;
-      const covered = reviews.some((r) => tryGit("merge-base", "--is-ancestor", sha, r.sha) === "" && onlyReviewsAfter(r.sha, localSha));
+      // Fail closed: the reviewed SHA must exist, the commit must be its ancestor (exit status 0, not output), and
+      // only review files may change between the reviewed SHA and the pushed tip.
+      const covered = reviews.some((r) => shaExists(r.sha) && isAncestor(sha, r.sha) && isAncestor(r.sha, localSha) && onlyReviewsAfter(r.sha, localSha));
       if (!covered) uncovered.push(sha.slice(0, 10));
     }
     if (uncovered.length) fail(`Push to ${MAIN} rejected. Commits without a passing independent review:\n${uncovered.join("\n")}\nA findings file under docs/reviews/ with "Verdict: pass" and "Reviewed commit: <40-char SHA>" covering each commit is required; after the reviewed commit only docs/reviews/ may change.`);
   }
 }
+const shaExists = (sha) => spawnSync("git", ["cat-file", "-e", `${sha}^{commit}`]).status === 0;
+const isAncestor = (a, b) => spawnSync("git", ["merge-base", "--is-ancestor", a, b]).status === 0;
 function commitFiles(sha, isMerge) {
   if (!isMerge) return tryGit("diff-tree", "--no-commit-id", "--name-only", "-r", sha).trim().split("\n").filter(Boolean);
   // A merge's own changes: what differs from the automatic merge of its parents.
@@ -131,7 +135,9 @@ function parseReviews(tip) {
   return files.map((f) => tryGit("show", `${tip}:${f}`)).map((t) => ({ pass: /^Verdict:\s*pass\b/m.test(t), sha: /^Reviewed commit:\s*([0-9a-f]{40})\b/m.exec(t)?.[1] })).filter((r) => r.pass && r.sha);
 }
 function onlyReviewsAfter(reviewed, tip) {
-  const files = tryGit("diff", "--name-only", reviewed, tip).trim().split("\n").filter(Boolean);
+  const r = spawnSync("git", ["diff", "--name-only", reviewed, tip], { encoding: "utf8" });
+  if (r.status !== 0) return false;   // a failing git command never counts as coverage
+  const files = r.stdout.trim().split("\n").filter(Boolean);
   return files.every((f) => f.startsWith("docs/reviews/") || isDocsOnly([f]));
 }
 

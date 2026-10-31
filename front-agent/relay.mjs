@@ -1,15 +1,19 @@
-// Transition helper: forwards Orca worker events addressed to this machine to the Controller's events.md on the
-// server, filtered for secrets, and acknowledges them here. Needed only while workers started from this machine
-// are still running. Runs until killed.
+// Transition helper: forwards Orca worker events addressed to this machine to the Controller's events.md (local file
+// or over ssh on the controller host), filtered for secrets, and acknowledges them here. Needed only while workers
+// started from this machine are still running and the Controller lives elsewhere. Runs until killed.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { controllerHost, expand, loadConfig } from "./hosts.mjs";
 
-const dir = path.dirname(new URL(import.meta.url).pathname);
-const cfg = JSON.parse(fs.readFileSync(process.env.FACTORY_CONFIG ?? path.join(dir, "factory.config.json"), "utf8"));
-const hc = cfg.hosts.controller;
-const SSH = [...(hc.sshConfig ? ["-F", hc.sshConfig] : []), hc.ssh];
+const cfg = loadConfig(path.dirname(new URL(import.meta.url).pathname));
+const host = controllerHost(cfg);
+const ctlDir = cfg.hosts.controller?.controllerDir ?? "~/controller";
 const clean = (s) => s.split("\n").filter((l) => !/pair|token|code=/i.test(l)).join("\n");
+const forward = (text) => {
+  if (host.kind === "local") fs.appendFileSync(path.join(expand(ctlDir), "events.md"), text + "\n");
+  else execFileSync("ssh", [...(host.sshConfig ? ["-F", expand(host.sshConfig)] : []), host.ssh, `cat >> ${ctlDir}/events.md`], { input: text + "\n" });
+};
 for (;;) {
   let j;
   try {
@@ -18,8 +22,8 @@ for (;;) {
   } catch { await new Promise((r) => setTimeout(r, 30000)); continue; }
   const msgs = (j.result?.messages ?? []).filter((m) => m.type !== "heartbeat");
   if (msgs.length) {
-    const text = msgs.map((m) => `- ${new Date().toISOString().slice(0, 16)} [${m.type}] ${m.subject ?? ""} (dispatch ${JSON.parse(m.payload || "{}").dispatchId ?? "?"}, relay ${m.id}): ${m.body ?? ""}`).join("\n");
-    try { execFileSync("ssh", [...SSH, `cat >> ${hc.controllerDir ?? "~/controller"}/events.md`], { input: clean(text) + "\n" }); console.log(clean(text)); } catch (e) { console.log("forward failed", String(e).slice(0, 200)); continue; }
+    const text = clean(msgs.map((m) => `- ${new Date().toISOString().slice(0, 16)} [${m.type}] ${m.subject ?? ""} (dispatch ${JSON.parse(m.payload || "{}").dispatchId ?? "?"}, relay ${m.id}): ${m.body ?? ""}`).join("\n"));
+    try { forward(text); console.log(text); } catch (e) { console.log("forward failed", String(e).slice(0, 200)); continue; }
   }
   if (j.result?.deliveryId) execFileSync("orca", ["orchestration", "check", "--ack", j.result.deliveryId, "--json"]);
 }

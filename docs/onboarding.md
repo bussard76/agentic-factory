@@ -4,18 +4,20 @@
 
 | # | Question | Why it matters | Default |
 |---|---|---|---|
-| 1 | **Project name and repository** | names branches, worktrees, lock files and the preview; the Controller clones by this | from `git remote` |
-| 2 | **Who is the human, and in which language do they want to read?** | the handbooks address the human by name; `docs/dev-workflow.md` is written in the human's language, agent files stay English | `de` or `en` |
-| 3 | **Steering mode:** GitHub issues or task files with Orca | where tickets live and how the frontier is shown; see [steering-modes.md](steering-modes.md) | GitHub issues if a GitHub remote exists, else task files |
-| 4 | **Runner:** Orca or plain terminals | how workers are launched and observed | Orca if the `orca` CLI is installed, else terminal |
-| 5 | **Default agent and models:** Codex, Claude Code or Pi; the three model tiers; the fallback agent and quota threshold | models by complexity, the escalation ladder, the quota fallback | Codex with the three tiers; fallback Claude at 10 % |
-| 6 | **Controller host:** SSH alias, controller directory, projects and workspaces directories, Orca repo id and environment | the Front agent reads `status.md` there; the Controller's scripts need the paths | `workhorse`, `~/controller`, `~/projects`, `~/orca/workspaces` |
-| 7 | **Capacity:** max suite workers, max read-only workers, gate slots, pressure thresholds, available memory minimum | the measured-capacity rule needs starting values; they are tuned by the audits | 8 / 6 / 3+2 / 20 % CPU, 5 % memory / 8 GB |
-| 8 | **Commands:** install, typecheck, lint, unit, verify, e2e, release | the test stages, the gate and the wave call exactly these | read from `package.json` scripts where present |
-| 9 | **Preview on the human's machine:** enabled, port, start command, env file | the human accepts on a local build that follows `main` | enabled, 8180 |
-| 10 | **Review rules:** functional-only, max rounds, wave triggers | back pressure without blocking on non-functional findings | functional-only, 2 rounds, wave at 2 passed tasks or 60 minutes |
-| 11 | **Hard rules to confirm:** no real data in the repo, no secrets, no outward effects from the factory (nothing outside the repo and the demo environment), `--no-verify` forbidden, workers never push to `main` | they are printed and the human confirms each; they end up in `AGENTS.md` and `docs/coordinator.md` | all confirmed |
-| 12 | **Design tool:** Figma MCP, Pencil, none | stage 1 of outside-in and the export convention `design/<feature>/` | Figma if its MCP endpoint answers locally |
+| 1 | **Project name and repository** | names branches, worktrees, lock files and the preview; the Controller clones by this. Without a remote, `init` creates a local bare one as `origin` | from `git remote` |
+| 2 | **Who is the human, and in which language do they want to read?** | the handbooks address the human by name; `docs/dev-workflow.md` is written in the human's language, agent files stay English | user name; `de` |
+| 3 | **Rhythm:** day plan / night build, continuous, or custom quiet hours | when the Controller may start new work | day plan / night build |
+| 4 | **Steering mode:** GitHub issues or task files | where tickets live and how the frontier is shown; see [steering-modes.md](steering-modes.md) | GitHub issues if a GitHub remote and `gh` exist, else task files |
+| 5 | **Runner:** Orca or plain terminals | how workers are launched and observed | Orca if the `orca` CLI is installed, else terminal |
+| 6 | **Default agent and models:** Codex, Claude Code or Pi; the three model tiers as the CLI names them | models by complexity, the escalation ladder; the names are starting values, calibrated later | the installed CLI; its three tiers |
+| 7 | **Where workers run:** only this machine, this machine plus one remote host, or only a remote host (name, ssh alias, ssh config) | a remote server is an option, not a must; more hosts can be added in the config later | only this machine |
+| 8 | **Where the Controller runs** | the Front agent reads `status.md` there; a remote Controller survives this machine sleeping | the last worker host |
+| 9 | **Calibration:** capacity caps and model tiers automatic or manual | the limits are starting values; auto raises and lowers them from measurements | auto / auto |
+| 10 | **Commands:** install, typecheck, lint, unit, verify, e2e | the test stages, the gate and the wave call exactly these; `-` clears one | read from `package.json` scripts |
+| 11 | **Preview on this machine:** enabled, port, start command | the human accepts on a local build that follows `main` | enabled, 8180 |
+| 12 | **Review rounds** before a working feature is integrated | back pressure without endless loops | 2 |
+| 13 | **Design tool:** Figma MCP, Pencil, none | stage 1 of outside-in and the export convention `design/<feature>/` | Figma if its MCP endpoint answers locally |
+| 14 | **Hard rules to confirm** (printed as one list): no real data or secrets in the repo, no outward effects from the factory, workers never push to `main`, `--no-verify` forbidden, tests on demo data only, no real model calls in tests | one confirmation for the list; they end up in `AGENTS.md` and `docs/coordinator.md` | confirmed |
 
 After the answers, `init`:
 

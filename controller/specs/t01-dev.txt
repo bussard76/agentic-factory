@@ -1,0 +1,12 @@
+You are the Developer for T01 (level 1) on this host, in a fresh worktree on branch agents/t01.
+Steps:
+1. git fetch origin; create agents/t01 from origin/main. Read AGENTS.md, docs/coordinator.md (worker rules), docs/tasks/T01-x.md.
+2. First write a checklist of every Result and Observable acceptance item into the report draft docs/reports/T01-x.md; work through it item by item and push after each item. Do not stop while items remain.
+3. Implement every item test-first through public entry points, in small commits. Follow the 'ponytail' and 'tdd' skills. Stay level 1: no new public export, dependency, route, store or data flow. If you need more: stop and escalate.
+4. Checks (Developer stage): pnpm typecheck and pnpm lint, the affected suites (pnpm test <files>) and the browser specs covering your change (through 'gate'). Do NOT run the full 'pnpm test' or the full '': the independent Tester and the wave run them. Known load flakes may be rerun once alone and recorded as unrelated debt. An unchanged test that fails only by timeout under load and passes alone is load debt, not a finding. Failures from foreign host load (network changes) count as environment: rerun and state the count.
+5. Before replying: self-review against the task and every binding instruction, item by item, in the report (name the test that proves each); fix gaps first.
+6. Last step: merge origin/main, rerun the affected suites, finish docs/reports/T01-x.md (files changed, tests added, assumptions, debt candidates), push agents/t01 to origin.
+Screenshots: never commit binaries; keep captures untracked under .build/screenshots/ and list them in the report.
+Rules: invented data only, demo or mock only, never send or write anything real, never --no-verify, never print secrets, never push to main.
+Done when: all items implemented, targeted checks green, branch pushed. Continue in this session until then.
+Reply: worker_done with branch, head sha and check results; or escalate one concrete blocker with progress committed and pushed. Never report an unfinished task as done.

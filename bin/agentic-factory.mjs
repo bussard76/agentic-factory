@@ -31,7 +31,8 @@ async function ask(question, options, def) {
   const n = Number(a);
   return n >= 1 && n <= options.length ? options[n - 1].value : a;
 }
-async function askText(question, def) { if (yes) return def; const a = (await rl.question(`\n${question} [${def}] `)).trim(); return a || def; }
+// Enter keeps the default; a single "-" clears the value (for optional commands).
+async function askText(question, def) { if (yes) return def; const a = (await rl.question(`\n${question} [${def || "none"}] (Enter = keep, - = none) `)).trim(); return a === "-" ? "" : a || def; }
 
 // --- detection -----------------------------------------------------------------------------------
 function detect() {
@@ -53,14 +54,26 @@ function detect() {
 // --- init ------------------------------------------------------------------------------------------
 async function init() {
   say(`agentic-factory ${PKG.version}: onboarding for ${cwd}`);
-  if (!fs.existsSync(".git")) { say("Not a git repository. Run `git init` first."); process.exit(1); }
+  if (spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { stdio: "ignore" }).status !== 0) { say("Not a git repository. Run `git init` first."); process.exit(1); }
   const d = detect();
+  // Every script fetches origin and merges origin/<main>. A repo without a remote gets a local bare one, so the
+  // first wave works on a single machine; replace it with a real remote any time (git remote set-url origin …).
+  if (!sh("git", ["remote"])) {
+    const bare = path.join(os.homedir(), ".factory-remotes", `${d.name}.git`);
+    fs.mkdirSync(path.dirname(bare), { recursive: true });
+    if (!fs.existsSync(bare)) spawnSync("git", ["init", "-q", "--bare", bare]);
+    spawnSync("git", ["remote", "add", "origin", bare]);
+    const branch = sh("git", ["branch", "--show-current"]) || "main";
+    spawnSync("git", ["push", "-q", "-u", "origin", branch], { stdio: "ignore" });
+    say(`No remote found: created a local bare remote at ${bare} and set it as origin (replace it later with git remote set-url origin <url>).`);
+    d.repo = `local:${bare}`;
+  }
   const c = JSON.parse(fs.readFileSync(path.join(ROOT, "factory.config.example.json"), "utf8"));
   delete c.$comment;
   c.factoryVersion = PKG.version;
   c.project.name = await askText("1. Project name (used for branches, worktrees, locks, the preview)?", d.name);
   c.project.repo = await askText("   Repository?", d.repo || `github.com/<owner>/${c.project.name}`);
-  c.project.mainBranch = sh("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).replace("origin/", "") || "main";
+  c.project.mainBranch = sh("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).replace("origin/", "") || sh("git", ["branch", "--show-current"]) || "main";
   c.project.humanName = await askText("2. Who is the human the agents work for (name as the handbooks should address them)?", os.userInfo().username);
   c.project.language = await ask("   In which language should the human-facing workflow guide be written?", [{ label: "Deutsch", value: "de" }, { label: "English", value: "en" }], "de");
   c.rhythm.mode = await ask("3. Working rhythm?", [
@@ -81,9 +94,9 @@ async function init() {
     { label: "On this machine and on one remote server (ssh alias)", value: "both" },
     { label: "Only on a remote server", value: "remote" }], "local");
   const localHost = { name: "local", kind: "local", projectsDir: path.dirname(cwd).replace(os.homedir(), "~"), workspacesDir: "~/orca/workspaces", orcaEnvironment: "", orcaRepoId: "", capacity: { suiteWorkersMax: 2, readOnlyWorkersMax: 2 } };
-  const remoteHost = { name: "workhorse", kind: "remote", ssh: "workhorse", sshConfig: "", projectsDir: "~/projects", workspacesDir: "~/orca/workspaces", orcaEnvironment: "", orcaRepoId: "", capacity: { suiteWorkersMax: 8, readOnlyWorkersMax: 6, gate: { unitSlots: 3, e2eSlots: 2 } } };
+  const remoteHost = { name: "build-server", kind: "remote", ssh: "build-server", sshConfig: "", projectsDir: "~/projects", workspacesDir: "~/orca/workspaces", orcaEnvironment: "", orcaRepoId: "", capacity: { suiteWorkersMax: 8, readOnlyWorkersMax: 6, gate: { unitSlots: 3, e2eSlots: 2 } } };
   if (where !== "local") {
-    remoteHost.name = await askText("   Name of the remote host (also its Orca environment name)?", "workhorse");
+    remoteHost.name = await askText("   Name of the remote host (also its Orca environment name)?", "build-server");
     remoteHost.ssh = await askText("   SSH alias for it (from your ssh config)?", remoteHost.name);
     remoteHost.sshConfig = await askText("   Path to an ssh config file, or empty for ~/.ssh/config?", "");
     remoteHost.orcaEnvironment = c.agents.runner === "orca" ? remoteHost.name : "";
@@ -108,7 +121,9 @@ async function init() {
     const target = path.join(cwd, rel);
     if (fs.existsSync(target) && fs.readFileSync(target, "utf8") !== content) {
       const existing = JSON.parse(fs.existsSync(".factory/manifest.json") ? fs.readFileSync(".factory/manifest.json", "utf8") : "{}").files?.[rel];
-      if (!existing || existing !== hash(fs.readFileSync(target, "utf8"))) { say(`  keep   ${rel} (exists and was changed locally; new version at .factory/new/${rel})`); fs.mkdirSync(path.dirname(path.join(cwd, ".factory/new", rel)), { recursive: true }); fs.writeFileSync(path.join(cwd, ".factory/new", rel), content); manifest.files[rel] = hash(fs.readFileSync(target, "utf8")); return; }
+      // A file we did not generate, or one changed since we generated it, is user-owned: keep it and never adopt
+      // its hash as our baseline, so later runs keep it too. The new version lands in .factory/new/.
+      if (!existing || existing !== hash(fs.readFileSync(target, "utf8"))) { say(`  keep   ${rel} (user-owned; new version at .factory/new/${rel})`); fs.mkdirSync(path.dirname(path.join(cwd, ".factory/new", rel)), { recursive: true }); fs.writeFileSync(path.join(cwd, ".factory/new", rel), content); manifest.files[rel] = existing ?? "user"; return; }
     }
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, content); if (mode) fs.chmodSync(target, mode);
@@ -142,7 +157,7 @@ async function init() {
     `Read docs/dev-workflow.md (the process) and AGENTS.md (the agents' rules). Commit the new files with a message that references the adoption ADR, e.g. \`git commit -m "Adopt agentic-factory (ADR-0001)"\`; protected files need that reference.`,
     remote && `Set up ${remote.name}: copy .factory/server/ there and follow docs/server-setup.md in the factory repo. Logins (gh, ${c.agents.default}, tailscale${c.agents.runner === "orca" ? ", Orca pairing" : ""}) are yours. Then put its Orca repo id into factory.config.json → hosts.workers[].orcaRepoId and run \`agentic-factory update\` to refresh the bundles.`,
     `Skills at user level, on EVERY host that runs a Controller or Front agent: \`agentic-factory install-skills\` here${remote ? `; on ${remote.name}: \`mkdir -p ~/.claude/skills ~/.agents/skills && cp -R ~/controller/skills/* ~/.claude/skills/ && cp -R ~/controller/skills/* ~/.agents/skills/\`` : ""}. Without the Orca skills (orchestration, orca-cli) the agents cannot start, watch or release workers.`,
-    `Controller: copy .factory/controller/ to ${ctl.kind === "local" ? "~/controller on this machine" : `${ctl.name}:~/controller`}, install the gate (\`install -m 755 ~/controller/gate ~/.local/bin/gate\`), start \`bash ~/controller/loadlog.sh &\`, then start an agent session there with: "Read ~/controller/CONTROLLER.md and act as the Controller."`,
+    `Controller: copy .factory/controller/ to ${ctl.kind === "local" ? "~/controller on this machine" : `${ctl.name}:~/controller`}, install the gate (\`mkdir -p ~/.local/bin && install -m 755 ~/controller/gate ~/.local/bin/gate\`; it needs only node), start \`bash ~/controller/loadlog.sh &\`, then start an agent session there with: "Read ~/controller/CONTROLLER.md and act as the Controller."`,
     `Front agent: copy .factory/front-agent/ to ~/front-agent/${c.project.name} on this machine and start your agent session with: "Read ~/front-agent/${c.project.name}/FRONT_AGENT.md and act as the Front agent."`,
     c.hosts.frontAgent.preview.enabled && `Preview: clone the repo to ~/Development/${c.project.name}-preview, fill ${c.hosts.frontAgent.preview.envFile}, then load the launchd agent from .factory/front-agent/preview.plist.template (fill the paths) with \`launchctl bootstrap gui/$(id -u) <plist>\`.`,
     c.steering.mode === "github-issues" ? "Create the labels: ready-for-agent, in-progress, needs-human, debt:tests, debt:edge-case, debt:security, debt:load, debt:style (gh label create …)." : "Create your first ticket from docs/tasks/T00-template.md.",
@@ -198,7 +213,8 @@ async function initNonInteractiveRefresh() {
     if (fs.existsSync(target)) {
       const current = fs.readFileSync(target, "utf8");
       if (current === content) return;
-      if (manifest.files[rel] && manifest.files[rel] !== hash(current)) { kept++; fs.mkdirSync(path.dirname(path.join(cwd, ".factory/new", rel)), { recursive: true }); fs.writeFileSync(path.join(cwd, ".factory/new", rel), content); say(`  keep   ${rel} → new version in .factory/new/${rel}`); return; }
+      // Unknown to the manifest, or changed since we generated it: user-owned, keep it.
+      if (!manifest.files[rel] || manifest.files[rel] !== hash(current)) { kept++; fs.mkdirSync(path.dirname(path.join(cwd, ".factory/new", rel)), { recursive: true }); fs.writeFileSync(path.join(cwd, ".factory/new", rel), content); say(`  keep   ${rel} (user-owned) → new version in .factory/new/${rel}`); return; }
     }
     fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, content); if (mode) fs.chmodSync(target, mode); manifest.files[rel] = hash(content); written++; say(`  update ${rel}`);
   };
@@ -279,10 +295,8 @@ const walkDirs = (dir) => fs.readdirSync(dir, { withFileTypes: true }).filter((e
 // --- selfcheck (for the factory repo itself) ------------------------------------------------------
 function selfcheck() {
   let fail = 0;
-  for (const rel of [...walk(path.join(ROOT, "controller")), ...walk(path.join(ROOT, "front-agent")), ...walk(path.join(ROOT, "templates")), ...walk(path.join(ROOT, "bin"))]) {
-    const p = path.join(ROOT, /^(controller|front-agent|templates|bin)/.test(rel) ? "" : "", rel);
-    const full = fs.existsSync(p) ? p : [path.join(ROOT, "controller", rel), path.join(ROOT, "front-agent", rel), path.join(ROOT, "templates", rel), path.join(ROOT, "bin", rel)].find(fs.existsSync);
-    if (!full) continue;
+  for (const root of ["controller", "front-agent", "templates", "bin", "server"]) for (const rel of walk(path.join(ROOT, root))) {
+    const full = path.join(ROOT, root, rel);
     if (/\.mjs$/.test(full)) { const r = spawnSync("node", ["--check", full]); if (r.status !== 0) { say(`SYNTAX ${full}`); fail++; } }
     if (/\.sh$|\/gate$|\.githooks\//.test(full)) { const r = spawnSync("bash", ["-n", full]); if (r.status !== 0) { say(`SYNTAX ${full}`); fail++; } }
   }

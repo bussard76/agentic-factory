@@ -29,7 +29,7 @@ flowchart LR
 
 | Role | Who / where | Does | Never does |
 |---|---|---|---|
-| **Human** | the owner | goals and priorities, tests on the preview with real data, decides level-3 architecture and everything that touches real external systems or real data | – |
+| **Human** | the owner | goals and priorities, accepts on the preview (their own machine, their own environment; automated tests never use real data), decides level-3 architecture and everything that touches real external systems or real data | – |
 | **Front agent** | agent session on the human's machine | the only contact for the human. Takes wishes and test findings, turns them into tickets and specs, runs the outside-in stages, asks decisions one at a time, reports the status as a table, writes the morning handover | steer workers itself; burden the human with the workers' back-and-forth |
 | **Controller** | agent session on the server, unattended | starts and steers all workers, schedules tests, reviews and waves, detects stuck workers, cleans up, writes a status after every cycle | talk to the human directly; take level-3, ADR or product decisions |
 | **Developer** | worker (Codex, Claude Code or Pi) | builds exactly one task, test-first, on its own branch | push to `main`, weaken tests |

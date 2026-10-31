@@ -1,0 +1,15 @@
+# Debt register of the factory itself
+
+Known limits of agentic-factory, recorded the way the factory records debt in a project: category, origin, risk, proposal, size. Worked off in a hardening phase. Items come from `docs/reviews/factory-review-*.md`.
+
+| ID | Category | Origin | Risk | Proposal | Size | Status |
+|---|---|---|---|---|---|---|
+| F01 | security | review 1, #14 | the pre-push review gate is a local hook: a different client or a self-authored `Verdict: pass` file bypasses it; the reviewer is not identified | protect `main` server-side (branch protection plus a CI job that re-checks review coverage) and record the reviewer's identity (dispatch id, agent, model) in the findings file; describe local hooks as advisory | M | open |
+| F02 | security | review 1, #13 | the staged-secret scan knows a handful of patterns, skips binaries, exempts `.env.example` | use a maintained scanner (e.g. gitleaks, pinned) behind the same hook, with a scoped allowlist; keep the built-in patterns as a fallback | M | open |
+| F03 | tests | review 1, #12 | the test-count guard counts regex matches in test files; a dummy test keeps the count, unsupported frameworks are not counted | treat it as a heuristic in the docs (done), add the project's runner result (`--reporter json`) as the second signal, require review of test deletions | M | open |
+| F04 | tests | review 1, #11 | a project with no configured verify command passes a wave with no tests (the wave now refuses an empty `commands.verify`) | `init` refuses to finish without a verify command or an explicit recorded "no tests yet" decision | S | open |
+| F05 | tests | review 1, #23 | no automated tests for the factory itself beyond `test/smoke.test.mjs` | end-to-end tests for update, hooks on edge cases, wave errors, both steering modes, terminal runner | M | open |
+| F06 | edge-case | review 1, #18 | model calibration counts review events, not finished tasks, and does not join worker model to review | aggregate per task and tier; carry `model`/`role` from the `start` event into `review` events in the Controller loop | S | open |
+| F07 | edge-case | review 1, #22 | `gate` measures the ticket queue (fixed); FIFO fairness holds within one host only | document per-host fairness; nothing to do until gates span hosts | S | open |
+| F08 | security | review 1, #15 | the preview updater runs `git clean` in the configured clone and links the project's real `.env` | refuse to run in a non-dedicated clone (marker file), prefer a demo-only env file; document the boundary (human preview may use real environment, automated tests never) | S | open |
+| F09 | edge-case | review 1, #8 | terminal-runner start does not verify the remote launch | return and check the remote pid; persist the worker only after a verified start | S | open |

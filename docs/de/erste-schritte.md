@@ -11,11 +11,11 @@ Diese Anleitung führt ein neues Projekt von nichts bis zur ersten geprüften Ä
 ## 1. Die Fabrik holen
 
 ```bash
-git clone https://github.com/<owner>/agentic-factory ~/agentic-factory
+git clone https://github.com/bussard76/agentic-factory ~/agentic-factory
 alias agentic-factory='node ~/agentic-factory/bin/agentic-factory.mjs'
 ```
 
-(Sobald das Paket auf npm liegt, ersetzt `npx agentic-factory` den Alias.)
+(Sobald das Paket auf npm liegt, ersetzt `npx agentic-factory` den Alias.) Git braucht Name und E-Mail (`git config --global user.name …`), weil die Agenten unter deiner Identität committen.
 
 ## 2. Das Onboarding im Projekt starten
 
@@ -25,6 +25,8 @@ agentic-factory init
 ```
 
 `init` stellt eine Frage nach der anderen, die empfohlene Antwort zuerst. Für den ersten Versuch nimm die Vorgaben, mit einer Ausnahme: Antworte bei den Hosts mit **„Nur auf diesem Rechner“**. Die Fragen und ihr Grund stehen in [onboarding.md](../onboarding.md).
+
+Hat das Repo noch kein Remote, legt `init` ein **lokales Bare-Remote** an (`~/.factory-remotes/<projekt>.git`) und setzt es als `origin`, weil alle Skripte über `origin` holen und pushen. Ersetze es jederzeit durch ein echtes Remote: `git remote set-url origin <url>`.
 
 Es entstehen:
 
@@ -47,7 +49,7 @@ git add -A
 git commit -m "Adopt agentic-factory (ADR-0001)"
 ```
 
-Der ADR-Verweis ist Pflicht: `AGENTS.md`, die Hooks und der ADR-Ordner sind geschützte Dateien. Probiere einmal einen Commit ohne den Verweis, um den Hook sprechen zu hören. Danach `agentic-factory doctor`: Alles sollte `OK` sein außer dem Controller, der noch nicht läuft.
+Der ADR-Verweis ist Pflicht: `AGENTS.md`, die Hooks und der ADR-Ordner sind geschützte Dateien. Probiere einmal einen Commit ohne den Verweis, um den Hook sprechen zu hören. (`doctor` kommt nach Schritt 4: Er prüft auch die Skills auf Benutzerebene, die du dort installierst.)
 
 ## 4. Die Skills auf Benutzerebene installieren, dann den Controller starten
 
@@ -57,11 +59,11 @@ Controller und Front-Agent laufen außerhalb des Repos und sehen die `.agents/sk
 agentic-factory install-skills            # ~/.claude/skills und ~/.agents/skills auf diesem Rechner
 ```
 
-Dann der Controller:
+Jetzt `agentic-factory doctor` ausführen: Alles sollte `OK` sein außer dem Controller, der noch nicht läuft. Dann der Controller:
 
 ```bash
 cp -R .factory/controller ~/controller
-install -m 755 ~/controller/gate ~/.local/bin/gate
+mkdir -p ~/.local/bin && install -m 755 ~/controller/gate ~/.local/bin/gate   # das Gate braucht nur node, kein flock
 (cd ~/controller && nohup bash loadlog.sh >/dev/null 2>&1 &)
 ```
 

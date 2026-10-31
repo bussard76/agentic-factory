@@ -9,7 +9,9 @@
 import fs from "node:fs";
 import { MODELS, config, file, journal, readJson, writeJson } from "./lib.mjs";
 
-const windowDays = Number(process.argv[process.argv.indexOf("--days") + 1] || 7);
+const daysIdx = process.argv.indexOf("--days");
+const windowDays = daysIdx >= 0 ? Number(process.argv[daysIdx + 1]) : 7;
+if (!Number.isFinite(windowDays) || windowDays <= 0) throw new Error("--days needs a positive number");
 const since = Date.now() - windowDays * 86400e3;
 const events = fs.existsSync(file("journal.ndjson")) ? fs.readFileSync(file("journal.ndjson"), "utf8").split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((e) => e && Date.parse(e.ts) > since) : [];
 const tiers = ["small", "default", "large"];

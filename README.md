@@ -44,9 +44,17 @@ Those two sessions run outside the project repo and cannot see its `.agents/skil
 Later:
 
 ```bash
-npx agentic-factory update    # pull newer templates and scripts, shown as a diff first
+npx agentic-factory update    # re-render from a newer factory; files you changed are kept, new versions land in .factory/new/
 npx agentic-factory doctor    # check hosts, tools, hooks, user-level skills and config
 ```
+
+## Known limits (read before you trust the gates)
+
+- The git guardrails are **local hooks**. They stop honest mistakes; they are not a security boundary. Protect `main` on the server side too (branch protection, a CI check). See [`debt.md`](debt.md).
+- The staged-secret scan knows a handful of common patterns. Add a maintained scanner for anything sensitive.
+- The test-count guard is a heuristic: it counts test calls in test files. A dummy test keeps the count.
+- `terminal` runner mode and GitHub-issue steering have had less mileage than `orca` mode with task files.
+- An independent review of this repo and its findings are in `docs/reviews/`; what is not fixed yet is in [`debt.md`](debt.md).
 
 ## How it works, in one picture
 
