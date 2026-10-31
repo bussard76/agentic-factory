@@ -21,6 +21,6 @@ When the Controller decides the same thing for several tasks (a shared allowlist
 
 ## What a decision line looks like
 
-> - **Docker only at release (decided by the owner, 2026-10-28):** Developers, Testers and waves run no Docker gates. `e2e:compose` and `test:images` run once, in the release gate. Reason: the suites doubled every task's turnaround without finding anything the unit and browser suites had missed.
+> - **Docker only at release (decided by <human>, <date>):** Developers, Testers and waves run no Docker gates. `e2e:compose` and `test:images` run once, in the release gate. Reason: the suites doubled every task's turnaround without finding anything the unit and browser suites had missed.
 
 Measured cause, decision, scope, reason. Short enough to read, exact enough to follow.

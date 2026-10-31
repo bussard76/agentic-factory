@@ -4,7 +4,7 @@ Five kinds of participants. The human talks to exactly one of them.
 
 | Role | Where it runs | Does | Never does |
 |---|---|---|---|
-| **Human** (the owner) | wherever they are | sets goals and priorities, tests on the preview with real data, decides level-3 architecture and everything that touches real external systems or real data | – |
+| **Human** (the project owner) | wherever they are | sets goals and priorities, tests on the preview with real data, decides level-3 architecture and everything that touches real external systems or real data | – |
 | **Front agent** | an agent session on the human's machine (Claude Code, Codex or Pi) | the only contact for the human. Takes wishes and test findings, turns them into tickets and specs, runs the outside-in stages, asks decisions one question at a time, reports the status as one table, writes the morning handover | steer workers itself; show the human the back-and-forth of the workers |
 | **Controller** | an agent session on the server, unattended | starts and steers every worker, schedules tests, reviews and waves, detects stuck workers, cleans up, writes `status.md` after every cycle, runs the auditor and retros | talk to the human directly; take level-3, ADR or product decisions (those go to the human as questions) |
 | **Workers** | one per task, each in its own worktree and terminal | see below | push to `main`; weaken tests |

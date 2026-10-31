@@ -1,6 +1,6 @@
 # Outside-in: how a new feature starts
 
-Decided by the owner on 2026-10-31 after a day of live tests found that almost every defect was a misunderstanding about data or logic, not a coding error. Each of them would have surfaced before a line of code had been written.
+This rule came out of a day of live tests on the originating project: almost every defect was a misunderstanding about data or logic, not a coding error, and each would have surfaced before a line of code had been written.
 
 New features are built **from the outside in**. Nothing is built until the human has signed off the surface, the data and the logic.
 

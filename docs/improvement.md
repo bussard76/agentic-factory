@@ -1,6 +1,6 @@
 # The factory improves itself
 
-Decided by the owner on 2026-10-30: a journal, a nightly auditor, a fast lane and a retro per hard agent run.
+Four pieces: a journal, a nightly auditor, a fast lane and a retro per hard agent run.
 
 ## Journal
 

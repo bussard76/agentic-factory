@@ -14,7 +14,7 @@ Nobody accepts their own work. Every task branch is reviewed by an **independent
 
 ## Functional-only reviews
 
-Decided by the owner on 2026-10-30 ("first it has to work; we check security and load later").
+The principle: first it has to work; security and load are checked later, before release.
 
 A review fails **only** for a real functional defect:
 
@@ -34,7 +34,7 @@ Everything else is a **debt candidate**, listed with a category, a severity and 
 
 Nothing is dropped. Debt is collected in `docs/debt.md` and worked off in a **hardening phase** once the functional surface has enough breadth. The human starts that phase; the Front agent proposes it.
 
-## What runs when (decided by the owner, 2026-10-31)
+## What runs when
 
 | Check | When | Effect |
 |---|---|---|

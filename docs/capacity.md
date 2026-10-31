@@ -2,7 +2,7 @@
 
 ## Start workers by measured pressure
 
-Decided by the owner on 2026-10-31. Before, the Controller counted workers (8 with test suites plus 6 read-only). Counting did not stop a 12-thread server from reaching load 25 with timeouts, and at other times left it idle.
+Origin: the Controller used to count workers (8 with test suites plus 6 read-only). Counting did not stop a 12-thread server from reaching load 25 with timeouts, and at other times left it idle.
 
 `controller/capacity.mjs` prints a verdict before every start:
 
@@ -38,7 +38,7 @@ When capacity is short, the Controller starts in this order:
 
 ## The caps are starting values: calibration
 
-Decided by the owner on 2026-10-31: the capacity of a host (local or remote) is open. It is probed and adjusted step by step to what the workers actually need.
+The capacity of a host (local or remote) is open. It is probed and adjusted step by step to what the workers actually need.
 
 With `capacity.calibration.mode: auto`, `capacity.mjs` keeps a state file per host (`capacity-state.<host>.json`):
 
