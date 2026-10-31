@@ -15,7 +15,9 @@ strip() { sed "s/\x1b\[[0-9;]*m//g"; }
 git merge --abort 2>/dev/null; git reset -q --hard 2>/dev/null
 git fetch -q origin || { echo "FETCH-FAILED"; exit 1; }
 git checkout -q -B integration "origin/$MAIN" || { echo "CHECKOUT-FAILED"; exit 1; }
-git clean -fdXq
+# The integration worktree is disposable: drop untracked AND ignored leftovers (lockfiles or build output from an
+# earlier install), otherwise a branch that adds such a file cannot be merged ("would be overwritten").
+git clean -fdxq
 if [ -n "${INSTALL_CMD:-}" ]; then bash -c "$INSTALL_CMD" > /tmp/wave-install.log 2>&1 || echo "install on $MAIN failed, retrying after merge"; fi
 merged=0
 for b in $BR; do
@@ -24,7 +26,10 @@ for b in $BR; do
     echo "CONFLICT in $b: ${u:-$(tail -2 /tmp/wave-merge.log | tr '\n' ' ')}"; git merge --abort 2>/dev/null; exit 1
   fi
   if git diff --cached --quiet; then git merge --abort 2>/dev/null; echo "nothing from $b"; continue; fi
-  git commit -q -m "Merge $b ($TITLE)" -m "$SUMMARY" ${TRAILER:+-m "$TRAILER"} > /tmp/wave-commit.log 2>&1 \
+  # The merged commits passed the commit hooks with their own ADR references; carry those references into the merge
+  # message, so a task that touches a protected file (an ADR, AGENTS.md, a hook) merges without a second approval.
+  refs=$(git log --format=%B "origin/$MAIN..$b" | grep -oE 'ADR-[0-9]{4}' | sort -u | tr '\n' ' ')
+  git commit -q -m "Merge $b ($TITLE)" -m "$SUMMARY" ${refs:+-m "Refs: $refs"} ${TRAILER:+-m "$TRAILER"} > /tmp/wave-commit.log 2>&1 \
     || { strip < /tmp/wave-commit.log | grep -a -iE "fail|protected|factory" | head -6; echo "COMMIT-FAILED for $b"; exit 1; }
   echo "merged $b"; merged=$((merged + 1))
 done

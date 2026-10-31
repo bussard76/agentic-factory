@@ -70,7 +70,7 @@ Close finished workers' terminals, release or abandon their dispatches, remove w
 ## Starting workers
 
 - Name every worker `<Task> · Worker <Role>`. Never keep an automatic session name.
-- Generate every spec from the templates (`templates/mk*.mjs`) with parameters. Never derive a spec by editing another task's spec.
+- Generate every spec from the template (`templates/mkspec.mjs <role> …`) with parameters. Never derive a spec by editing another task's spec.
 - Specs have numbered steps, "done when", abort criteria, a self-review against the spec, and the reply format (`worker_done` with branch, head SHA and check results, or one concrete escalation with progress pushed).
 - Workers can be Codex, Claude Code or Pi; the specs and rules are the same.
 

@@ -5,7 +5,7 @@
 | # | Question | Why it matters | Default |
 |---|---|---|---|
 | 1 | **Project name and repository** | names branches, worktrees, lock files and the preview; the Controller clones by this. Without a remote, `init` creates a local bare one as `origin` | from `git remote` |
-| 2 | **Who is the human, and in which language do they want to read?** | the handbooks address the human by name; `docs/dev-workflow.md` is written in the human's language, agent files stay English | user name; `de` |
+| 2 | **Who is the human, and in which language do they want to read?** | the handbooks address the human by name; `docs/dev-workflow.md` is written in the human's language, agent files stay English | user name; language from `LANG` (`de` or `en`) |
 | 3 | **Rhythm:** day plan / night build, continuous, or custom quiet hours | when the Controller may start new work | day plan / night build |
 | 4 | **Steering mode:** GitHub issues or task files | where tickets live and how the frontier is shown; see [steering-modes.md](steering-modes.md) | GitHub issues if a GitHub remote and `gh` exist, else task files |
 | 5 | **Orca check** (no question) | Orca is the prerequisite: `init` stops if the CLI is missing, reports whether the service runs, and registers the repo with the local Orca (fills `orcaRepoId`). `--experimental-terminal-runner` bypasses this for experiments | – |
@@ -26,7 +26,7 @@ After the answers, `init`:
 2. copies `templates/` into the repo, filling placeholders (`AGENTS.md`, `CODING_STANDARDS.md`, `docs/coordinator.md`, `docs/dev-workflow.md`, `docs/review-protocol.md`, `docs/architect-protocol.md`, `docs/debt.md`, `docs/adr/`, `docs/tasks/`, `design/`, `.githooks/`, `tools/factory-guardrails.mjs`)
 3. copies `skills/` into `.agents/skills/` and links `.claude/skills` to it
 4. sets `core.hooksPath=.githooks`
-5. writes a `controller/` bundle (`CONTROLLER.md` filled in, scripts, templates) ready to copy to the server, and `front-agent/` for the human's machine
+5. writes the bundles `.factory/controller/` (`CONTROLLER.md` filled in, scripts, templates, user-level skills), `.factory/front-agent/` and `.factory/server/`, ignored by git and ready to copy to their hosts
 6. prints the human's checklist: server setup, logins (GitHub, agent CLIs, Tailscale), Orca pairing, loading the preview service, starting the Controller with its start order
 
 `doctor` checks the same things later: hooks installed, config valid, server reachable, tools present, `status.md` fresh.

@@ -41,37 +41,41 @@ test("protected files need the ADR reference once the hooks are armed", () => {
 
 test("hooks reject a dropped test, a staged secret and an env file", () => {
   fs.mkdirSync(path.join(tmp, "src"), { recursive: true });
-  fs.writeFileSync(path.join(tmp, "src/a.test.js"), 'test("a",()=>{});\ntest("b",()=>{});\n'); git("add", "-A"); git("commit", "-qm", "tests");
-  fs.writeFileSync(path.join(tmp, "src/a.test.js"), 'test("a",()=>{});\n'); git("add", "-A");
+  fs.writeFileSync(path.join(tmp, "src/a.test.js"), 'test("a",()=>{});\ntest("b",()=>{});\n'); git("add", "src/a.test.js"); git("commit", "-qm", "tests");
+  fs.writeFileSync(path.join(tmp, "src/a.test.js"), 'test("a",()=>{});\n'); git("add", "src/a.test.js");
   let r = gitTry("commit", "-qm", "drop"); assert.notEqual(r.status, 0); assert.match(r.stderr + r.stdout, /Test count decreased/); git("checkout", "-q", "HEAD", "--", "src"); git("reset", "-q");
-  fs.writeFileSync(path.join(tmp, "src/s.js"), 'const k = "sk-abcdefghijklmnopqrstuvwxyz1234567890";\n'); git("add", "-A");
+  fs.writeFileSync(path.join(tmp, "src/s.js"), 'const k = "sk-abcdefghijklmnopqrstuvwxyz1234567890";\n'); git("add", "src/s.js");
   r = gitTry("commit", "-qm", "secret"); assert.notEqual(r.status, 0); assert.match(r.stderr + r.stdout, /secrets/); fs.rmSync(path.join(tmp, "src/s.js")); git("reset", "-q");
   fs.writeFileSync(path.join(tmp, ".env.local"), "X=1\n"); git("add", "-f", ".env.local");
   r = gitTry("commit", "-qm", "env"); assert.notEqual(r.status, 0); assert.match(r.stderr + r.stdout, /environment files/); fs.rmSync(path.join(tmp, ".env.local")); git("reset", "-q");
 });
 
 test("a push to main without review coverage is rejected, a reviewed one passes", () => {
-  fs.writeFileSync(path.join(tmp, "src/feature.js"), "export const x = 1;\n"); git("add", "-A"); git("commit", "-qm", "feature");
+  fs.writeFileSync(path.join(tmp, "src/feature.js"), "export const x = 1;\n"); git("add", "src/feature.js"); git("commit", "-qm", "feature");
   let r = gitTry("push", "-q", "origin", "main"); assert.notEqual(r.status, 0); assert.match(r.stderr + r.stdout, /Push to main rejected/);
   const sha = git("rev-parse", "HEAD");
   fs.mkdirSync(path.join(tmp, "docs/reviews"), { recursive: true });
-  fs.writeFileSync(path.join(tmp, "docs/reviews/T01-review-1.md"), `# T01 review, round 1\n\nVerdict: pass\nReviewed commit: ${sha}\n`); git("add", "-A"); git("commit", "-qm", "review");
+  fs.writeFileSync(path.join(tmp, "docs/reviews/T01-review-1.md"), `# T01 review, round 1\n\nVerdict: pass\nReviewed commit: ${sha}\n`); git("add", "docs/reviews/T01-review-1.md"); git("commit", "-qm", "review");
   r = gitTry("push", "-q", "origin", "main"); assert.equal(r.status, 0, r.stderr);
 });
 
+// The hooks' lint may auto-install (pnpm) and leave a lockfile or node_modules behind; the test repo must not carry
+// that noise into commits or block checkouts. Only named files are ever added.
+function tidy() { spawnSync("git", ["checkout", "-q", "--", "."], { cwd: tmp }); spawnSync("git", ["clean", "-fdq", "-e", ".factory"], { cwd: tmp }); }
 // A wave the way integ-wave.sh builds it: integration reset to origin/main, task branch plus its review branch merged.
 function reviewedTask(name) {
+  tidy();
   const base = git("rev-parse", "origin/main");
   git("checkout", "-q", "-b", `agents/${name}`, base);
-  fs.writeFileSync(path.join(tmp, `src/${name}.js`), `export const ${name} = true;\n`); git("add", "-A"); git("commit", "-qm", `${name} feature`);
+  fs.writeFileSync(path.join(tmp, `src/${name}.js`), `export const ${name} = true;\n`); git("add", `src/${name}.js`); git("commit", "-qm", `${name} feature`);
   const sha = git("rev-parse", "HEAD");
   git("checkout", "-q", "-b", `agents/${name}-review-1`);
-  fs.writeFileSync(path.join(tmp, `docs/reviews/${name}-review-1.md`), `# ${name} review, round 1\n\nVerdict: pass\nReviewed commit: ${sha}\n`); git("add", "-A"); git("commit", "-qm", `${name} review`);
-  git("checkout", "-q", "main");
+  fs.writeFileSync(path.join(tmp, `docs/reviews/${name}-review-1.md`), `# ${name} review, round 1\n\nVerdict: pass\nReviewed commit: ${sha}\n`); git("add", `docs/reviews/${name}-review-1.md`); git("commit", "-qm", `${name} review`);
+  tidy(); git("checkout", "-q", "main");
   return [`agents/${name}`, `agents/${name}-review-1`];
 }
 function wave(branches) {
-  git("checkout", "-q", "-B", "integration", "origin/main");
+  tidy(); git("checkout", "-q", "-B", "integration", "origin/main");
   for (const b of branches) git("merge", "-q", "--no-ff", "--no-edit", b);
   return gitTry("push", "-q", "origin", "integration:main");
 }
@@ -83,28 +87,53 @@ test("a wave of two reviewed tasks is accepted, one without its review branch is
   const bad = wave([t4]); assert.notEqual(bad.status, 0); assert.match(bad.stderr + bad.stdout, /Push to main rejected/);
 });
 
-test("integ-wave.sh itself pushes a two-task wave (one branch at a time) and rejects an octopus merge", () => {
-  const [t7, r7] = reviewedTask("t7"), [t8, r8] = reviewedTask("t8");
-  for (const b of [t7, r7, t8, r8]) git("push", "-q", "origin", b);
+// The wave environment exactly as controller/wave.mjs builds it from the generated config.
+function waveEnv() {
+  const cfg = JSON.parse(fs.readFileSync(path.join(tmp, "factory.config.json"), "utf8"));
+  return { ...process.env, MAIN: cfg.project.mainBranch, INSTALL_CMD: cfg.commands.install ?? "", VERIFY_CMD: cfg.commands.verify ?? "", E2E_CMD: cfg.commands.e2e ?? "", GATE: path.join(ROOT, "controller/gate"), TRAILER: "", HOME: home, FACTORY_PROJECT: "smoke" };
+}
+function runWave(title, branches) {
   const integ = path.join(tmp, "..", path.basename(tmp) + "-integration");
   git("worktree", "add", "-q", "-B", "integration", integ, "origin/main");
-  const env = { ...process.env, MAIN: "main", VERIFY_CMD: "echo verify-ok", GATE: path.join(ROOT, "controller/gate"), HOME: home, FACTORY_PROJECT: "smoke" };
-  const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "Wave 7+8", "two reviewed tasks", ...[t7, r7, t8, r8].map((b) => `origin/${b}`)], { cwd: integ, encoding: "utf8", env });
-  assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /PUSHED main/);
+  const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), title, "wave", ...branches.map((b) => `origin/${b}`)], { cwd: integ, encoding: "utf8", env: waveEnv() });
   git("worktree", "remove", "--force", integ);
+  return r;
+}
+
+test("integ-wave.sh with the Controller's own environment pushes a two-task wave, also when a task adds an ADR and a dependency", () => {
+  const cfg = JSON.parse(fs.readFileSync(path.join(tmp, "factory.config.json"), "utf8"));
+  assert.match(cfg.commands.install, /^(pnpm|npm|yarn) install$/, "no lockfile: a plain install, not a frozen one");
+  const [t7, r7] = reviewedTask("t7"), [t8, r8] = reviewedTask("t8");
+  for (const b of [t7, r7, t8, r8]) git("push", "-q", "origin", b);
+  const r = runWave("Wave 7+8", [t7, r7, t8, r8]);
+  assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /PUSHED main/);
+  // A reviewed task that adds an accepted ADR (protected path) and a dependency: its commits carry ADR-0002, the wave carries it on.
+  tidy(); git("checkout", "-q", "-b", "agents/t11", "origin/main");
+  fs.writeFileSync(path.join(tmp, "docs/adr/0002-use-left-pad.md"), "# ADR-0002: Use left-pad\n\nStatus: accepted\nDate: 2026-01-01\nDecided by: t (2026-01-01), option A\n\n## Decision\n\nUse it.\n");
+  // A local file: dependency keeps the install offline.
+  fs.mkdirSync(path.join(tmp, "vendor/tiny"), { recursive: true }); fs.writeFileSync(path.join(tmp, "vendor/tiny/package.json"), '{ "name": "tiny", "version": "1.0.0" }\n');
+  const pkg = JSON.parse(fs.readFileSync(path.join(tmp, "package.json"), "utf8")); pkg.dependencies = { tiny: "file:vendor/tiny" }; fs.writeFileSync(path.join(tmp, "package.json"), JSON.stringify(pkg, null, 2) + "\n");
+  git("add", "docs/adr/0002-use-left-pad.md", "vendor/tiny/package.json", "package.json"); git("commit", "-qm", "t11: adopt tiny (ADR-0002)");
+  const sha11 = git("rev-parse", "HEAD");
+  git("checkout", "-q", "-b", "agents/t11-review-1");
+  fs.writeFileSync(path.join(tmp, "docs/reviews/t11-review-1.md"), `# t11 review, round 1\n\nVerdict: pass\nReviewed commit: ${sha11}\n`); git("add", "docs/reviews/t11-review-1.md"); git("commit", "-qm", "t11 review");   // a Tester commits only its findings file
+  tidy(); git("checkout", "-q", "main"); for (const b of ["agents/t11", "agents/t11-review-1"]) git("push", "-q", "origin", b);
+  const r11 = runWave("Wave 11", ["agents/t11", "agents/t11-review-1"]);
+  assert.equal(r11.status, 0, r11.stdout + r11.stderr); assert.match(r11.stdout, /PUSHED main/);
+  assert.match(git("log", "-1", "--format=%B", "origin/main"), /ADR-0002/, "the merge message carries the ADR reference");
   // An octopus merge of two reviewed tasks must be rejected by the gate.
   const [t9, r9] = reviewedTask("t9"), [t10, r10] = reviewedTask("t10");
-  git("checkout", "-q", "-B", "integration", "origin/main");
+  tidy(); git("checkout", "-q", "-B", "integration", "origin/main");
   git("merge", "-q", "--no-ff", "--no-edit", t9, r9, t10, r10);
   const bad = gitTry("push", "-q", "origin", "integration:main"); assert.notEqual(bad.status, 0); assert.match(bad.stderr + bad.stdout, /octopus/);
-  git("checkout", "-q", "main");
+  tidy(); git("checkout", "-q", "main");
 });
 
 test("reviewer standards need review coverage, ordinary docs do not", () => {
-  git("checkout", "-q", "-B", "main", "origin/main");
-  fs.appendFileSync(path.join(tmp, "docs/dev-workflow.md"), "\nA note.\n"); git("add", "-A"); git("commit", "-qm", "docs note");
-  assert.equal(gitTry("push", "-q", "origin", "main").status, 0, "plain docs are exempt");
-  fs.appendFileSync(path.join(tmp, "docs/review-protocol.md"), "\nA weaker rule.\n"); git("add", "-A"); git("commit", "-qm", "protocol change");
+  tidy(); git("checkout", "-q", "-B", "main", "origin/main");
+  fs.appendFileSync(path.join(tmp, "docs/dev-workflow.md"), "\nA note.\n"); git("add", "docs/dev-workflow.md"); git("commit", "-qm", "docs note");
+  const ok = gitTry("push", "-q", "origin", "main"); assert.equal(ok.status, 0, `plain docs are exempt: ${ok.stderr}`);
+  fs.appendFileSync(path.join(tmp, "docs/review-protocol.md"), "\nA weaker rule.\n"); git("add", "docs/review-protocol.md"); git("commit", "-qm", "protocol change");
   const r = gitTry("push", "-q", "origin", "main"); assert.notEqual(r.status, 0, "review-protocol.md needs coverage");
   git("reset", "-q", "--hard", "origin/main");
 });
@@ -125,10 +154,16 @@ test("capacity counts every recorded Orca worker as live when the Orca CLI fails
   fs.unlinkSync(path.join(ctl, "workers.json"));
 });
 
-test("a second init run refreshes files without a new adoption commit", () => {
+test("a second init run refreshes files from the recorded answers without a new adoption commit", () => {
+  tidy(); git("checkout", "-q", "-B", "main", "origin/main");
   const before = git("rev-parse", "HEAD");
+  const cfgPath = path.join(tmp, "factory.config.json");
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")); cfg.project.humanName = "Alex"; cfg.reviews.maxRounds = 3; fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
   const out = node(CLI, "init", "--yes");
-  assert.match(out, /already initialised/); assert.equal(git("rev-parse", "HEAD"), before, "no new commit on a re-run");
+  assert.match(out, /Already initialised/); assert.equal(git("rev-parse", "HEAD"), before, "no new commit on a re-run");
+  const bundleCfg = JSON.parse(fs.readFileSync(path.join(tmp, ".factory/controller/factory.config.json"), "utf8"));
+  assert.equal(bundleCfg.project.humanName, "Alex"); assert.equal(bundleCfg.reviews.maxRounds, 3);
+  assert.match(fs.readFileSync(path.join(tmp, ".factory/controller/CONTROLLER.md"), "utf8"), /After 3 rounds/);
   // Refreshed files stay as working-tree changes for the human; nothing outside the factory's own files is touched.
   const changed = git("status", "--porcelain").split("\n").filter(Boolean).map((l) => l.trim().replace(/^\S+\s+/, ""));   // git() trims, so parse the status code by whitespace
   for (const f of changed) assert.match(f, /^(\.factory\/|factory\.config\.json|AGENTS\.md|CODING_STANDARDS\.md|docs\/|\.githooks\/|tools\/|\.agents\/|design\/|\.gitignore)/, `unexpected change: ${f}`);

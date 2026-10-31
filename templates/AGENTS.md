@@ -31,7 +31,7 @@ Every task records `## Architecture impact` (level, modules and boundaries; leve
 | 2 | new or changed public export, new dependency, new route | checked by the Architect; ask the coordinator with a one-paragraph rationale; continue only after the answer |
 | 3 | new module, changed responsibilities or allowed imports, different data flow, new technology, contract or protocol change | escalate; the coordinator gets {{HUMAN}}'s decision; do not implement until the accepted ADR says `Decided by: {{HUMAN}}` |
 
-**Protected files** (the commit hook blocks changes unless the message references `ADR-NNNN` of an accepted ADR): `ARCHITECTURE.md`, `AGENTS.md`, `docs/adr/**`, `.githooks/**`, `tools/factory-guardrails.mjs`, root `package.json` dependency lists.
+**Protected files** (the commit hook blocks changes unless the message references `ADR-NNNN` of an accepted ADR): `ARCHITECTURE.md`, `AGENTS.md`, `docs/adr/**`, `.githooks/**`, `tools/factory-guardrails.mjs`. New dependencies are not hook-protected; they are a level-2 change that the Architect's spec review decides, and the Tester checks that every new dependency is named in the task.
 
 ## Data rule
 

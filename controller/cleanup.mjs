@@ -1,10 +1,10 @@
 // Controller cleanup, run at the end of EVERY cycle, per worker host: removes worktrees that no running worker uses
 // and whose branch is MERGED into origin/<main> (or, with --pushed, identical to its origin branch). A worktree with
 // any uncommitted or untracked change is kept. If worker state cannot be verified (terminal list failed), nothing is
-// removed on that host. --dry changes nothing: no fetch, no journal, no removals.
+// removed or forgotten on that host. Finished Orca workers get their dispatch released (or abandoned) and are forgotten.
+// --dry changes nothing: no fetch, no journal, no removals, no releases.
 // Usage: node cleanup.mjs [--on <host>|--all] [--dry] [--pushed] [--prune-remote]
 import fs from "node:fs";
-import { spawnSync } from "node:child_process";
 import { BRANCH_PREFIX, HOSTS, MAIN, ORCA, RUNNER, argHost, journal, onHost, orcaEnvArgsOn, projectDirOn, readJson, trySh, workspacesOn, worktreeRefOn, writeJson } from "./lib.mjs";
 
 const dry = process.argv.includes("--dry"), allowPushed = process.argv.includes("--pushed");
@@ -12,13 +12,17 @@ const hosts = process.argv.includes("--all") ? HOSTS : [argHost(process.argv)];
 const workers = readJson("workers.json", {});
 const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
 let removed = 0, kept = 0, pruned = 0, released = 0;
+const failedReleases = [];
+const terminalsOf = (host) => {   // null when the state is unknown; one call per host, reused below
+  if (RUNNER !== "orca") return [];
+  try { const t = JSON.parse(trySh(ORCA, ["terminal", "list", ...orcaEnvArgsOn(host), "--json"]) || "null")?.result?.terminals; return Array.isArray(t) ? t : null; } catch { return null; }
+};
+const hostTerms = new Map(hosts.map((h) => [h.name, terminalsOf(h)]));
 for (const host of hosts) {
   const WS = workspacesOn(host), PD = projectDirOn(host);
   const g = (...a) => onHost(host, `git -C ${q(PD)} ${a.map(q).join(" ")}`).trim();
   if (!dry) g("fetch", "-q", "--prune", "origin");
-  let terms = null;
-  if (RUNNER === "orca") { try { terms = JSON.parse(trySh(ORCA, ["terminal", "list", ...orcaEnvArgsOn(host), "--json"]) || "null")?.result?.terminals ?? null; } catch { terms = null; } }
-  else terms = [];
+  const terms = hostTerms.get(host.name);
   if (terms === null) { console.log(`[${host.name}] cannot list terminals; removing nothing here`); continue; }
   const busy = new Set([
     ...terms.filter((t) => /· Worker|Controller|Coordinator/.test(t.title ?? "") && t.status !== "exited").map((t) => t.worktreePath),
@@ -54,24 +58,26 @@ for (const host of hosts) {
     }
   }
 }
-// Forget finished workers: terminal-runner workers whose pid is dead, Orca workers whose terminal is gone or exited.
+// Forget finished workers: terminal-runner workers whose pid is dead, Orca workers whose terminal is gone or exited
+// (their dispatch is released first; a failed release is reported, not counted).
 if (!dry) {
   for (const host of hosts) {
-    if (RUNNER !== "orca") continue;
-    let terms = null;
-    try { terms = JSON.parse(trySh(ORCA, ["terminal", "list", ...orcaEnvArgsOn(host), "--json"]) || "null")?.result?.terminals ?? null; } catch {}
-    if (terms === null) continue;   // unknown state: forget nothing on this host
+    const terms = hostTerms.get(host.name);
+    if (RUNNER !== "orca" || terms === null) continue;
     const live = new Set(terms.filter((t) => t.status !== "exited").map((t) => t.handle));
     for (const [k, w] of Object.entries(workers)) {
       if ((w.host ?? "local") !== host.name || !w.terminal || live.has(w.terminal)) continue;
-      // The worker is gone: release its dispatch so Orca does not keep it as an owner, then forget it.
-      if (w.dispatch) { const r = trySh(ORCA, ["orchestration", "worker-release", "--dispatch", w.dispatch, ...orcaEnvArgsOn(host), "--json"]); if (!/"ok": *true/.test(r)) trySh(ORCA, ["orchestration", "worker-abandon", "--dispatch", w.dispatch, ...orcaEnvArgsOn(host), "--json"]); released++; }
+      if (w.dispatch) {
+        const ok = (r) => /"ok": *true/.test(r);
+        if (ok(trySh(ORCA, ["orchestration", "worker-release", "--dispatch", w.dispatch, ...orcaEnvArgsOn(host), "--json"])) || ok(trySh(ORCA, ["orchestration", "worker-abandon", "--dispatch", w.dispatch, ...orcaEnvArgsOn(host), "--json"]))) released++;
+        else { failedReleases.push(w.dispatch); continue; }   // keep the record so the next cycle retries
+      }
       delete workers[k];
     }
   }
   for (const [k, w] of Object.entries(workers)) if (w.pid && !alive(w.pid)) delete workers[k];
   writeJson("workers.json", workers);
-  journal("cleanup", "controller", { note: `removed ${removed}, kept ${kept}, pruned ${pruned}, released ${released}` });
+  journal("cleanup", "controller", { note: `removed ${removed}, kept ${kept}, pruned ${pruned}, released ${released}${failedReleases.length ? `, release failed ${failedReleases.join(" ")}` : ""}` });
 }
-console.log(`cleanup${dry ? " (dry)" : ""}: removed ${removed} worktrees, kept ${kept}, pruned ${pruned} remote branches, released ${released} dispatches`);
+console.log(`cleanup${dry ? " (dry)" : ""}: removed ${removed} worktrees, kept ${kept}, pruned ${pruned} remote branches, released ${released} dispatches${failedReleases.length ? `; release FAILED for ${failedReleases.join(", ")}` : ""}`);
 function alive(pid) { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } }

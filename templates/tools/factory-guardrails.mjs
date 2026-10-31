@@ -75,6 +75,9 @@ function stagedSafety() {
 function staticChecks() {
   const paths = stagedPaths();
   if (isDocsOnly(paths)) { console.log("[factory] documentation-only commit: static checks skipped"); return; }
+  // A merge commit in a wave: the merged commits passed these checks on their branches and the wave runs the full gates
+  // right after; running lint/typecheck here would only install into the integration worktree and block later merges.
+  if (spawnSync("git", ["rev-parse", "-q", "--verify", "MERGE_HEAD"], { stdio: "ignore" }).status === 0) { console.log("[factory] merge commit: static checks skipped (the wave runs the full gates)"); return; }
   for (const key of ["typecheck", "lint"]) {
     const cmd = commands[key];
     if (!cmd) continue;
@@ -84,17 +87,12 @@ function staticChecks() {
 }
 
 // --- protected-files ---------------------------------------------------------------------------
+// Protected paths change only with an accepted ADR reference in the commit message. Dependency lists are NOT protected
+// here: a new dependency is a level-2 change that the Architect's spec review decides (AGENTS.md "Change levels").
 const PROTECTED = /^(?:ARCHITECTURE\.md$|AGENTS\.md$|docs\/adr\/|\.githooks\/|tools\/factory-guardrails\.mjs$)/;
-function dependencyLists(revision) {
-  const raw = listFiles(revision).includes("package.json") ? show(revision, "package.json") : "{}";
-  const m = JSON.parse(raw || "{}");
-  const keys = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
-  return JSON.stringify(Object.fromEntries(keys.map((k) => [k, Object.fromEntries(Object.entries(m[k] ?? {}).sort())])));
-}
 function protectedFiles(messagePath) {
   const changed = stagedPaths();
   const hits = changed.filter((p) => PROTECTED.test(p));
-  if (changed.includes("package.json") && headExists() && dependencyLists("HEAD") !== dependencyLists("index")) hits.push("package.json dependency lists");
   if (!hits.length) return;
   const message = readFileSync(messagePath, "utf8");
   const refs = [...message.matchAll(/\bADR-(\d{4})\b/g)].map((m) => m[1]);

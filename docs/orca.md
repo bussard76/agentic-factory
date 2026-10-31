@@ -9,7 +9,7 @@
 | **Orca client** | the human's machine (desktop app or `orca` CLI) | shows terminals and worktrees, pairs with servers, starts and names workers remotely |
 | **Orca server** | the build server, `orca.service` (`orca-ide serve --port 6768 --pairing-address <tailscale-ip> --supervise`) | hosts the worktrees, terminals and the orchestration database; the Controller runs in one of its terminals |
 | **Environments** | client config | a paired server is an *environment*; every command takes `--environment <name>` to address it |
-| **Repos** | registered per server with `orca repo add --path ~/projects/<name>` | the repo id goes into `factory.config.json` → `hosts.controller.orcaRepoId` |
+| **Repos** | registered per server with `orca repo add --path ~/projects/<name>` | the repo id goes into `factory.config.json` → `hosts.workers[].orcaRepoId` of that host (`init` fills it for the local host) |
 | **Worktrees** | `~/orca/workspaces/<repo>/<name>` on the server | one per worker; `coordinator-integration` is the wave's worktree |
 | **Orchestration** | `orca orchestration …` | `worker-start` dispatches a task into a new worktree; `check --wait` delivers messages; `ask`/`reply`; `worker-release`/`worker-abandon` |
 
@@ -18,13 +18,13 @@
 1. Install the server with `server/` (steps 1–3). The service binds pairing to the Tailscale address only; never expose it publicly.
 2. Read the pairing code from the service log and pair the client: `orca environment add --name <env> --pairing-code '<code>'`. Pair without a mobile code; a mobile pairing may neither create repos nor start workers.
 3. Register the repo on the server and note its id.
-4. Put `orcaEnvironment` and `orcaRepoId` into `factory.config.json`. Every Controller script reads them.
+4. Put `orcaEnvironment` and `orcaRepoId` into that host's entry in `factory.config.json` → `hosts.workers[]`. Every Controller script reads them.
 
 The Controller itself runs **on the server**, in an Orca terminal, so it survives the client being closed and talks to workers locally. The Front agent on the human's machine only reads `status.md` over SSH and writes `inbox.md`.
 
 ## How the Controller uses Orca
 
-- **Start a worker:** `controller/start.mjs` wraps `orca orchestration worker-start --task-title "<Task> · Worker <Role>" --spec <text> --worktree new-top-level --name <dir> --agent codex|claude|pi --model … --repo id:<repo-id> --setup run`, then renames the terminal and pane to the task title so the sidebar never shows an automatic session name (`controller/name-worker.sh`).
+- **Start a worker:** `controller/start.mjs` wraps `orca orchestration worker-start --task-title "<Task> · Worker <Role>" --spec <text> --worktree new-top-level --name <dir> --agent codex|claude|pi --model … --repo id:<repo-id> --setup run`, then renames the terminal and pane to the task title so the sidebar never shows an automatic session name.
 - **Wait for events:** `wait.mjs` runs `orca orchestration check --wait --types worker_done,escalation,question` and acknowledges each delivery with `--ack`.
 - **Nudge a stalled worker:** `orca terminal send --terminal <handle> --text "…" --enter`. A reply to an escalation alone does not wake an idle worker; always send the text into its terminal too.
 - **Read a terminal:** `orca terminal read --terminal <handle> --screen --json`; `stallwatch.mjs` classifies the screen as working, idle, at capacity or gone.

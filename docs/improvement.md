@@ -8,7 +8,7 @@ The Controller appends one JSON line per event to `journal.ndjson` (`controller/
 
 - always: `ts`, `type`, `task`
 - where they apply: `role`, `model`, `agent`, `round`, `verdict`, `reason`, `minutes`, `wait_min`, `slot_pool`, `reruns`, `note`
-- `type`: `start`, `done`, `review`, `rerun`, `stall`, `nudge`, `wave`, `escalation`, `decision`, `retro`, `gate`, `capacity`
+- `type`: `start`, `done`, `review`, `rerun`, `stall`, `nudge`, `wave`, `escalation`, `decision`, `retro`, `gate`, `capacity`, `cleanup`
 - `reason`: `functional`, `coverage`, `load-timeout`, `environment`, `spec-gap`, `security`, `early-stop`, `other`
 
 ## Pipeline Auditor
