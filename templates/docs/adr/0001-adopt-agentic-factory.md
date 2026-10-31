@@ -25,6 +25,7 @@ Option A. The rules live in `AGENTS.md`, `docs/coordinator.md`, `docs/review-pro
 
 ## Consequences
 
+- Hooks: {{HOOK_ENFORCEMENT}}
 - The first commit that adds the factory files references this ADR (`{{ADOPTION_ADR}}`). A new or proposed ADR is committed by citing this ADR in the message; once it is accepted, later changes cite it directly.
 - Every later process decision is recorded in `docs/coordinator.md` and `docs/dev-workflow.md` the moment it is made.
 - Capacity, model tiers and review rounds start from the configured values and are calibrated from measurements.

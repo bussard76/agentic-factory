@@ -1,5 +1,7 @@
 # The workflow: how software is built with this factory
 
+_Placeholders in `{{…}}` are filled in by `init`; the rendered copy is your project's `docs/dev-workflow.md`._
+
 **For:** people who want to understand how a project built with agentic-factory works, including third parties without prior knowledge.
 **Binding for the agents** in a project are its `AGENTS.md`, `docs/coordinator.md` (rules and decision history), `docs/review-protocol.md` and `docs/architect-protocol.md`. This document summarises them and must agree with them.
 
@@ -136,7 +138,7 @@ Rules that make this safe:
 
 **Functional-only reviews:** a review fails only for real functional defects: a specified flow does not work or gives wrong results, data is lost, or a change would reach a real external system. Missing tests, coverage gaps, edge cases, security, load and style become debt with a follow-up and block nothing. After at most {{MAX_ROUNDS}} review rounds (the project's `reviews.maxRounds`) a working feature is integrated. **Nothing is dropped:** the debt is collected by category and worked off in a **hardening phase** once the functional breadth is there. The human starts it; the Front agent proposes it. **Always on:** code quality (`ponytail-review`, coding standards) and architecture conformance are checked in every review; an architecture violation blocks, quality findings are fixed when trivial or become debt. **Not in daily runs, mandatory before release:** load, security and the other deferred checks slow development down (observed), so they run in the hardening phase and before every release, as a condition of release approval; no release while such a debt item is open, unless the human accepts it in writing. Details: [reviews.md](reviews.md), [testing.md](testing.md).
 
-**Push lock:** Git rejects every push to `main` not covered by a passing independent review. Architecture changes additionally need their approval.
+**Push lock:** Git rejects every push to `main` not covered by a passing independent review. Architecture changes additionally need their approval. {{HOOK_ENFORCEMENT}}
 
 **Realistic test data:** the demo data reproduces the *shapes* of the real data with invented content, because defects found only by the human usually came from test data that was too tidy.
 

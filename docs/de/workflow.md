@@ -1,5 +1,7 @@
 # Der Dev-Workflow: wie mit dieser Fabrik entwickelt wird
 
+_Platzhalter in `{{…}}` füllt `init` aus; die gerenderte Fassung ist die `docs/dev-workflow.md` deines Projekts._
+
 **Für wen:** Menschen, die verstehen wollen, wie ein Projekt mit agentic-factory gebaut wird, auch Dritte ohne Vorwissen.
 **Verbindlich** für die Agenten eines Projekts sind dessen `AGENTS.md`, `docs/coordinator.md` (Regeln und Entscheidungshistorie), `docs/review-protocol.md` und `docs/architect-protocol.md`. Diese Datei fasst sie verständlich zusammen und muss mit ihnen übereinstimmen.
 
@@ -140,7 +142,7 @@ Regeln, die das sicher machen:
 
 **Nur funktional prüfen:** Ein Review scheitert nur an echten Funktionsfehlern: Ein Ablauf aus der Spec läuft nicht oder liefert falsche Ergebnisse, Daten gehen verloren, oder eine Änderung würde ein echtes externes System erreichen. Fehlende Tests, Abdeckungslücken, Randfälle, Sicherheit, Last und Stil werden Schulden mit Folgeaufgabe und blockieren nichts. Nach höchstens {{MAX_ROUNDS}} Review-Runden (`reviews.maxRounds` des Projekts) wird integriert, wenn die Funktion läuft. **Nichts davon entfällt:** Die Schulden werden mit Kategorie gesammelt und in einer eigenen **Härtungsphase** abgearbeitet, sobald funktional eine gewisse Breite erreicht ist. Der Mensch startet sie, der Front-Agent schlägt sie vor. **Läuft immer mit:** Code-Qualität (`ponytail-review`, Coding Standards) und Architektur-Einhaltung werden in jedem Review geprüft; ein Architekturverstoß blockiert, Qualitätsbefunde werden behoben, wenn trivial, sonst Schuld. **Nicht im Alltag, zwingend vor dem Release:** Last-, Sicherheits- und die übrigen zurückgestellten Prüfungen bremsen die Entwicklung (Beobachtung), darum laufen sie in der Härtungsphase und vor jedem Release, als Bedingung der Freigabe. Kein Release, solange eine solche Schuld offen ist, es sei denn, der Mensch nimmt sie ausdrücklich schriftlich in Kauf. Ausnahme im Alltag: Alles, was ein echtes externes System erreichen könnte, bleibt sofort ein Blocker.
 
-**Push-Sperre:** Git lehnt jeden Push nach `main` ab, der nicht durch ein bestandenes unabhängiges Review gedeckt ist. Architekturänderungen brauchen zusätzlich ihre Freigabe.
+**Push-Sperre:** Git lehnt jeden Push nach `main` ab, der nicht durch ein bestandenes unabhängiges Review gedeckt ist. Architekturänderungen brauchen zusätzlich ihre Freigabe. {{HOOK_ENFORCEMENT}}
 
 **Realistische Testdaten:** Die Demo-Daten bilden die *Formen* der echten Daten mit erfundenen Inhalten nach. Fehler, die erst beim Menschen auffallen, hatten fast immer zu ordentliche Testdaten als Ursache.
 

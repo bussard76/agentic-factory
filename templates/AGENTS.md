@@ -12,7 +12,7 @@ Read first: `ARCHITECTURE.md` (if present), your task, and `docs/coordinator.md`
 
 ## Review gate
 
-- No code reaches `{{MAIN}}` without a passing independent review under `docs/review-protocol.md`. The reviewer is never the builder.
+- No code reaches `{{MAIN}}` without a passing independent review under `docs/review-protocol.md`. The reviewer is never the builder. {{HOOK_ENFORCEMENT}}
 - Reviewers work read-only and write only their findings file, committed separately under `docs/reviews/`.
 - Builders fix findings. If a finding appears incorrect, explain why to the coordinator.
 - `--no-verify` is forbidden.

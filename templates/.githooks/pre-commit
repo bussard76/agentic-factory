@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+# A project's own pre-commit (moved here by init, or a shim to its hooks directory) runs first and must pass.
+if [ -x .githooks/pre-commit.own ]; then .githooks/pre-commit.own "$@"; fi
 node tools/factory-guardrails.mjs test-count
 node tools/factory-guardrails.mjs staged-safety
 node tools/factory-guardrails.mjs static-checks
