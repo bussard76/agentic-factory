@@ -214,7 +214,7 @@ A journal of every event, a nightly **Pipeline Auditor**, a **retro** per hard a
 - **The human's real data is untouchable:** tests run on demo data or a private copy. Nothing is written or deleted in the original.
 - **No real data in the repo:** no company values, names, addresses or secrets in code, tests, fixtures or reports. `.env` is never committed, secrets are never printed.
 - **Workers never push to `main`;** only reviewed state through a wave.
-- **No bypassing hooks:** `--no-verify` is forbidden.
+- **No bypassing hooks:** `--no-verify` is forbidden, and so is every other way around them (`HUSKY=0`, changing `core.hooksPath`, `git -c core.hooksPath=…`).
 - **No real model calls in tests.**
 
 ## Tools and skills

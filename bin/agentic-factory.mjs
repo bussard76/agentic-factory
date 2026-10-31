@@ -40,7 +40,8 @@ async function askText(question, def) { if (yes) return def; const a = (await rl
 function detect() {
   const remote = sh("git", ["config", "--get", "remote.origin.url"]);
   const repo = remote.replace(/^git@github\.com:/, "github.com/").replace(/^https?:\/\//, "").replace(/\.git$/, "");
-  const name = path.basename(repo || cwd);
+  // A filesystem remote (the local bare remote, a path) says nothing about the project: the directory name does.
+  const name = path.basename(remote && !/^(\/|~|file:)/.test(remote) ? repo : cwd);
   const pkg = fs.existsSync("package.json") ? JSON.parse(fs.readFileSync("package.json", "utf8")) : {};
   const scripts = pkg.scripts ?? {};
   // Package manager: the lockfile decides; else package.json → packageManager (corepack) or engines; else the first of
@@ -80,8 +81,11 @@ async function init() {
     if (!existed) spawnSync("git", ["init", "-q", "--bare", bare]);
     spawnSync("git", ["remote", "add", "origin", bare]);
     const branch = sh("git", ["branch", "--show-current"]) || "main";
-    const p = spawnSync("git", ["push", "-q", "-u", "origin", branch], { encoding: "utf8" });
-    if (p.status !== 0) { say(`The existing local bare remote ${bare} holds a different history; remove it or point origin elsewhere (git remote set-url origin <url>), then run init again.`); process.exit(1); }
+    // An empty repository (git init, no commit yet) has nothing to push; the adoption commit pushes with -u later.
+    if (sh("git", ["rev-parse", "--verify", "-q", "HEAD"])) {
+      const p = spawnSync("git", ["push", "-q", "-u", "origin", branch], { encoding: "utf8" });
+      if (p.status !== 0) { spawnSync("git", ["remote", "remove", "origin"]); say(`The existing local bare remote ${bare} holds a different history. Remove it (rm -rf "${bare}") or add your own remote (git remote add origin <url>), then run init again. origin was not kept.`); process.exit(1); }
+    }
     say(`No remote found: ${existed ? "using the existing" : "created a"} local bare remote at ${bare} as origin (replace it later with git remote set-url origin <url>).`);
     d.repo = `local:${bare}`;
   }
@@ -185,7 +189,7 @@ async function init() {
     manifest.files[rel] = hash(content); say(`  write  ${rel}`);
   };
   say("\nWriting:");
-  if (mode === "own") say(`  HOOKS: --keep-own-hooks: the project's hooks in ${setup.dir} stay as they are; the factory hooks are NOT installed. They must enforce the commit checks and the review gate on main themselves (hooks.mode = "own").`);
+  if (mode === "own") say(`  HOOKS: --keep-own-hooks: the project's hooks in ${setup.dir} stay as they are; the factory hooks are NOT installed. They must enforce the commit checks and the review gate on main themselves (hooks.mode = "own"). core.hooksPath is ${sh("git", ["config", "core.hooksPath"]) || "NOT set: the own hooks are not armed"}.`);
   if (mode === "merge") {
     say(`  HOOKS: this repo has its own hooks in ${setup.dir} (${ownHookFiles(setup).join(", ")}${setup.layout === "husky" ? "; husky layout, core.hooksPath stays " + setup.hooksPath : ""}); each becomes <hook>.own and runs first inside the factory hook of the same name (hooks.mode = "merge").`);
     for (const own of keepOwnHooks(setup)) { manifest.files[own] = hash(fs.readFileSync(own, "utf8")); say(`  keep   ${own} (the project's own hook)`); }
@@ -246,6 +250,7 @@ function templateVars(c) {
     PROJECT: c.project.name, HUMAN: c.project.humanName, MAIN: c.project.mainBranch, BRANCH_PREFIX: c.project.branchPrefix ?? "agents/", DATE: c.project.adoptedOn ?? (process.env.FACTORY_TODAY ?? new Date().toISOString().slice(0, 10)),
     ADOPTION_ADR: `ADR-${adoptionAdrNumber()}`,
     HOOKS_DIR: c.hooks?.dir ?? ".githooks",
+    HOOKS_PATH: c.hooks?.hooksPath ?? ".githooks",
     HOOK_ENFORCEMENT: (c.hooks?.mode ?? "factory") === "own"
       ? `**hooks.mode = own:** this project keeps its own hooks in \`${c.hooks?.dir ?? c.hooks?.ownDir ?? ".githooks"}\`; they, not the factory's, must enforce the commit checks and the review gate on \`${c.project.mainBranch}\`. The factory does not verify them.`
       : `Enforced by the factory hooks in \`${c.hooks?.dir ?? ".githooks"}/\` (\`tools/factory-guardrails.mjs\`)${(c.hooks?.mode ?? "factory") === "merge" ? "; the project's own hooks run first as `<hook>.own` next to them" : ""}.`,
@@ -289,9 +294,11 @@ function hooksSetup() {
   const local = sh("git", ["config", "--local", "core.hooksPath"]);
   const effective = sh("git", ["config", "core.hooksPath"]);
   if (!local && effective) say(`  NOTE: a global core.hooksPath (${effective}) is in effect; init sets the repository's own hooks path and leaves the global hooks untouched.`);
-  const p = local;
-  const inside = p && !path.isAbsolute(p) && !path.resolve(cwd, p).startsWith("..") && path.resolve(cwd, p).startsWith(cwd + path.sep);
-  if (p && !inside) { say(`  NOTE: core.hooksPath=${p} points outside this repository; it is not used as the hooks directory (the factory uses .githooks).`); return { dir: ".githooks", hooksPath: ".githooks", layout: "githooks" }; }
+  // Absolute paths inside the worktree are fine and recorded relative to it; paths outside the worktree are not used.
+  const abs = local ? path.resolve(cwd, local) : "";
+  const inside = Boolean(local) && abs.startsWith(cwd + path.sep);
+  if (local && !inside) { say(`  NOTE: core.hooksPath=${local} points outside this repository; it is not used as the hooks directory (the factory uses .githooks) and the hooks there will not run in this repository.`); return { dir: ".githooks", hooksPath: ".githooks", layout: "githooks" }; }
+  const p = local ? path.relative(cwd, abs) : "";
   if (p && /\/_\/?$/.test(p) && fs.existsSync(path.dirname(p))) return { dir: path.dirname(p), hooksPath: p, layout: "husky" };   // husky v9: .husky/_ runs .husky/<hook>
   if (p && p !== ".githooks" && fs.existsSync(p)) return { dir: p, hooksPath: p, layout: "custom" };
   return { dir: ".githooks", hooksPath: ".githooks", layout: "githooks" };
@@ -416,6 +423,8 @@ function doctor() {
   const hmode = c.hooks?.mode ?? "factory", hdir = c.hooks?.dir ?? c.hooks?.ownDir ?? ".githooks", wantPath = c.hooks?.hooksPath ?? (hmode === "own" ? sh("git", ["config", "core.hooksPath"]) : ".githooks");
   const exe = (f) => fs.existsSync(f) && (fs.statSync(f).mode & 0o111);
   if (hmode === "own") {
+    const cur = sh("git", ["config", "core.hooksPath"]);
+    cur && cur === (c.hooks?.hooksPath || cur) ? ok(`core.hooksPath=${cur} (own hooks armed)`) : bad(`core.hooksPath=${c.hooks?.hooksPath || hdir}: the own hooks are NOT armed (git config core.hooksPath ${c.hooks?.hooksPath || hdir})`);
     for (const h of ["pre-commit", "pre-push"]) exe(`${hdir}/${h}`) ? ok(`own hook ${hdir}/${h}`) : bad(`own hook ${hdir}/${h} executable`);
     info("hooks.mode = own: the project's own hooks must enforce the review gate; the factory guardrails are not installed and not verified");
   } else {

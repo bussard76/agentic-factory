@@ -27,7 +27,7 @@ agentic-factory init
 
 `init` asks one question at a time, recommended answer first. For a first try, accept the defaults with one exception: answer **"Only on this machine"** for the hosts question. The guide language defaults to your `LANG` (German or English); the commands the hooks will run are printed before you confirm them. The questions and why they matter are in [onboarding.md](onboarding.md).
 
-If the repo has no remote yet, `init` creates a **local bare remote** (`~/.factory-remotes/<project>.git`) and sets it as `origin`, because every script fetches and pushes through `origin`. Replace it with a real remote any time: `git remote set-url origin <url>`.
+If the repo has no remote yet, `init` creates a **local bare remote** (`~/.factory-remotes/<project>-<hash>.git`, one per project directory) and sets it as `origin`, because every script fetches and pushes through `origin`. Replace it with a real remote any time: `git remote set-url origin <url>`.
 
 It writes:
 

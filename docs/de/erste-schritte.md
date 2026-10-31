@@ -27,7 +27,7 @@ agentic-factory init
 
 `init` stellt eine Frage nach der anderen, die empfohlene Antwort zuerst. Für den ersten Versuch nimm die Vorgaben, mit einer Ausnahme: Antworte bei den Hosts mit **„Nur auf diesem Rechner“**. Die Sprache des Leitfadens richtet sich nach deinem `LANG` (Deutsch oder Englisch); die Befehle, die die Hooks ausführen, werden vor der Bestätigung angezeigt. Die Fragen und ihr Grund stehen in [onboarding.md](../onboarding.md).
 
-Hat das Repo noch kein Remote, legt `init` ein **lokales Bare-Remote** an (`~/.factory-remotes/<projekt>.git`) und setzt es als `origin`, weil alle Skripte über `origin` holen und pushen. Ersetze es jederzeit durch ein echtes Remote: `git remote set-url origin <url>`.
+Hat das Repo noch kein Remote, legt `init` ein **lokales Bare-Remote** an (`~/.factory-remotes/<projekt>-<hash>.git`, eines pro Projektverzeichnis) und setzt es als `origin`, weil alle Skripte über `origin` holen und pushen. Ersetze es jederzeit durch ein echtes Remote: `git remote set-url origin <url>`.
 
 Es entstehen:
 

@@ -223,7 +223,7 @@ Bei jedem Ereignis eines Workers, sonst alle 10 Minuten:
 - **Echte Daten unantastbar:** Tests laufen im Demo oder auf einer privaten Kopie. Im Original wird nie geschrieben oder gelöscht.
 - **Keine echten Daten im Repo:** keine Firmenwerte, Namen, Adressen oder Geheimnisse in Code, Tests, Fixtures oder Berichten. `.env` wird nie committet, Geheimnisse werden nie ausgegeben.
 - **Worker pushen nie nach `main`.**
-- **Keine Hooks umgehen:** `--no-verify` ist verboten.
+- **Keine Hooks umgehen:** `--no-verify` ist verboten, und jeder andere Weg daran vorbei ebenso (`HUSKY=0`, `core.hooksPath` ändern, `git -c core.hooksPath=…`).
 - **Keine echten Modellaufrufe in Tests.**
 
 ## Werkzeuge und Skills

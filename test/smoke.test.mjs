@@ -6,7 +6,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { createHash } from "node:crypto";
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const createHashHex = (s) => createHash("sha256").update(s).digest("hex").slice(0, 6);   // mirrors the CLI's bare-remote key
 const CLI = path.join(ROOT, "bin/agentic-factory.mjs");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "af-smoke-"));
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "af-home-"));   // a HOME outside the repo: the local bare remote and skills land here
@@ -238,6 +240,42 @@ test("husky v9 hooks are merged in place and the gate bites", () => {
   // update on a merged repo changes nothing and does not mistake the factory's pre-merge-commit for an own hook.
   const up = execFileSync("node", [CLI, "update"], { cwd: own, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } });
   assert.match(up, /0 updated, 0 kept/); assert.ok(!fs.existsSync(path.join(own, ".husky/pre-merge-commit.own")), "no phantom .own file");
+});
+
+test("init on an empty repository (no commit yet) works and names the project after its directory", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-empty-"));
+  const g = (...a) => execFileSync("git", a, { cwd: dir, encoding: "utf8" }).trim();
+  g("init", "-q", "-b", "main"); g("config", "user.email", "e@example.com"); g("config", "user.name", "e");
+  const out = execFileSync("node", [CLI, "init", "--yes"], { cwd: dir, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } });
+  assert.match(out, /Adopt agentic-factory \(ADR-0001\), pushed to origin\/main/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "factory.config.json"), "utf8")).project.name, path.basename(dir));
+  assert.match(g("ls-tree", "--name-only", "origin/main"), /AGENTS\.md/);
+});
+
+test("a foreign local bare remote makes init stop cleanly, without a dangling origin", () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-foreign-")));   // the CLI keys the bare by process.cwd(), the real path
+  const g = (...a) => execFileSync("git", a, { cwd: dir, encoding: "utf8" }).trim();
+  g("init", "-q", "-b", "main"); g("config", "user.email", "f@example.com"); g("config", "user.name", "f");
+  fs.writeFileSync(path.join(dir, "a.txt"), "a\n"); g("add", "a.txt"); g("commit", "-qm", "a");
+  // Plant a bare with a different history where init would create this project's remote.
+  const bare = path.join(home, ".factory-remotes", `${path.basename(dir)}-${createHashHex(dir)}.git`);
+  fs.mkdirSync(path.dirname(bare), { recursive: true }); execFileSync("git", ["init", "-q", "--bare", bare]);
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), "af-other-")); execFileSync("git", ["init", "-q", "-b", "main"], { cwd: other }); execFileSync("git", ["-c", "user.email=x@x", "-c", "user.name=x", "commit", "-q", "--allow-empty", "-m", "foreign"], { cwd: other }); execFileSync("git", ["push", "-q", bare, "main"], { cwd: other });
+  const r = spawnSync("node", [CLI, "init", "--yes"], { cwd: dir, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } });
+  assert.notEqual(r.status, 0); assert.match(r.stdout, /holds a different history/); assert.equal(g("remote"), "", "origin was not kept");
+});
+
+test("an absolute core.hooksPath inside the worktree is merged, not rejected", () => {
+  const own = fs.mkdtempSync(path.join(os.tmpdir(), "af-abs-"));
+  const g = (...a) => { const r = spawnSync("git", a, { cwd: own, encoding: "utf8" }); if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`); return r.stdout.trim(); };
+  g("init", "-q", "-b", "main"); g("config", "user.email", "a@example.com"); g("config", "user.name", "a");
+  fs.mkdirSync(path.join(own, ".hooks")); fs.writeFileSync(path.join(own, ".hooks/pre-commit"), "#!/bin/sh\necho OWN-ABS-RAN >&2\n"); fs.chmodSync(path.join(own, ".hooks/pre-commit"), 0o755);
+  g("config", "core.hooksPath", fs.realpathSync(path.join(own, ".hooks")));
+  fs.writeFileSync(path.join(own, "package.json"), JSON.stringify({ name: "abs", scripts: { test: "echo ok" } })); g("add", "-A"); g("commit", "-qm", "init");
+  const out = execFileSync("node", [CLI, "init", "--yes"], { cwd: fs.realpathSync(own), encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } });
+  assert.match(out, /own hooks in \.hooks \(pre-commit\)/);
+  fs.writeFileSync(path.join(own, "y.js"), "export const y = 1;\n"); g("add", "y.js");
+  const c = spawnSync("git", ["commit", "-qm", "y"], { cwd: own, encoding: "utf8" }); assert.equal(c.status, 0, c.stderr); assert.match(c.stderr, /OWN-ABS-RAN/);
 });
 
 test("a global core.hooksPath is left alone: the factory uses .githooks, commits and pushes the adoption, the gate bites", () => {
