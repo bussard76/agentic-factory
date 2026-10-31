@@ -1,3 +1,5 @@
 #!/bin/sh
 set -eu
-exec sh .githooks/pre-commit
+d=$(dirname "$0")
+if [ -x "$d/pre-merge-commit.own" ]; then "$d/pre-merge-commit.own" "$@"; fi
+exec sh "$d/pre-commit"

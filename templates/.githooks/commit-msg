@@ -1,3 +1,6 @@
 #!/bin/sh
 set -eu
+d=$(dirname "$0")
+# The project's own commit-msg (kept by init as commit-msg.own) runs first and must pass.
+if [ -x "$d/commit-msg.own" ]; then "$d/commit-msg.own" "$@"; fi
 node tools/factory-guardrails.mjs protected-files "$1"

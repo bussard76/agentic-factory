@@ -166,8 +166,8 @@ async function init() {
     else say("  install did not produce a lockfile; keeping the plain install command");
   }
   // The hook mode is decided before rendering: the documents say which hooks enforce the gate.
-  const hooksDecision = { mode: hookMode(), ownDir: ownHooksDir() };
-  c.hooks = { mode: hooksDecision.mode, ...(hooksDecision.ownDir !== ".githooks" ? { ownDir: hooksDecision.ownDir } : {}) };
+  const setup = hooksSetup(), mode = hookMode(setup);
+  c.hooks = { mode, dir: setup.dir, hooksPath: setup.hooksPath, layout: setup.layout };
   const vars = templateVars(c);
   const write = (rel, content, mode) => {
     const target = path.join(cwd, rel);
@@ -182,12 +182,13 @@ async function init() {
     manifest.files[rel] = hash(content); say(`  write  ${rel}`);
   };
   say("\nWriting:");
-  const { mode, ownDir } = hooksDecision;
-  if (mode === "own") say(`  HOOKS: this repo has its own pre-commit and pre-push in ${ownDir}; the factory hooks are NOT installed. Your hooks must enforce the review gate on main themselves (hooks.mode = "own" in factory.config.json).`);
-  if (mode === "merge") { say(`  HOOKS: this repo has its own pre-commit in ${ownDir}; it becomes .githooks/pre-commit.own and runs first inside the factory pre-commit; the other hooks are written (hooks.mode = "merge").`); if (keepOwnPreCommit()) say("  keep   .githooks/pre-commit.own (the project's own pre-commit)"); }
+  if (mode === "own") say(`  HOOKS: --keep-own-hooks: the project's hooks in ${setup.dir} stay as they are; the factory hooks are NOT installed. They must enforce the commit checks and the review gate on main themselves (hooks.mode = "own").`);
+  if (mode === "merge") {
+    say(`  HOOKS: this repo has its own hooks in ${setup.dir} (${ownHookFiles(setup).join(", ")}${setup.layout === "husky" ? "; husky layout, core.hooksPath stays " + setup.hooksPath : ""}); each becomes <hook>.own and runs first inside the factory hook of the same name (hooks.mode = "merge").`);
+    for (const own of keepOwnHooks(setup)) { manifest.files[own] = hash(fs.readFileSync(own, "utf8")); say(`  keep   ${own} (the project's own hook)`); }
+  }
   write("factory.config.json", JSON.stringify(c, null, 2) + "\n");
-  for (const rel of walk(path.join(ROOT, "templates"))) if (!skipTemplate(rel, mode)) write(templateTarget(rel), render(fs.readFileSync(path.join(ROOT, "templates", rel), "utf8"), vars), /\.githooks\/|tools\//.test(rel) ? 0o755 : undefined);
-  if (mode === "merge") manifest.files[".githooks/pre-commit.own"] = hash(fs.readFileSync(".githooks/pre-commit.own", "utf8"));
+  for (const rel of walk(path.join(ROOT, "templates"))) if (!skipTemplate(rel, mode)) write(templateTarget(rel, setup.dir), render(fs.readFileSync(path.join(ROOT, "templates", rel), "utf8"), vars), /\.githooks\/|tools\//.test(rel) ? 0o755 : undefined);
   write("docs/dev-workflow.md", absolutizeDocLinks(render(fs.readFileSync(path.join(ROOT, "docs", c.project.language === "de" ? "de/workflow.md" : "workflow.md"), "utf8"), vars), c.project.language));
   for (const rel of walk(path.join(ROOT, "skills"))) write(path.join(".agents/skills", rel), fs.readFileSync(path.join(ROOT, "skills", rel), "utf8"));
   if (!fs.existsSync(".claude")) fs.mkdirSync(".claude");
@@ -209,8 +210,9 @@ async function init() {
   // A re-run on an initialised project is an update: no adoption commit (the hooks are armed; it could not be pushed).
   const adopted = hadManifest ? "" : commitAdoption([...Object.keys(manifest.files), ...(lockfile ? [lockfile] : [])], c.project.mainBranch, vars.ADOPTION_ADR);
   if (hadManifest) say("  already initialised: files refreshed, nothing committed (commit the changes yourself, or use `agentic-factory update`)");
-  // own mode with hooks elsewhere (husky, lefthook): leave core.hooksPath alone; otherwise arm .githooks.
-  if (!(mode === "own" && ownDir !== ".githooks")) sh("git", ["config", "core.hooksPath", ".githooks"]);
+  // Arm the hooks where they live: .githooks for the factory layout, the project's own directory (e.g. husky) in merge
+  // mode, nothing in own mode.
+  if (mode !== "own") sh("git", ["config", "core.hooksPath", c.hooks.hooksPath]);
   if (installNow) { say("\nUser-level skills:"); installSkills(); }
 
   // --- the human's checklist -----------------------------------------------------------------
@@ -241,8 +243,8 @@ function templateVars(c) {
     PROJECT: c.project.name, HUMAN: c.project.humanName, MAIN: c.project.mainBranch, BRANCH_PREFIX: c.project.branchPrefix ?? "agents/", DATE: c.project.adoptedOn ?? (process.env.FACTORY_TODAY ?? new Date().toISOString().slice(0, 10)),
     ADOPTION_ADR: `ADR-${adoptionAdrNumber()}`,
     HOOK_ENFORCEMENT: (c.hooks?.mode ?? "factory") === "own"
-      ? `**hooks.mode = own:** this project keeps its own hooks${c.hooks?.ownDir ? ` in \`${c.hooks.ownDir}\`` : ""}; they, not the factory's, must enforce the commit checks and the review gate on \`${c.project.mainBranch}\`. The factory does not verify them.`
-      : `Enforced by the factory hooks (\`.githooks/\`, \`tools/factory-guardrails.mjs\`)${(c.hooks?.mode ?? "factory") === "merge" ? "; the project's own pre-commit runs first as `.githooks/pre-commit.own`" : ""}.`,
+      ? `**hooks.mode = own:** this project keeps its own hooks in \`${c.hooks?.dir ?? c.hooks?.ownDir ?? ".githooks"}\`; they, not the factory's, must enforce the commit checks and the review gate on \`${c.project.mainBranch}\`. The factory does not verify them.`
+      : `Enforced by the factory hooks in \`${c.hooks?.dir ?? ".githooks"}/\` (\`tools/factory-guardrails.mjs\`)${(c.hooks?.mode ?? "factory") === "merge" ? "; the project's own hooks run first as `<hook>.own` next to them" : ""}.`,
     VERIFY: c.commands.verify || "the verify command", E2E: c.commands.e2e || "the browser suite", RELEASE: (c.commands.release ?? []).join(" and ") || "the release gates",
     UI_LANGUAGE: c.project.language === "de" ? "German" : "English", LANGUAGE_NAME: c.project.language === "de" ? "German" : "English",
     MAX_ROUNDS: String(c.reviews.maxRounds), SUITE_MAX: String(ctl.capacity?.suiteWorkersMax ?? c.capacity.suiteWorkersMax), READONLY_MAX: String(ctl.capacity?.readOnlyWorkersMax ?? c.capacity.readOnlyWorkersMax),
@@ -269,36 +271,39 @@ function templateVars(c) {
 const render = (text, vars) => text.replace(/\{\{([A-Z_]+)\}\}/g, (m, k) => (k in vars ? vars[k] : m));
 // Templates that an existing project may already have in its own form: the adoption ADR is skipped when the project
 // already has an ADR 0001 (its numbering is its own); the ADR template is skipped when docs/adr/ already exists.
-// Hooks in a project that already has some. Three modes, decided once and recorded in factory.config.json → hooks.mode:
-//   factory  no .githooks yet: the factory hooks are written
-//   merge    an own pre-commit but no own pre-push: the factory's guardrail lines are appended to the own pre-commit and
-//            the missing hooks are written, so the review gate exists and the own checks keep running
-//   own      own pre-commit AND own pre-push (the project has its own review gate, like the originating project): nothing
-//            is written, init says so loudly, doctor checks only that the own hooks are armed
-// The project's hooks may live in .githooks/ or wherever core.hooksPath points (husky, lefthook, a custom directory).
-const ownHooksDir = () => { const p = sh("git", ["config", "core.hooksPath"]); return p && p !== ".githooks" && fs.existsSync(path.join(p, "pre-commit")) ? p : ".githooks"; };
-const hookMode = () => {
-  const dir = ownHooksDir();
-  const has = (h) => fs.existsSync(path.join(dir, h));
-  if (!has("pre-commit")) return "factory";
-  if (fs.readFileSync(path.join(dir, "pre-commit"), "utf8").includes("factory-guardrails")) return "factory";
-  return has("pre-push") ? "own" : "merge";
-};
+// Hooks in a project that already has some. Three modes, decided once and recorded in factory.config.json → hooks:
+//   factory  no own hooks: the factory hooks are written into .githooks/
+//   merge    own hooks exist (pre-commit, commit-msg, pre-push, pre-merge-commit; in .githooks/ or in the directory
+//            core.hooksPath points to, incl. husky v9's .husky/_ layout): each own hook is kept as <hook>.own in the
+//            hooks directory and the factory hook runs it first under set -e; the factory hooks are written INTO that
+//            directory and core.hooksPath stays where the project put it (a husky `prepare` script cannot disarm them)
+//   own      only on request (init --keep-own-hooks): nothing is written, the project's hooks must enforce the gate
+const HOOK_NAMES = ["pre-commit", "commit-msg", "pre-push", "pre-merge-commit"];
+function hooksSetup() {
+  const p = sh("git", ["config", "core.hooksPath"]);
+  if (p && /\/_\/?$/.test(p) && fs.existsSync(path.dirname(p))) return { dir: path.dirname(p), hooksPath: p, layout: "husky" };   // husky v9: .husky/_ runs .husky/<hook>
+  if (p && p !== ".githooks" && fs.existsSync(p)) return { dir: p, hooksPath: p, layout: "custom" };
+  return { dir: ".githooks", hooksPath: ".githooks", layout: "githooks" };
+}
+const ownHookFiles = (setup) => HOOK_NAMES.filter((h) => fs.existsSync(path.join(setup.dir, h)) && !fs.readFileSync(path.join(setup.dir, h), "utf8").includes("factory-guardrails"));
+const hookMode = (setup = hooksSetup()) => (flag("--keep-own-hooks") ? "own" : ownHookFiles(setup).length ? "merge" : "factory");
+const ownHooksDir = () => hooksSetup().dir;
 const ownAdr = () => fs.existsSync("docs/adr") && fs.readdirSync("docs/adr").some((f) => /^(ADR-)?0001[-.]/.test(f) && !f.includes("adopt-agentic-factory"));
 // The adoption ADR takes the next free number when the project already numbers its ADRs.
 const adoptionAdrNumber = () => { if (!fs.existsSync("docs/adr")) return "0001"; const nums = fs.readdirSync("docs/adr").map((f) => /^(?:ADR-)?(\d{4})[-.]/.exec(f)?.[1]).filter(Boolean).map(Number); const existing = fs.readdirSync("docs/adr").find((f) => f.includes("adopt-agentic-factory")); if (existing) return /(\d{4})/.exec(existing)[1]; return String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4, "0"); };
 const skipTemplate = (rel, mode = hookMode()) => (/^\.githooks\//.test(rel) || rel === "tools/factory-guardrails.mjs") && mode === "own";
-// The adoption ADR template is written under the project's next free number.
-const templateTarget = (rel) => (/^docs\/adr\/0001-adopt-agentic-factory\.md$/.test(rel) ? `docs/adr/${adoptionAdrNumber()}-adopt-agentic-factory.md` : rel);
-// merge mode: the project's own pre-commit becomes .githooks/pre-commit.own (moved, or a shim to its own hooks
-// directory) and the factory pre-commit runs it first under set -e. Nothing is appended to foreign scripts.
-function keepOwnPreCommit() {
-  const dir = ownHooksDir(); const own = ".githooks/pre-commit.own";
-  if (fs.existsSync(own)) return false;
-  fs.mkdirSync(".githooks", { recursive: true });
-  if (dir === ".githooks") { fs.renameSync(".githooks/pre-commit", own); }
-  else fs.writeFileSync(own, `#!/bin/sh\n# The project's own hooks live in ${dir} (its former core.hooksPath); the factory pre-commit runs this first.\nexec "${dir}/pre-commit" "$@"\n`);
-  fs.chmodSync(own, 0o755); return true;
+// The adoption ADR template is written under the project's next free number; hook templates go into the hooks directory.
+const templateTarget = (rel, hooksDir = ".githooks") => (/^docs\/adr\/0001-adopt-agentic-factory\.md$/.test(rel) ? `docs/adr/${adoptionAdrNumber()}-adopt-agentic-factory.md` : /^\.githooks\//.test(rel) ? `${hooksDir}/${rel.slice(".githooks/".length)}` : rel);
+// merge mode: every own hook becomes <dir>/<hook>.own; the factory hook of the same name runs it first under set -e.
+// Returns the .own files created (relative paths) so they join the manifest and the adoption commit.
+function keepOwnHooks(setup) {
+  const kept = [];
+  for (const h of ownHookFiles(setup)) {
+    const own = path.join(setup.dir, `${h}.own`);
+    if (fs.existsSync(own)) continue;
+    fs.renameSync(path.join(setup.dir, h), own); fs.chmodSync(own, 0o755); kept.push(own);
+  }
+  return kept;
 }
 // The workflow guide copied into a project links to sibling docs that are not copied; point those links at the factory repo.
 const FACTORY_DOCS_URL = "https://github.com/bussard76/agentic-factory/blob/main/docs";
@@ -340,7 +345,9 @@ async function initNonInteractiveRefresh() {
     c.project.adoptedOn = fromGit || fromAdr || process.env.FACTORY_TODAY || new Date().toISOString().slice(0, 10);
     say(`  recorded project.adoptedOn = ${c.project.adoptedOn} in factory.config.json (decision dates stay fixed)`);
   }
-  if (!c.hooks) c.hooks = { mode: hookMode() };
+  // hooks: keep a recorded mode; fill in the directory and hooksPath for configs written by an older factory.
+  const setup = hooksSetup();
+  c.hooks = { mode: c.hooks?.mode ?? hookMode(setup), dir: c.hooks?.dir ?? c.hooks?.ownDir ?? setup.dir, hooksPath: c.hooks?.hooksPath ?? (c.hooks?.mode === "own" ? setup.hooksPath : c.hooks?.ownDir ?? setup.hooksPath), layout: c.hooks?.layout ?? setup.layout };
   fs.writeFileSync("factory.config.json", JSON.stringify(c, null, 2) + "\n");
   const vars = templateVars(c);
   const manifest = JSON.parse(fs.existsSync(".factory/manifest.json") ? fs.readFileSync(".factory/manifest.json", "utf8") : '{"files":{}}');
@@ -355,13 +362,19 @@ async function initNonInteractiveRefresh() {
     }
     fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, content); if (mode) fs.chmodSync(target, mode); manifest.files[rel] = hash(content); written++; say(`  update ${rel}`);
   };
-  const mode = c.hooks.mode;
-  // A project merged by an older factory still has the appended lines in .githooks/pre-commit: move that own part out.
-  if (mode === "merge" && !fs.existsSync(".githooks/pre-commit.own") && fs.existsSync(".githooks/pre-commit")) {
-    const cur = fs.readFileSync(".githooks/pre-commit", "utf8"); const own = cur.split("\n# agentic-factory guardrails")[0];
-    fs.writeFileSync(".githooks/pre-commit.own", own.replace(/\s*$/, "\n")); fs.chmodSync(".githooks/pre-commit.own", 0o755); say("  keep   .githooks/pre-commit.own (the project's own pre-commit, split out)");
+  const mode = c.hooks.mode, hdir = c.hooks.dir;
+  if (mode === "merge") {
+    // A project merged by an older factory still has the appended lines in pre-commit: split the own part out and let
+    // the template replace the file (the appended file was a factory product, so it joins the manifest).
+    const pc = path.join(hdir, "pre-commit");
+    if (fs.existsSync(pc) && fs.readFileSync(pc, "utf8").includes("# agentic-factory guardrails") && !fs.existsSync(`${pc}.own`)) {
+      const cur = fs.readFileSync(pc, "utf8"); const own = cur.split("\n# agentic-factory guardrails")[0].replace(/\s*$/, "\n");
+      fs.writeFileSync(`${pc}.own`, own); fs.chmodSync(`${pc}.own`, 0o755); manifest.files[pc] = hash(cur); manifest.files[`${pc}.own`] = hash(own); say(`  keep   ${pc}.own (the project's own pre-commit, split out)`);
+    }
+    // Own hooks that appeared since (or were never merged): keep them as .own so the templates can take their place.
+    for (const own of keepOwnHooks({ dir: hdir })) { manifest.files[own] = hash(fs.readFileSync(own, "utf8")); say(`  keep   ${own} (the project's own hook)`); }
   }
-  for (const rel of walk(path.join(ROOT, "templates"))) if (!skipTemplate(rel, mode)) write(templateTarget(rel), render(fs.readFileSync(path.join(ROOT, "templates", rel), "utf8"), vars), /\.githooks\/|tools\//.test(rel) ? 0o755 : undefined);
+  for (const rel of walk(path.join(ROOT, "templates"))) if (!skipTemplate(rel, mode)) write(templateTarget(rel, hdir), render(fs.readFileSync(path.join(ROOT, "templates", rel), "utf8"), vars), /\.githooks\/|tools\//.test(rel) ? 0o755 : undefined);
   write("docs/dev-workflow.md", absolutizeDocLinks(render(fs.readFileSync(path.join(ROOT, "docs", c.project.language === "de" ? "de/workflow.md" : "workflow.md"), "utf8"), vars), c.project.language));
   for (const rel of walk(path.join(ROOT, "skills"))) write(path.join(".agents/skills", rel), fs.readFileSync(path.join(ROOT, "skills", rel), "utf8"));
   for (const rel of walk(path.join(ROOT, "controller"))) write(path.join(".factory/controller", rel), render(fs.readFileSync(path.join(ROOT, "controller", rel), "utf8"), vars), /gate$|\.sh$/.test(rel) ? 0o755 : undefined);
@@ -374,8 +387,8 @@ async function initNonInteractiveRefresh() {
   fs.writeFileSync(".factory/manifest.json", JSON.stringify(manifest, null, 2) + "\n");
   appendGitignore(IGNORES(fs.existsSync("package.json")));   // projects initialised by an older factory get the current ignore list
   // Every checkout of an adopted project (a fresh clone, the server checkout the waves push from) must arm the hooks:
-  // core.hooksPath is per clone, not committed. own mode with hooks elsewhere keeps its own setting.
-  if (fs.existsSync(".githooks/pre-commit") && !(c.hooks?.mode === "own" && c.hooks?.ownDir)) sh("git", ["config", "core.hooksPath", ".githooks"]);
+  // core.hooksPath is per clone, not committed. own mode keeps its own setting.
+  if (mode !== "own" && fs.existsSync(path.join(hdir, "pre-commit"))) sh("git", ["config", "core.hooksPath", c.hooks.hooksPath]);
   say(`${written} updated, ${kept} kept (locally changed). Review .factory/new/ and merge what you want.`);
 }
 
@@ -386,16 +399,17 @@ function doctor() {
   const major = Number(process.versions.node.split(".")[0]); major >= 22 ? ok(`node ${process.versions.node}`) : bad(`node >= 22 (have ${process.versions.node})`);
   if (!fs.existsSync("factory.config.json")) { bad("factory.config.json (run init)"); process.exit(1); }
   const c = JSON.parse(fs.readFileSync("factory.config.json", "utf8")); ok(`factory.config.json (project ${c.project.name}, factory ${c.factoryVersion})`);
-  const wantDir = (c.hooks?.mode === "own" && c.hooks?.ownDir) ? c.hooks.ownDir : ".githooks";
-  sh("git", ["config", "core.hooksPath"]) === wantDir ? ok(`core.hooksPath=${wantDir}`) : bad(`core.hooksPath=${wantDir} (git config core.hooksPath ${wantDir})`);
-  const hmode = c.hooks?.mode ?? "factory", hdir = c.hooks?.ownDir ?? ".githooks";
+  const hmode = c.hooks?.mode ?? "factory", hdir = c.hooks?.dir ?? c.hooks?.ownDir ?? ".githooks", wantPath = c.hooks?.hooksPath ?? (hmode === "own" ? sh("git", ["config", "core.hooksPath"]) : ".githooks");
+  const exe = (f) => fs.existsSync(f) && (fs.statSync(f).mode & 0o111);
   if (hmode === "own") {
-    for (const h of ["pre-commit", "pre-push"]) fs.existsSync(`${hdir}/${h}`) && (fs.statSync(`${hdir}/${h}`).mode & 0o111) ? ok(`own hook ${hdir}/${h}`) : bad(`own hook ${hdir}/${h} executable`);
+    for (const h of ["pre-commit", "pre-push"]) exe(`${hdir}/${h}`) ? ok(`own hook ${hdir}/${h}`) : bad(`own hook ${hdir}/${h} executable`);
     info("hooks.mode = own: the project's own hooks must enforce the review gate; the factory guardrails are not installed and not verified");
   } else {
-    for (const h of ["pre-commit", "commit-msg", "pre-push"]) fs.existsSync(`.githooks/${h}`) && (fs.statSync(`.githooks/${h}`).mode & 0o111) ? ok(`hook ${h}`) : bad(`hook .githooks/${h} executable`);
-    fs.existsSync("tools/factory-guardrails.mjs") && fs.existsSync(".githooks/pre-commit") && fs.readFileSync(".githooks/pre-commit", "utf8").includes("factory-guardrails") ? ok(`factory guardrails wired (${hmode})`) : bad("tools/factory-guardrails.mjs wired into .githooks/pre-commit");
-    if (hmode === "merge") fs.existsSync(".githooks/pre-commit.own") && (fs.statSync(".githooks/pre-commit.own").mode & 0o111) ? ok("own pre-commit kept as .githooks/pre-commit.own") : bad(".githooks/pre-commit.own executable");
+    sh("git", ["config", "core.hooksPath"]) === wantPath ? ok(`core.hooksPath=${wantPath}`) : bad(`core.hooksPath=${wantPath} (git config core.hooksPath ${wantPath})`);
+    fs.existsSync("tools/factory-guardrails.mjs") ? ok("tools/factory-guardrails.mjs") : bad("tools/factory-guardrails.mjs");
+    // Every gate must be present AND wired: pre-commit (checks), commit-msg (protected files), pre-push (review gate).
+    for (const h of ["pre-commit", "commit-msg", "pre-push"]) exe(`${hdir}/${h}`) && fs.readFileSync(`${hdir}/${h}`, "utf8").includes("factory-guardrails") ? ok(`hook ${hdir}/${h} wired (${hmode})`) : bad(`hook ${hdir}/${h} executable and calling tools/factory-guardrails.mjs`);
+    for (const h of HOOK_NAMES) if (fs.existsSync(`${hdir}/${h}.own`)) exe(`${hdir}/${h}.own`) ? ok(`own hook kept as ${hdir}/${h}.own`) : bad(`${hdir}/${h}.own executable`);
   }
   for (const f of ["AGENTS.md", "docs/coordinator.md", "docs/dev-workflow.md", "docs/review-protocol.md", "docs/architect-protocol.md", "docs/debt.md"]) fs.existsSync(f) ? ok(f) : bad(f);
   fs.existsSync(".agents/skills/ponytail/SKILL.md") ? ok(".agents/skills") : bad(".agents/skills");
@@ -465,5 +479,5 @@ function selfcheck() {
 }
 
 const commands = { init, update, doctor, selfcheck, "install-skills": installSkills };
-if (!commands[cmd]) { say(`agentic-factory ${PKG.version}\n  init            onboarding: ask the project's questions, write factory.config.json, copy handbooks, hooks, skills and bundles\n  update          re-render from a newer factory; locally changed files are kept, new versions land in .factory/new/\n  install-skills  install the Orca and coordination skills at user level (~/.claude/skills, ~/.agents/skills) on this host; required wherever a Controller or Front agent runs. --all for every vendored skill, --force to replace\n  doctor          check config, hooks, tools, user-level skills, hosts and the controller's status\n  selfcheck       (factory repo) syntax and placeholder check\nFlags: --yes (take defaults)`); process.exit(cmd ? 1 : 0); }
+if (!commands[cmd]) { say(`agentic-factory ${PKG.version}\n  init            onboarding: ask the project's questions, write factory.config.json, copy handbooks, hooks, skills and bundles (--keep-own-hooks: leave the project's hooks untouched, hooks.mode own)\n  update          re-render from a newer factory; locally changed files are kept, new versions land in .factory/new/\n  install-skills  install the Orca and coordination skills at user level (~/.claude/skills, ~/.agents/skills) on this host; required wherever a Controller or Front agent runs. --all for every vendored skill, --force to replace\n  doctor          check config, hooks, tools, user-level skills, hosts and the controller's status\n  selfcheck       (factory repo) syntax and placeholder check\nFlags: --yes (take defaults)`); process.exit(cmd ? 1 : 0); }
 await commands[cmd]();

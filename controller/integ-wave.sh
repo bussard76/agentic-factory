@@ -44,4 +44,4 @@ if [ -n "${E2E_CMD:-}" ]; then
   if "$GATE" bash -c "$E2E_CMD" > /tmp/wave-e2e.log 2>&1; then echo "e2e PASS $(( $(date +%s) - s ))s"; else echo "e2e FAIL"; strip < /tmp/wave-e2e.log | grep -a -E "failed|✘|Error" | head -6; exit 1; fi
 fi
 git log --oneline -3
-if git push origin "integration:$MAIN" > /tmp/wave-push.log 2>&1; then strip < /tmp/wave-push.log | tail -2; echo "PUSHED $MAIN"; else strip < /tmp/wave-push.log | tail -5; echo "PUSH-FAILED"; exit 1; fi
+if git push origin "integration:$MAIN" > /tmp/wave-push.log 2>&1; then strip < /tmp/wave-push.log | tail -2; echo "PUSHED $MAIN"; else strip < /tmp/wave-push.log | grep -a -E '^\[factory\]|^[0-9a-f]{10}|^remote:|^error:|^fatal:' | head -12; echo "PUSH-FAILED"; exit 1; fi

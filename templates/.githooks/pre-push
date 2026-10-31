@@ -1,3 +1,9 @@
 #!/bin/sh
 set -eu
-node tools/factory-guardrails.mjs review-gate
+d=$(dirname "$0")
+# git feeds the ref updates on stdin once; keep them in a file so the project's own pre-push (pre-push.own) and the
+# factory's review gate both see them.
+in=$(mktemp); trap 'rm -f "$in"' EXIT
+cat > "$in"
+if [ -x "$d/pre-push.own" ]; then "$d/pre-push.own" "$@" < "$in"; fi
+node tools/factory-guardrails.mjs review-gate < "$in"

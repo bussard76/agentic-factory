@@ -191,30 +191,75 @@ test("a repo with its own pre-commit (hooksPath already armed, trailing exit 0) 
   fs.writeFileSync(path.join(own, "x.js"), "export const x = 1;\n"); g("add", "x.js");
   const c = spawnSync("git", ["commit", "-qm", "x"], { cwd: own, encoding: "utf8" }); assert.equal(c.status, 0, c.stderr); assert.match(c.stderr, /OWN-HOOK-RAN/);
   const p = spawnSync("git", ["push", "-q", "origin", "main"], { cwd: own, encoding: "utf8" }); assert.notEqual(p.status, 0); assert.match(p.stderr, /Push to main rejected/);
-  const doc = spawnSync("node", [CLI, "doctor"], { cwd: own, encoding: "utf8", env: { ...process.env, HOME: home } }); assert.match(doc.stdout, /factory guardrails wired \(merge\)/); assert.match(doc.stdout, /own pre-commit kept/);
-  assert.match(fs.readFileSync(path.join(own, "AGENTS.md"), "utf8"), /pre-commit\.own/, "AGENTS.md names the merge");
+  const doc = spawnSync("node", [CLI, "doctor"], { cwd: own, encoding: "utf8", env: { ...process.env, HOME: home } }); assert.match(doc.stdout, /hook \.githooks\/pre-push wired \(merge\)/); assert.match(doc.stdout, /own hook kept as \.githooks\/pre-commit\.own/);
+  assert.match(fs.readFileSync(path.join(own, "AGENTS.md"), "utf8"), /<hook>\.own/, "AGENTS.md names the merge");
 });
 
-test("a repo with husky-style hooks (core.hooksPath elsewhere) keeps them through a shim (merge)", () => {
-  const own = fs.mkdtempSync(path.join(os.tmpdir(), "af-husky-"));
+// A husky v8 layout: hooks in .husky, core.hooksPath=.husky, a prepare script that re-points hooksPath on every install.
+test("husky v8 hooks are merged in place; the prepare script cannot disarm the gate", () => {
+  const own = fs.mkdtempSync(path.join(os.tmpdir(), "af-husky8-"));
   const g = (...a) => { const r = spawnSync("git", a, { cwd: own, encoding: "utf8" }); if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`); return r.stdout.trim(); };
   g("init", "-q", "-b", "main"); g("config", "user.email", "h@example.com"); g("config", "user.name", "h");
   fs.mkdirSync(path.join(own, ".husky")); fs.writeFileSync(path.join(own, ".husky/pre-commit"), "#!/bin/sh\necho HUSKY-RAN >&2\n"); fs.chmodSync(path.join(own, ".husky/pre-commit"), 0o755); g("config", "core.hooksPath", ".husky");
-  fs.writeFileSync(path.join(own, "package.json"), JSON.stringify({ name: "husky", scripts: { test: "echo ok" } })); g("add", "-A"); g("commit", "-qm", "init");
+  fs.writeFileSync(path.join(own, "package.json"), JSON.stringify({ name: "husky", scripts: { test: "echo ok", prepare: "git config core.hooksPath .husky" } })); g("add", "-A"); g("commit", "-qm", "init");
   const out = execFileSync("node", [CLI, "init", "--yes"], { cwd: own, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } });
-  assert.match(out, /own pre-commit in \.husky/); assert.equal(g("config", "core.hooksPath"), ".githooks");
+  assert.match(out, /own hooks in \.husky \(pre-commit\)/); assert.equal(g("config", "core.hooksPath"), ".husky", "hooksPath stays where husky put it");
+  assert.ok(fs.existsSync(path.join(own, ".husky/pre-push")) && fs.readFileSync(path.join(own, ".husky/pre-push"), "utf8").includes("factory-guardrails"), "the factory pre-push lives in .husky");
+  g("config", "core.hooksPath", ".husky");   // what `npm install` → prepare does
   fs.writeFileSync(path.join(own, "y.js"), "export const y = 1;\n"); g("add", "y.js");
-  const c = spawnSync("git", ["commit", "-qm", "y"], { cwd: own, encoding: "utf8" }); assert.equal(c.status, 0, c.stderr); assert.match(c.stderr, /HUSKY-RAN/, "the husky hook still runs through the shim");
+  const c = spawnSync("git", ["commit", "-qm", "y"], { cwd: own, encoding: "utf8" }); assert.equal(c.status, 0, c.stderr); assert.match(c.stderr, /HUSKY-RAN/, "the husky hook still runs");
+  const p = spawnSync("git", ["push", "-q", "origin", "main"], { cwd: own, encoding: "utf8" }); assert.notEqual(p.status, 0); assert.match(p.stderr, /Push to main rejected/, "the review gate survives the prepare script");
 });
 
-test("a repo with its own pre-commit and pre-push keeps them untouched (hooks.mode own) and init says so", () => {
+// A husky v9 layout: core.hooksPath=.husky/_ with shims that run .husky/<hook> through `sh -e`.
+test("husky v9 hooks are merged in place and the gate bites", () => {
+  const own = fs.mkdtempSync(path.join(os.tmpdir(), "af-husky9-"));
+  const g = (...a) => { const r = spawnSync("git", a, { cwd: own, encoding: "utf8" }); if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`); return r.stdout.trim(); };
+  g("init", "-q", "-b", "main"); g("config", "user.email", "h@example.com"); g("config", "user.name", "h");
+  fs.mkdirSync(path.join(own, ".husky/_"), { recursive: true });
+  fs.writeFileSync(path.join(own, ".husky/_/h"), '#!/usr/bin/env sh\ns=$(dirname "$(dirname "$0")")/$(basename "$0")\n[ -f "$s" ] || exit 0\nsh -e "$s" "$@"\n');
+  for (const h of ["pre-commit", "commit-msg", "pre-push", "pre-merge-commit"]) { fs.writeFileSync(path.join(own, `.husky/_/${h}`), '#!/usr/bin/env sh\n. "$(dirname "$0")/h"\n'); fs.chmodSync(path.join(own, `.husky/_/${h}`), 0o755); }
+  fs.writeFileSync(path.join(own, ".husky/pre-commit"), "echo HUSKY9-RAN >&2\n"); g("config", "core.hooksPath", ".husky/_");
+  fs.writeFileSync(path.join(own, "package.json"), JSON.stringify({ name: "husky9", scripts: { test: "echo ok" } })); g("add", "-A"); g("commit", "-qm", "init");
+  const out = execFileSync("node", [CLI, "init", "--yes"], { cwd: own, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } });
+  assert.match(out, /husky layout, core.hooksPath stays \.husky\/_/); assert.equal(g("config", "core.hooksPath"), ".husky/_");
+  assert.match(fs.readFileSync(path.join(own, ".husky/pre-commit.own"), "utf8"), /HUSKY9-RAN/);
+  fs.writeFileSync(path.join(own, "s.js"), 'const k = "sk-abcdefghijklmnopqrstuvwxyz1234567890";\n'); g("add", "s.js");
+  const bad = spawnSync("git", ["commit", "-qm", "secret"], { cwd: own, encoding: "utf8" }); assert.notEqual(bad.status, 0, "a secret is rejected behind husky"); assert.match(bad.stderr + bad.stdout, /secrets/);
+  fs.rmSync(path.join(own, "s.js")); g("reset", "-q");
+  fs.writeFileSync(path.join(own, "y.js"), "export const y = 1;\n"); g("add", "y.js");
+  const c = spawnSync("git", ["commit", "-qm", "y"], { cwd: own, encoding: "utf8" }); assert.equal(c.status, 0, c.stderr); assert.match(c.stderr, /HUSKY9-RAN/);
+  const p = spawnSync("git", ["push", "-q", "origin", "main"], { cwd: own, encoding: "utf8" }); assert.notEqual(p.status, 0); assert.match(p.stderr, /Push to main rejected/);
+  const doc = spawnSync("node", [CLI, "doctor"], { cwd: own, encoding: "utf8", env: { ...process.env, HOME: home } }); assert.equal(doc.status, 0, doc.stdout); assert.match(doc.stdout, /hook \.husky\/pre-push wired \(merge\)/);
+});
+
+test("own commit-msg and own pre-push are merged too: the protected-files gate and the review gate exist", () => {
+  const own = fs.mkdtempSync(path.join(os.tmpdir(), "af-ownmsg-"));
+  const g = (...a) => { const r = spawnSync("git", a, { cwd: own, encoding: "utf8" }); if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`); return r.stdout.trim(); };
+  g("init", "-q", "-b", "main"); g("config", "user.email", "m@example.com"); g("config", "user.name", "m");
+  fs.mkdirSync(path.join(own, ".githooks"));
+  fs.writeFileSync(path.join(own, ".githooks/commit-msg"), "#!/bin/sh\necho OWN-MSG-RAN >&2\n"); fs.writeFileSync(path.join(own, ".githooks/pre-push"), "#!/bin/sh\necho OWN-PUSH-RAN >&2\ncat > /dev/null\n");
+  for (const h of ["commit-msg", "pre-push"]) fs.chmodSync(path.join(own, `.githooks/${h}`), 0o755);
+  g("config", "core.hooksPath", ".githooks");
+  fs.writeFileSync(path.join(own, "package.json"), JSON.stringify({ name: "ownmsg", scripts: { test: "echo ok" } })); g("add", "-A"); g("commit", "-qm", "init");
+  const out = execFileSync("node", [CLI, "init", "--yes"], { cwd: own, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } });
+  assert.match(out, /own hooks in \.githooks \(commit-msg, pre-push\)/);
+  fs.appendFileSync(path.join(own, "AGENTS.md"), "\n<!-- x -->\n"); g("add", "AGENTS.md");
+  const bad = spawnSync("git", ["commit", "-qm", "touch agents"], { cwd: own, encoding: "utf8" }); assert.notEqual(bad.status, 0, "protected file without ADR rejected"); assert.match(bad.stderr + bad.stdout, /ADR-NNNN/); assert.match(bad.stderr, /OWN-MSG-RAN/, "the own commit-msg ran first");
+  g("checkout", "-q", "HEAD", "--", "AGENTS.md"); g("reset", "-q");
+  fs.writeFileSync(path.join(own, "z.js"), "export const z = 1;\n"); g("add", "z.js"); g("commit", "-qm", "z");
+  const p = spawnSync("git", ["push", "-q", "origin", "main"], { cwd: own, encoding: "utf8" }); assert.notEqual(p.status, 0); assert.match(p.stderr, /OWN-PUSH-RAN/, "the own pre-push ran (and consumed stdin)"); assert.match(p.stderr, /Push to main rejected/, "the review gate still saw the ref updates");
+});
+
+test("init --keep-own-hooks leaves the project's hooks untouched (hooks.mode own) and says so", () => {
   const own = fs.mkdtempSync(path.join(os.tmpdir(), "af-own2-"));
   const g = (...a) => execFileSync("git", a, { cwd: own, encoding: "utf8" }).trim();
   g("init", "-q", "-b", "main"); g("config", "user.email", "o@example.com"); g("config", "user.name", "o");
   fs.mkdirSync(path.join(own, ".githooks")); for (const h of ["pre-commit", "pre-push"]) { fs.writeFileSync(path.join(own, `.githooks/${h}`), "#!/bin/sh\nexit 0\n"); fs.chmodSync(path.join(own, `.githooks/${h}`), 0o755); }
+  g("config", "core.hooksPath", ".githooks");
   fs.writeFileSync(path.join(own, "package.json"), JSON.stringify({ name: "own2", scripts: { test: "echo ok" } })); g("add", "-A"); g("commit", "-qm", "init");
-  const out = execFileSync("node", [CLI, "init", "--yes"], { cwd: own, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } });
-  assert.match(out, /HOOKS: this repo has its own pre-commit and pre-push in \.githooks; the factory hooks are NOT installed/);
+  const out = execFileSync("node", [CLI, "init", "--yes", "--keep-own-hooks"], { cwd: own, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } });
+  assert.match(out, /HOOKS: --keep-own-hooks: the project's hooks in \.githooks stay as they are; the factory hooks are NOT installed/);
   assert.equal(fs.readFileSync(path.join(own, ".githooks/pre-push"), "utf8"), "#!/bin/sh\nexit 0\n"); assert.ok(!fs.existsSync(path.join(own, "tools/factory-guardrails.mjs")));
   assert.equal(JSON.parse(fs.readFileSync(path.join(own, "factory.config.json"), "utf8")).hooks.mode, "own");
   assert.match(fs.readFileSync(path.join(own, "AGENTS.md"), "utf8"), /hooks\.mode = own/, "the rendered docs say the own hooks enforce the gate");
