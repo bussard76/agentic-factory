@@ -131,9 +131,9 @@ Rules that make this safe:
 | While building | Developer | targeted: types, lint, the affected tests, the browser tests for the change |
 | Per task | Tester | **full**: verify and browser suites on current `main` plus the branch |
 | Per wave | Controller | **full** on the merged state, then push to `main` |
-| At release only | acceptance | additionally the Docker checks and a browser acceptance through the human's addresses |
+| At release only | release gate | additionally the Docker checks, the **security and load tests**, and a browser acceptance through the human's addresses |
 
-**Functional-only reviews:** a review fails only for real functional defects: a specified flow does not work or gives wrong results, data is lost, or a change would reach a real external system. Missing tests, coverage gaps, edge cases, security, load and style become debt with a follow-up and block nothing. After at most two review rounds a working feature is integrated. **Nothing is dropped:** the debt is collected by category and worked off in a **hardening phase** once the functional breadth is there. The human starts it; the Front agent proposes it. Details: [reviews.md](reviews.md), [testing.md](testing.md).
+**Functional-only reviews:** a review fails only for real functional defects: a specified flow does not work or gives wrong results, data is lost, or a change would reach a real external system. Missing tests, coverage gaps, edge cases, security, load and style become debt with a follow-up and block nothing. After at most two review rounds a working feature is integrated. **Nothing is dropped:** the debt is collected by category and worked off in a **hardening phase** once the functional breadth is there. The human starts it; the Front agent proposes it. **Mandatory before release:** load, security and the other deferred checks run before every release and are a condition of release approval; no release while such a debt item is open, unless the human accepts it in writing. Details: [reviews.md](reviews.md), [testing.md](testing.md).
 
 **Push lock:** Git rejects every push to `main` not covered by a passing independent review. Architecture changes additionally need their approval.
 

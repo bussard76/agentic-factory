@@ -25,6 +25,7 @@ New features go from the outside in. Nothing is built until {{HUMAN}} has signed
 - Tests, coverage, edge cases, security, load and style are debt candidates with a category (`tests`, `edge-case`, `security`, `load`, `style`), a severity and a one-line proposal. They never fail a review. They are collected in `docs/debt.md` and worked off in a **hardening phase** once the functional breadth is there; {{HUMAN}} starts it, the Front agent proposes it.
 - Architecture conformance is a coarse boundary check.
 - At most {{MAX_ROUNDS}} review rounds, then integrate if the feature works; open points become debt plus an acceptance item for {{HUMAN}} on the preview.
+- **Mandatory before release:** functional checks are prioritised to move fast, but the deferred categories (`security`, `load`, `tests`, `edge-case`) are paid before every release and are a condition of release approval. The release gate runs the security and load tests in addition to `{{RELEASE}}`. No release while such a debt item is open or failing, unless {{HUMAN}} accepts the specific item in writing in `docs/debt.md`. The Controller reports open debt by category in every `status.md`; the Front agent proposes the hardening phase in time.
 
 ## Test stages (decided by {{HUMAN}}, {{DATE}})
 

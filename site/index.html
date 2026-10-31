@@ -152,10 +152,10 @@
       <div>
         <p class="sub">Ein Review scheitert nur an echten Funktionsfehlern: Ein Ablauf aus der Spec läuft nicht, Daten gehen verloren, oder eine Änderung würde ein echtes externes System erreichen. Alles andere wird Schuld mit Kategorie und blockiert nichts.</p>
         <div class="rules">
-          <div class="rule"><div><b>Tests, Randfälle, Sicherheit, Last, Stil</b>werden gesammelt und in einer Härtungsphase abgearbeitet, sobald funktional eine gewisse Breite da ist.</div></div>
+          <div class="rule"><div><b>Tests, Randfälle, Sicherheit, Last, Stil</b>werden gesammelt und in einer Härtungsphase abgearbeitet, sobald funktional eine gewisse Breite da ist. Vor dem Release sind Sicherheits- und Lasttests zwingend: keine Freigabe, solange eine dieser Schulden offen ist.</div></div>
           <div class="rule"><div><b>Nach zwei Runden wird integriert</b>wenn die Funktion läuft. Offene Punkte werden Schuld plus Abnahme auf dem Preview.</div></div>
           <div class="rule"><div><b>Git erzwingt das Review</b>Ein Push nach main ohne bestandenes unabhängiges Review wird vom Hook abgelehnt. <code>--no-verify</code> ist verboten.</div></div>
-          <div class="rule"><div><b>Teststufen</b>Developer prüfen gezielt. Tester und Waves prüfen voll. Docker nur beim Release.</div></div>
+          <div class="rule"><div><b>Teststufen</b>Developer prüfen gezielt. Tester und Waves prüfen voll. Docker, Sicherheit und Last beim Release, als Bedingung der Freigabe.</div></div>
         </div>
       </div>
       <div>

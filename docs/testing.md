@@ -7,9 +7,11 @@ Decided by the owner on 2026-10-30 after full suites for every Developer pushed 
 | While building | Developer | **targeted**: typecheck, lint, the suites of the packages it touched, the browser specs that cover its change |
 | Per task | Tester | **full**: `commands.verify` and `commands.e2e` on current `main` plus the branch, in a clean worktree |
 | Per wave | Controller | **full** on the merged integration branch, then push to `main` |
-| Release only | release gate, when the human declares a release | additionally `commands.release` (Docker images, compose end-to-end) and a browser acceptance through the human's real addresses |
+| Release only | release gate, when the human declares a release | additionally `commands.release` (Docker images, compose end-to-end), the **security and load tests**, and a browser acceptance through the human's real addresses |
 
 Docker runs **only** at release. Not per task, not per wave. This was corrected explicitly after it had crept back in once.
+
+**The release gate is mandatory, not optional (decided by the owner, 2026-10-31).** Functional checks are prioritised during development so the product moves fast; the deferred categories are paid before release: security tests (dependency audit, the threat-model checks, a security review of the release candidate), load tests (the flows under realistic concurrency), and the test and edge-case debt from the register. No release approval while any of these is open or failing, unless the human accepts a specific item in writing.
 
 ## Gates run in fair slots
 

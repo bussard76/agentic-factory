@@ -34,6 +34,8 @@ Everything else is a **debt candidate**, listed with a category, a severity and 
 
 Nothing is dropped. Debt is collected in `docs/debt.md` and worked off in a **hardening phase** once the functional surface has enough breadth. The human starts that phase; the Front agent proposes it.
 
+**Mandatory before release (decided by the owner, 2026-10-31).** Functional tests come first so the product moves fast. Load, security and the other deferred checks are not optional: they run before every release and are a **condition of release approval**. The release gate is not passed while a `security`, `load`, `tests` or `edge-case` debt item is open, unless the human has explicitly accepted it in writing in `docs/debt.md`. The Front agent proposes the hardening phase in time; the Controller reports the open debt by category in every status.
+
 ## Threat model for security findings
 
 Judge security findings against an attacker **without write access to the human's machine**: web pages, network requests, crafted URLs, untrusted content inside the human's data. Those can be blockers when a change could reach a real external system. Attackers who can already change files in the repository or the user account are out of scope as blockers; record those findings as debt with a cheap hardening idea. State the attacker position in every security finding.

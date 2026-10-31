@@ -16,7 +16,7 @@ Every task branch is reviewed by an **independent Tester** before it is integrat
 
 The verdict is `fail` **only** for a real functional defect: a specified flow does not work or gives wrong results, data is lost, or a change could reach a real external system (production, real accounts, {{HUMAN}}'s real data). Evidence: the full suites plus checking the changed flows in the browser.
 
-Missing or weak tests, coverage gaps, edge cases, security, load and style are **debt candidates** with a category (`tests`, `edge-case`, `security`, `load`, `style`), a severity and a one-line proposal. They never fail the review.
+Missing or weak tests, coverage gaps, edge cases, security, load and style are **debt candidates** with a category (`tests`, `edge-case`, `security`, `load`, `style`), a severity and a one-line proposal. They never fail the review. They are not dropped: every debt candidate goes into `docs/debt.md`, and the categories `security`, `load`, `tests` and `edge-case` are paid before release. The release gate is not passed while one of them is open, unless {{HUMAN}} accepts the item in writing.
 
 ## Reviewer rules
 
