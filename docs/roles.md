@@ -4,7 +4,7 @@ Five kinds of participants. The human talks to exactly one of them.
 
 | Role | Where it runs | Does | Never does |
 |---|---|---|---|
-| **Human** (the owner) | wherever they are | sets goals and priorities, tests on the preview with real data, decides level-3 architecture and everything with an outward effect | – |
+| **Human** (the owner) | wherever they are | sets goals and priorities, tests on the preview with real data, decides level-3 architecture and everything that touches real external systems or real data | – |
 | **Front agent** | an agent session on the human's machine (Claude Code, Codex or Pi) | the only contact for the human. Takes wishes and test findings, turns them into tickets and specs, runs the outside-in stages, asks decisions one question at a time, reports the status as one table, writes the morning handover | steer workers itself; show the human the back-and-forth of the workers |
 | **Controller** | an agent session on the server, unattended | starts and steers every worker, schedules tests, reviews and waves, detects stuck workers, cleans up, writes `status.md` after every cycle, runs the auditor and retros | talk to the human directly; take level-3, ADR or product decisions (those go to the human as questions) |
 | **Workers** | one per task, each in its own worktree and terminal | see below | push to `main`; weaken tests |
@@ -29,7 +29,7 @@ Workers are named by task and role, for example `T54 Meeting · Worker Tester`, 
 |---|---|---|
 | 1 | a change inside one module that keeps its public API | the Developer, checked by the Tester |
 | 2 | a new or changed public export, a new dependency, a new route | the Controller, after the Architect's spec review; the decision is written into the task or a decisions file |
-| 3 | new module responsibilities, contracts, data flows, technology, anything with an outward effect | the human, through an ADR with options and a recommendation |
+| 3 | new module responsibilities, contracts, data flows, technology, anything that touches real external systems or real data | the human, through an ADR with options and a recommendation |
 
 The Front agent asks the human **one question at a time**, multiple choice, with the recommended option first.
 

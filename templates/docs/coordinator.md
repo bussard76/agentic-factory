@@ -21,7 +21,7 @@ New features go from the outside in. Nothing is built until {{HUMAN}} has signed
 
 ## Functionality first (decided by {{HUMAN}}, {{DATE}})
 
-- A review fails only for a real functional defect: a specified flow does not work or gives wrong results, data is lost, or a real outward effect could happen.
+- A review fails only for a real functional defect: a specified flow does not work or gives wrong results, data is lost, or a change could reach a real external system (production, real accounts, {{HUMAN}}'s real data).
 - Tests, coverage, edge cases, security, load and style are debt candidates with a category (`tests`, `edge-case`, `security`, `load`, `style`), a severity and a one-line proposal. They never fail a review. They are collected in `docs/debt.md` and worked off in a **hardening phase** once the functional breadth is there; {{HUMAN}} starts it, the Front agent proposes it.
 - Architecture conformance is a coarse boundary check.
 - At most {{MAX_ROUNDS}} review rounds, then integrate if the feature works; open points become debt plus an acceptance item for {{HUMAN}} on the preview.
@@ -80,7 +80,7 @@ Close finished workers' terminals, release or abandon their dispatches, remove w
 
 ## Data and safety rules (never delegate, never relax)
 
-- Nothing leaves the system without {{HUMAN}}'s click: no sending, posting, inviting, accepting, deleting or writing to external systems.
+- No outward effects: agents and their tests change nothing outside the repository and the demo or test environment (no production systems, real accounts, sending, deploying or deleting). Whether the product acts on external systems is a product decision recorded in this project's docs.
 - Tests run on demo data or a private copy of {{HUMAN}}'s data. The original is never written or deleted.
 - No real data in the repo: no company values, names, addresses or secrets in code, tests, fixtures, reports or status files. `.env` is never committed. Filter `pair|token|code=` from any printed output.
 - Workers never push to `{{MAIN}}`. `--no-verify` is forbidden. No real model calls in tests.

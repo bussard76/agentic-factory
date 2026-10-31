@@ -122,7 +122,7 @@
     <h2>Rollen mit klaren Grenzen</h2>
     <p class="sub">Jede Rolle hat ein „macht nie“. Daraus entsteht der Gegendruck, der Qualität erzeugt: Niemand nimmt seine eigene Arbeit ab.</p>
     <div class="grid">
-      <div class="card"><h3>Mensch</h3><p>Ziele, Prioritäten, Tests mit echten Daten auf dem Preview, Entscheidungen auf Stufe 3 und alles, was nach außen wirkt.</p></div>
+      <div class="card"><h3>Mensch</h3><p>Ziele, Prioritäten, Tests mit echten Daten auf dem Preview, Entscheidungen auf Stufe 3 und alles, was echte externe Systeme oder echte Daten berührt.</p></div>
       <div class="card"><h3>Front-Agent</h3><p>Einzige Ansprechstelle. Wünsche und Befunde werden Tickets und Specs, Entscheidungen werden als eine Frage mit Optionen gestellt, der Stand kommt als Tabelle.</p><p class="never"><b>Macht nie:</b> Worker steuern.</p></div>
       <div class="card"><h3>Controller</h3><p>Startet und taktet Worker, Tests, Reviews und Waves. Erkennt Hänger, räumt auf, schreibt nach jedem Zyklus den Status. Läuft auf dem eigenen Rechner oder einem Server.</p><p class="never"><b>Macht nie:</b> mit dem Menschen sprechen, Stufe 3 entscheiden.</p></div>
       <div class="card"><h3>Developer</h3><p>Baut genau einen Auftrag testgetrieben auf eigenem Branch, mit Checkliste und Selbst-Review gegen die Spec.</p><p class="never"><b>Macht nie:</b> nach main pushen, Tests abschwächen.</p></div>
@@ -150,7 +150,7 @@
     <h2>Erst muss es funktionieren</h2>
     <div class="two">
       <div>
-        <p class="sub">Ein Review scheitert nur an echten Funktionsfehlern: Ein Ablauf aus der Spec läuft nicht, Daten gehen verloren, oder etwas Echtes würde nach außen wirken. Alles andere wird Schuld mit Kategorie und blockiert nichts.</p>
+        <p class="sub">Ein Review scheitert nur an echten Funktionsfehlern: Ein Ablauf aus der Spec läuft nicht, Daten gehen verloren, oder eine Änderung würde ein echtes externes System erreichen. Alles andere wird Schuld mit Kategorie und blockiert nichts.</p>
         <div class="rules">
           <div class="rule"><div><b>Tests, Randfälle, Sicherheit, Last, Stil</b>werden gesammelt und in einer Härtungsphase abgearbeitet, sobald funktional eine gewisse Breite da ist.</div></div>
           <div class="rule"><div><b>Nach zwei Runden wird integriert</b>wenn die Funktion läuft. Offene Punkte werden Schuld plus Abnahme auf dem Preview.</div></div>
@@ -219,7 +219,7 @@ npx agentic-factory update    # holt Verbesserungen der Fabrik nach</pre>
       <div class="rules">
         <div class="rule"><div><b>Ein Start, kein Endzustand</b>Jedes Projekt bekommt seine Kopie und entwickelt sie weiter. Was sich bewährt, wandert zurück in die Fabrik.</div></div>
         <div class="rule"><div><b>Teilbar</b>Keine Spur eines konkreten Projekts im Repo. Alles Spezifische steht in einer Konfigurationsdatei.</div></div>
-        <div class="rule"><div><b>Feste Regeln</b>Keine echten Daten, keine Geheimnisse, nichts nach außen ohne Klick, Worker pushen nie nach main, Hooks werden nie umgangen.</div></div>
+        <div class="rule"><div><b>Feste Regeln</b>Keine echten Daten, keine Geheimnisse, die Fabrik wirkt nicht nach außen, Worker pushen nie nach main, Hooks werden nie umgangen.</div></div>
       </div>
     </div>
   </section>

@@ -14,7 +14,7 @@ Every task branch is reviewed by an **independent Tester** before it is integrat
 
 ## Review rule: functional only (decided by {{HUMAN}}, {{DATE}})
 
-The verdict is `fail` **only** for a real functional defect: a specified flow does not work or gives wrong results, data is lost, or a real outward effect could happen (sending, writing to an external system, touching {{HUMAN}}'s real data). Evidence: the full suites plus checking the changed flows in the browser.
+The verdict is `fail` **only** for a real functional defect: a specified flow does not work or gives wrong results, data is lost, or a change could reach a real external system (production, real accounts, {{HUMAN}}'s real data). Evidence: the full suites plus checking the changed flows in the browser.
 
 Missing or weak tests, coverage gaps, edge cases, security, load and style are **debt candidates** with a category (`tests`, `edge-case`, `security`, `load`, `style`), a severity and a one-line proposal. They never fail the review.
 
@@ -31,14 +31,14 @@ Missing or weak tests, coverage gaps, edge cases, security, load and style are *
 
 ## Threat model for security findings
 
-Judge against an attacker **without write access to {{HUMAN}}'s machine**: web pages, network requests, crafted URLs, untrusted content in {{HUMAN}}'s data. Such findings are blockers only when they could cause a real outward effect; otherwise debt. Attackers who can already change files in the repo or the user account are out of scope as blockers; record as debt with a cheap hardening idea. State the attacker position.
+Judge against an attacker **without write access to {{HUMAN}}'s machine**: web pages, network requests, crafted URLs, untrusted content in {{HUMAN}}'s data. Such findings are blockers only when a change could reach a real external system; otherwise debt. Attackers who can already change files in the repo or the user account are out of scope as blockers; record as debt with a cheap hardening idea. State the attacker position.
 
 ## What the reviewer checks
 
 1. **Spec compliance:** turn every requirement into a checklist row with the implementing code and the proving test, or "missing". Scope creep is a finding.
 2. **Architecture level:** confirm the stated level; account for every new public export, dependency and import. A wrong level or unannounced architectural change is a `blocker`.
 3. **Functional flows** in the browser or through the public API, with the demo data.
-4. **Outward effects:** nothing sends, posts, invites, deletes or writes externally without {{HUMAN}}'s explicit click with a preview.
+4. **No outward effects:** the change and its tests reach no real external system (production, real accounts, {{HUMAN}}'s real data); demo and mock only.
 5. **Data rule:** no real identifiers, no secrets, `.env` not touched.
 6. **Tests:** do they assert behaviour? Would they fail without the feature? Did the count drop? (Under the functional-only rule, weak tests are debt, not majors.)
 
@@ -67,7 +67,7 @@ Ponytail: <result on the full task diff>
 | Category | Severity | Where | Proposal |
 ```
 
-**Severity:** `blocker` for a functional defect, broken invariant or data rule, failing gate, or possible outward effect; `major` for a spec requirement missing or wrong; `minor` for quality. `pass` requires zero blockers and zero majors.
+**Severity:** `blocker` for a functional defect, broken invariant or data rule, failing gate, or a possible change to a real external system; `major` for a spec requirement missing or wrong; `minor` for quality. `pass` requires zero blockers and zero majors.
 
 ## Push enforcement
 

@@ -29,7 +29,7 @@ flowchart LR
 
 | Rolle | Wer / wo | Macht | Macht nie |
 |---|---|---|---|
-| **Mensch** | der Eigentümer | Ziele und Prioritäten, testet auf dem Preview mit echten Daten, entscheidet Architektur auf Stufe 3 und alles, was nach außen wirkt | – |
+| **Mensch** | der Eigentümer | Ziele und Prioritäten, testet auf dem Preview mit echten Daten, entscheidet Architektur auf Stufe 3 und alles, was echte externe Systeme oder echte Daten berührt | – |
 | **Front-Agent** | Agenten-Sitzung auf dem Rechner des Menschen | Einzige Ansprechstelle. Nimmt Wünsche und Testbefunde auf, macht daraus Tickets und Specs, führt die Stufen von außen nach innen, holt Entscheidungen ein, berichtet den Stand als Tabelle, schreibt die Morgen-Übergabe | Worker selbst steuern; den Menschen mit dem Hin und Her der Worker belasten |
 | **Controller** | Agenten-Sitzung auf dem Server, unbeaufsichtigt | Startet und steuert alle Worker, taktet Tests, Reviews und Waves, erkennt hängende Worker, räumt auf, schreibt nach jedem Zyklus einen Status | Mit dem Menschen direkt sprechen; Stufe-3-Architektur, ADRs oder Produktentscheidungen treffen |
 | **Developer** | Worker (Codex, Claude Code oder Pi) | Baut genau einen Auftrag, testgetrieben, auf eigenem Branch | Nach `main` pushen, Tests abschwächen |
@@ -137,7 +137,7 @@ Regeln, die das sicher machen:
 | Pro Wave | Controller | **voll** auf dem zusammengeführten Stand, dann Push nach `main` |
 | Beim Release (nur auf Zuruf) | Abnahme | zusätzlich Docker-Prüfungen und Browser-Abnahme über die echten Adressen |
 
-**Nur funktional prüfen:** Ein Review scheitert nur an echten Funktionsfehlern: Ein Ablauf aus der Spec läuft nicht oder liefert falsche Ergebnisse, Daten gehen verloren, oder etwas Echtes würde nach außen wirken. Fehlende Tests, Abdeckungslücken, Randfälle, Sicherheit, Last und Stil werden Schulden mit Folgeaufgabe und blockieren nichts. Nach höchstens zwei Review-Runden wird integriert, wenn die Funktion läuft. **Nichts davon entfällt:** Die Schulden werden mit Kategorie gesammelt und in einer eigenen **Härtungsphase** abgearbeitet, sobald funktional eine gewisse Breite erreicht ist. Der Mensch startet sie, der Front-Agent schlägt sie vor. Ausnahme: Alles, was etwas Echtes nach außen bewirken könnte, bleibt ein Blocker.
+**Nur funktional prüfen:** Ein Review scheitert nur an echten Funktionsfehlern: Ein Ablauf aus der Spec läuft nicht oder liefert falsche Ergebnisse, Daten gehen verloren, oder eine Änderung würde ein echtes externes System erreichen. Fehlende Tests, Abdeckungslücken, Randfälle, Sicherheit, Last und Stil werden Schulden mit Folgeaufgabe und blockieren nichts. Nach höchstens zwei Review-Runden wird integriert, wenn die Funktion läuft. **Nichts davon entfällt:** Die Schulden werden mit Kategorie gesammelt und in einer eigenen **Härtungsphase** abgearbeitet, sobald funktional eine gewisse Breite erreicht ist. Der Mensch startet sie, der Front-Agent schlägt sie vor. Ausnahme: Alles, was ein echtes externes System erreichen könnte, bleibt ein Blocker.
 
 **Push-Sperre:** Git lehnt jeden Push nach `main` ab, der nicht durch ein bestandenes unabhängiges Review gedeckt ist. Architekturänderungen brauchen zusätzlich ihre Freigabe.
 
@@ -216,7 +216,7 @@ Bei jedem Ereignis eines Workers, sonst alle 10 Minuten:
 
 ## Feste Regeln, die nie verhandelt werden
 
-- **Nichts nach außen ohne Klick:** kein Senden, Posten, Einladen oder Zusagen ohne Vorschau und Bestätigung des Menschen.
+- **Die Fabrik wirkt nicht nach außen.** Agenten und ihre Tests verändern nichts außerhalb von Repository und Demo- oder Testumgebung: keine Produktivsysteme, keine echten Konten, keine echten Daten, kein Senden, Deployen oder Löschen. Ob und wie das *Produkt* auf externe Systeme wirkt, ist eine Produktentscheidung des Projekts.
 - **Echte Daten unantastbar:** Tests laufen im Demo oder auf einer privaten Kopie. Im Original wird nie geschrieben oder gelöscht.
 - **Keine echten Daten im Repo:** keine Firmenwerte, Namen, Adressen oder Geheimnisse in Code, Tests, Fixtures oder Berichten. `.env` wird nie committet, Geheimnisse werden nie ausgegeben.
 - **Worker pushen nie nach `main`.**

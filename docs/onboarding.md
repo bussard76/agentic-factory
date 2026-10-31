@@ -14,7 +14,7 @@
 | 8 | **Commands:** install, typecheck, lint, unit, verify, e2e, release | the test stages, the gate and the wave call exactly these | read from `package.json` scripts where present |
 | 9 | **Preview on the human's machine:** enabled, port, start command, env file | the human accepts on a local build that follows `main` | enabled, 8180 |
 | 10 | **Review rules:** functional-only, max rounds, wave triggers | back pressure without blocking on non-functional findings | functional-only, 2 rounds, wave at 2 passed tasks or 60 minutes |
-| 11 | **Hard rules to confirm:** no real data in the repo, no secrets, no outward effects without the human's click, `--no-verify` forbidden, workers never push to `main` | they are printed and the human confirms each; they end up in `AGENTS.md` and `docs/coordinator.md` | all confirmed |
+| 11 | **Hard rules to confirm:** no real data in the repo, no secrets, no outward effects from the factory (nothing outside the repo and the demo environment), `--no-verify` forbidden, workers never push to `main` | they are printed and the human confirms each; they end up in `AGENTS.md` and `docs/coordinator.md` | all confirmed |
 | 12 | **Design tool:** Figma MCP, Pencil, none | stage 1 of outside-in and the export convention `design/<feature>/` | Figma if its MCP endpoint answers locally |
 
 After the answers, `init`:

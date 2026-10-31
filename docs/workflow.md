@@ -29,7 +29,7 @@ flowchart LR
 
 | Role | Who / where | Does | Never does |
 |---|---|---|---|
-| **Human** | the owner | goals and priorities, tests on the preview with real data, decides level-3 architecture and everything with an outward effect | – |
+| **Human** | the owner | goals and priorities, tests on the preview with real data, decides level-3 architecture and everything that touches real external systems or real data | – |
 | **Front agent** | agent session on the human's machine | the only contact for the human. Takes wishes and test findings, turns them into tickets and specs, runs the outside-in stages, asks decisions one at a time, reports the status as a table, writes the morning handover | steer workers itself; burden the human with the workers' back-and-forth |
 | **Controller** | agent session on the server, unattended | starts and steers all workers, schedules tests, reviews and waves, detects stuck workers, cleans up, writes a status after every cycle | talk to the human directly; take level-3, ADR or product decisions |
 | **Developer** | worker (Codex, Claude Code or Pi) | builds exactly one task, test-first, on its own branch | push to `main`, weaken tests |
@@ -133,7 +133,7 @@ Rules that make this safe:
 | Per wave | Controller | **full** on the merged state, then push to `main` |
 | At release only | acceptance | additionally the Docker checks and a browser acceptance through the human's addresses |
 
-**Functional-only reviews:** a review fails only for real functional defects: a specified flow does not work or gives wrong results, data is lost, or something real would leave the system. Missing tests, coverage gaps, edge cases, security, load and style become debt with a follow-up and block nothing. After at most two review rounds a working feature is integrated. **Nothing is dropped:** the debt is collected by category and worked off in a **hardening phase** once the functional breadth is there. The human starts it; the Front agent proposes it. Details: [reviews.md](reviews.md), [testing.md](testing.md).
+**Functional-only reviews:** a review fails only for real functional defects: a specified flow does not work or gives wrong results, data is lost, or a change would reach a real external system. Missing tests, coverage gaps, edge cases, security, load and style become debt with a follow-up and block nothing. After at most two review rounds a working feature is integrated. **Nothing is dropped:** the debt is collected by category and worked off in a **hardening phase** once the functional breadth is there. The human starts it; the Front agent proposes it. Details: [reviews.md](reviews.md), [testing.md](testing.md).
 
 **Push lock:** Git rejects every push to `main` not covered by a passing independent review. Architecture changes additionally need their approval.
 
@@ -207,7 +207,7 @@ A journal of every event, a nightly **Pipeline Auditor**, a **retro** per hard a
 
 ## Fixed rules, never negotiated
 
-- **Nothing leaves the system without the human's click:** no sending, posting, inviting or accepting without a preview and the human's confirmation.
+- **The factory has no outward effects.** Agents and their tests change nothing outside the repository and the demo or test environment: no production systems, no real accounts, no real data, no sending, deploying or deleting. Whether and how the *product* acts on external systems is a product decision of the project, recorded in its own docs.
 - **The human's real data is untouchable:** tests run on demo data or a private copy. Nothing is written or deleted in the original.
 - **No real data in the repo:** no company values, names, addresses or secrets in code, tests, fixtures or reports. `.env` is never committed, secrets are never printed.
 - **Workers never push to `main`;** only reviewed state through a wave.

@@ -37,9 +37,9 @@ Every task records `## Architecture impact` (level, modules and boundaries; leve
 
 No real data in code, fixtures, tests or logs. Demo data is invented. Never read {{HUMAN}}'s real data or real external services from a worker. `.env` is never committed. Never print secrets.
 
-## Outward effects
+## No outward effects
 
-Nothing leaves the system without {{HUMAN}}'s explicit click: no sending, posting, inviting, deleting or writing to an external system. Drafts and previews only.
+Agents and their tests change nothing outside the repository and the demo or test environment: no production systems, no real accounts, no real data, no sending, deploying or deleting. Whether and how the product acts on external systems is a product decision recorded in this project's docs.
 
 ## Language
 

@@ -73,7 +73,7 @@ The human talks only to the Front agent and sees one status table. The Controlle
 3. **Back pressure, not trust.** The reviewer is never the builder. The reviewer runs the gates itself. Git enforces review coverage on `main`.
 4. **Measure, then decide.** Capacity, flakiness and process changes come from the journal and the load log, not from feelings.
 5. **Decisions are written down the moment they are made**, with who decided and why, in the project's handbooks.
-6. **Nothing real leaves the system without the human's click.** No sending, posting, inviting or deleting in anything external.
+6. **The factory has no outward effects.** Agents and their tests change nothing outside the repository and the demo or test environment: no production systems, no real accounts, no real data, no sending, deploying or deleting. Whether and how the *product* acts on external systems is a product decision of the project, recorded in its own docs.
 7. **No real data, no secrets, no `--no-verify`.** Ever.
 
 ## Repository layout

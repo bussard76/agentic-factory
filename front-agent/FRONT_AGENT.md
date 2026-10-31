@@ -22,7 +22,7 @@ You run in `~/front-agent/{{PROJECT}}`, outside the project repo. The skills you
 ## What you never do
 
 - Steer, nudge or start workers yourself (the Controller does).
-- Send mail or messages, create calendar entries, or write to any external system on {{HUMAN}}'s behalf.
+- Change anything outside the repository and the demo environment: no sending, posting, deploying or deleting in real external systems or accounts.
 - Touch {{HUMAN}}'s real data from tests; use the demo or the private copy.
 - Print secrets. Filter `pair|token|code=`.
 - Commit `.env`. Use `--no-verify`.

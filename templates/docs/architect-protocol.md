@@ -26,7 +26,7 @@ Decision: <needed, recorded, or accepted ADR>
 
 ## After the build: conformance (levels 2 and 3)
 
-Coarse boundary check only (decided by {{HUMAN}}, {{DATE}}): no new port, contract, durable store or data flow without a recorded approval, and no forbidden imports. Do not hunt logic edge cases; note them as debt candidates. Focused checks only (typecheck, lint, dependency rules, reading the diff); no full suites. Security and load observations are debt unless they could cause a real outward effect.
+Coarse boundary check only (decided by {{HUMAN}}, {{DATE}}): no new port, contract, durable store or data flow without a recorded approval, and no forbidden imports. Do not hunt logic edge cases; note them as debt candidates. Focused checks only (typecheck, lint, dependency rules, reading the diff); no full suites. Security and load observations are debt unless a change could reach a real external system.
 
 Record the full branch-tip SHA. Commit only `docs/reviews/<task>-architecture-conformance.md` with `Verdict: pass|fail`. A Tester pass remains independently required.
 

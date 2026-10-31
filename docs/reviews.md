@@ -20,7 +20,7 @@ A review fails **only** for a real functional defect:
 
 - a specified flow does not work or gives wrong results
 - data is lost
-- a real outward effect could happen (sending, writing to an external system, touching the human's real data)
+- a change could reach a real external system (production, real accounts, the human's real data)
 
 Everything else is a **debt candidate**, listed with a category, a severity and a one-line proposal, and never fails the review:
 
@@ -36,7 +36,7 @@ Nothing is dropped. Debt is collected in `docs/debt.md` and worked off in a **ha
 
 ## Threat model for security findings
 
-Judge security findings against an attacker **without write access to the human's machine**: web pages, network requests, crafted URLs, untrusted content inside the human's data. Those can be blockers when they would cause a real outward effect. Attackers who can already change files in the repository or the user account are out of scope as blockers; record those findings as debt with a cheap hardening idea. State the attacker position in every security finding.
+Judge security findings against an attacker **without write access to the human's machine**: web pages, network requests, crafted URLs, untrusted content inside the human's data. Those can be blockers when a change could reach a real external system. Attackers who can already change files in the repository or the user account are out of scope as blockers; record those findings as debt with a cheap hardening idea. State the attacker position in every security finding.
 
 ## Git enforces the gate
 
@@ -70,4 +70,4 @@ Ponytail: <ponytail-review result on the full task diff>
 | Category | Severity | Where | Proposal |
 ```
 
-`blocker`: functional defect, broken invariant or data rule, failing gate, possible outward effect. `major`: a spec requirement missing or wrong. `minor`: quality. A `pass` needs zero blockers and zero majors; under functional-only rules, test and quality gaps are debt candidates rather than majors.
+`blocker`: functional defect, broken invariant or data rule, failing gate, a possible change to a real external system. `major`: a spec requirement missing or wrong. `minor`: quality. A `pass` needs zero blockers and zero majors; under functional-only rules, test and quality gaps are debt candidates rather than majors.
