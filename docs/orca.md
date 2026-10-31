@@ -31,7 +31,17 @@ The Controller itself runs **on the server**, in an Orca terminal, so it survive
 - **Run a script on the server:** `runscript.mjs` creates a terminal in the integration worktree with the script inlined (no shell quoting of long content).
 - **Clean up:** `cleanup.mjs` closes idle terminals of finished worktrees and removes them with `orca worktree rm --force`; dispatches are released with `worker-release` or `worker-abandon`.
 
-## Skills
+## Skills: required on every Controller and Front-agent host
+
+The Controller and the Front agent run **outside** the project repo (`~/controller`, `~/front-agent/<project>`), so the project's `.agents/skills` are invisible to them. The Orca skills must therefore be installed **at user level** (`~/.claude/skills`, `~/.agents/skills`) on every host that runs one of them:
+
+```bash
+agentic-factory install-skills            # on your machine
+# on a remote controller host (the bundle carries the skills):
+mkdir -p ~/.claude/skills ~/.agents/skills && cp -R ~/controller/skills/* ~/.claude/skills/ && cp -R ~/controller/skills/* ~/.agents/skills/
+```
+
+Without `orchestration` and `orca-cli` the agents do not know how to start, watch, nudge or release workers. `agentic-factory doctor` and `server/4-verify.sh` check for them.
 
 Two Orca skills are vendored as **discovery stubs** (`skills/orca-cli`, `skills/orchestration`). They do not contain the guide; they tell the agent to load the version-matched one from the binary it will actually run:
 

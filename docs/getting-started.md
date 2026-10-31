@@ -49,7 +49,15 @@ git commit -m "Adopt agentic-factory (ADR-0001)"
 
 The ADR reference is required: `AGENTS.md`, the hooks and the ADR folder are protected files. Try committing without it once to see the hook speak. Then run `agentic-factory doctor`; everything should be `OK` except the Controller, which is not running yet.
 
-## 4. Start the Controller
+## 4. Install the skills at user level, then start the Controller
+
+The Controller and the Front agent run outside the repo, so they do not see the project's `.agents/skills`. Install the skills they depend on at user level, on **every** host that runs one of them. The Orca skills are the critical ones: without `orchestration` and `orca-cli` an agent cannot start, watch or release workers.
+
+```bash
+agentic-factory install-skills            # ~/.claude/skills and ~/.agents/skills on this machine
+```
+
+Then the Controller:
 
 ```bash
 cp -R .factory/controller ~/controller
@@ -110,7 +118,7 @@ If you enabled the preview, `front-agent/preview-update.sh` keeps a separate clo
 
 ## 9. Later: a remote server, more hosts, the night shift
 
-- **Remote server:** follow [server-setup.md](server-setup.md) with `.factory/server/`, add the host to `factory.config.json` → `hosts.workers`, set `hosts.controller.host` to it if the Controller should move there, run `agentic-factory update`, copy the new `.factory/controller/` bundle to the server. Several hosts work the same way; `start.mjs --on <host>` picks one.
+- **Remote server:** follow [server-setup.md](server-setup.md) with `.factory/server/`, add the host to `factory.config.json` → `hosts.workers`, set `hosts.controller.host` to it if the Controller should move there, run `agentic-factory update`, copy the new `.factory/controller/` bundle to the server, and install the user-level skills there from the bundle (`cp -R ~/controller/skills/* ~/.claude/skills/ && cp -R ~/controller/skills/* ~/.agents/skills/`). Several hosts work the same way; `start.mjs --on <host>` picks one.
 - **Rhythm:** `rhythm.mode` switches between day-plan/night-build, continuous and custom quiet hours.
 - **Calibration:** leave `capacity.calibration.mode` and `agents.calibration` on `auto`. The caps and model tiers start low and move with the measurements; the nightly audit tells you what changed and why.
 - **GitHub issues** instead of task files: `steering.mode: github-issues`, create the labels, run `setup-matt-pocock-skills` once so `wayfinder`, `to-tickets` and `to-spec` use the same tracker.

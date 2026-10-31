@@ -49,7 +49,15 @@ git commit -m "Adopt agentic-factory (ADR-0001)"
 
 Der ADR-Verweis ist Pflicht: `AGENTS.md`, die Hooks und der ADR-Ordner sind geschützte Dateien. Probiere einmal einen Commit ohne den Verweis, um den Hook sprechen zu hören. Danach `agentic-factory doctor`: Alles sollte `OK` sein außer dem Controller, der noch nicht läuft.
 
-## 4. Den Controller starten
+## 4. Die Skills auf Benutzerebene installieren, dann den Controller starten
+
+Controller und Front-Agent laufen außerhalb des Repos und sehen die `.agents/skills` des Projekts nicht. Installiere die Skills, auf die sie angewiesen sind, auf Benutzerebene, und zwar auf **jedem** Host, auf dem einer von beiden läuft. Entscheidend sind die Orca-Skills: Ohne `orchestration` und `orca-cli` kann ein Agent keine Worker starten, beobachten oder freigeben.
+
+```bash
+agentic-factory install-skills            # ~/.claude/skills und ~/.agents/skills auf diesem Rechner
+```
+
+Dann der Controller:
 
 ```bash
 cp -R .factory/controller ~/controller
@@ -110,7 +118,7 @@ Wenn du den Preview aktiviert hast, hält `front-agent/preview-update.sh` einen 
 
 ## 9. Später: Remote-Server, mehr Hosts, die Nachtschicht
 
-- **Remote-Server:** [server-setup.md](../server-setup.md) mit `.factory/server/` durchgehen, den Host in `factory.config.json` → `hosts.workers` eintragen, `hosts.controller.host` darauf setzen, wenn der Controller dorthin ziehen soll, `agentic-factory update` ausführen, das neue `.factory/controller/`-Bündel auf den Server kopieren. Mehrere Hosts gehen genauso; `start.mjs --on <host>` wählt einen.
+- **Remote-Server:** [server-setup.md](../server-setup.md) mit `.factory/server/` durchgehen, den Host in `factory.config.json` → `hosts.workers` eintragen, `hosts.controller.host` darauf setzen, wenn der Controller dorthin ziehen soll, `agentic-factory update` ausführen, das neue `.factory/controller/`-Bündel auf den Server kopieren und dort die Skills auf Benutzerebene aus dem Bündel installieren (`cp -R ~/controller/skills/* ~/.claude/skills/ && cp -R ~/controller/skills/* ~/.agents/skills/`). Mehrere Hosts gehen genauso; `start.mjs --on <host>` wählt einen.
 - **Rhythmus:** `rhythm.mode` schaltet zwischen tags planen/nachts bauen, durchgehend und eigenen Ruhezeiten.
 - **Kalibrierung:** `capacity.calibration.mode` und `agents.calibration` auf `auto` lassen. Obergrenzen und Modellstufen starten niedrig und folgen den Messungen; der nächtliche Audit sagt dir, was sich geändert hat und warum.
 - **GitHub-Issues** statt Task-Dateien: `steering.mode: github-issues`, die Labels anlegen, einmal `setup-matt-pocock-skills` ausführen, damit `wayfinder`, `to-tickets` und `to-spec` denselben Tracker nutzen.

@@ -33,11 +33,19 @@ npx github:<your-fork>/agentic-factory init     # or: npx agentic-factory init, 
 
 `init` is the onboarding. It asks the questions a new project has to answer, writes `factory.config.json`, copies the handbooks, templates, hooks and skills into your repo, and prints the next steps for the human (logins, pairing, loading the preview). It never touches an existing file without showing the diff. [`docs/onboarding.md`](docs/onboarding.md) explains every question.
 
+Then, on **every machine that runs a Controller or a Front agent**:
+
+```bash
+npx agentic-factory install-skills   # the Orca skills (orchestration, orca-cli) and the coordination skills at user level
+```
+
+Those two sessions run outside the project repo and cannot see its `.agents/skills`. Without the Orca skills an agent cannot start, watch or release workers; this is the one step people forget.
+
 Later:
 
 ```bash
 npx agentic-factory update    # pull newer templates and scripts, shown as a diff first
-npx agentic-factory doctor    # check hosts, tools, hooks and config
+npx agentic-factory doctor    # check hosts, tools, hooks, user-level skills and config
 ```
 
 ## How it works, in one picture

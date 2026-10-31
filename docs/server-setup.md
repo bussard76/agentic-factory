@@ -20,7 +20,7 @@ Steps marked **[human]** need the human's credentials.
 6. `sudo bash 3-root-finish.sh`: Playwright system packages; with Orca, `orca.service` bound to the Tailscale address, started and enabled.
 7. **[human]** With Orca: take the pairing code from the service log and pair your machine (`orca environment add --name <env> --pairing-code '<code>'`). Pair without a mobile code; a mobile pairing cannot create repos or start workers. Register the repo on the server with `orca repo add --path ~/projects/<name>` and put the printed repo id into `factory.config.json`.
 8. `bash 4-verify.sh --gates` as `developer`: checks every tool and login, then runs the full gates on `main`. The server is ready when they are green.
-9. Copy the `controller/` bundle that `init` produced to `~/controller` on the server, start the Controller in a terminal there (`claude --dangerously-skip-permissions "<start order from CONTROLLER.md>"` or the Codex equivalent) and confirm the directory trust once.
+9. Copy the `controller/` bundle that `init` produced to `~/controller` on the server. **Install the user-level skills from it** (`mkdir -p ~/.claude/skills ~/.agents/skills && cp -R ~/controller/skills/* ~/.claude/skills/ && cp -R ~/controller/skills/* ~/.agents/skills/`): the Controller runs outside the repo and cannot steer workers without the `orchestration` and `orca-cli` skills. Then start the Controller in a terminal there (`claude --dangerously-skip-permissions "<start order from CONTROLLER.md>"` or the Codex equivalent) and confirm the directory trust once.
 
 ## Lessons
 

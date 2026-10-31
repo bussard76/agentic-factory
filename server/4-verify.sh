@@ -14,6 +14,10 @@ gh auth status >/dev/null 2>&1 && ok "gh login" || bad "gh login"
 grep -q 'check_for_update_on_startup = false' ~/.codex/config.toml 2>/dev/null && ok "codex update prompt off" || echo "info    codex config"
 if command -v orca-ide >/dev/null; then systemctl is-active --quiet orca.service && ok "orca.service" || bad "orca.service"; [ -f /etc/needrestart/conf.d/orca.conf ] && ok "needrestart exception" || bad "needrestart exception"; fi
 [ -x ~/.local/bin/gate ] && ok "gate installed" || echo "info    ~/.local/bin/gate missing (init copies it)"
+# User-level skills: the Controller runs outside the repo and needs these on this host.
+for s in orchestration orca-cli writing-for-agents retro; do
+  if [ -f ~/.claude/skills/$s/SKILL.md ] || [ -f ~/.agents/skills/$s/SKILL.md ]; then ok "user-level skill $s"; else bad "user-level skill $s (cp -R ~/controller/skills/* ~/.claude/skills/ && cp -R ~/controller/skills/* ~/.agents/skills/)"; fi
+done
 echo "RAM $(free -g | awk '/Mem/{print $2}') GB, threads $(nproc), disk free $(df -h --output=avail / | tail -1 | tr -d ' ')"
 if [ -n "$GATES" ] && [ -n "$REPO" ]; then
   cd ~/projects/"$REPO" || exit 1

@@ -124,6 +124,8 @@ async function init() {
   // Bundles for the Controller host and the Front agent (copied by the human or by `doctor --install`).
   for (const rel of walk(path.join(ROOT, "controller"))) write(path.join(".factory/controller", rel), render(fs.readFileSync(path.join(ROOT, "controller", rel), "utf8"), vars), /gate$|\.sh$/.test(rel) ? 0o755 : undefined);
   write(".factory/controller/factory.config.json", JSON.stringify(c, null, 2) + "\n");
+  // The user-level skills the Controller and Front agent need on their host travel with the bundles.
+  for (const s of USER_SKILLS) for (const rel of walk(path.join(ROOT, "skills", s))) write(path.join(".factory/controller/skills", s, rel), fs.readFileSync(path.join(ROOT, "skills", s, rel), "utf8"));
   for (const rel of walk(path.join(ROOT, "front-agent"))) write(path.join(".factory/front-agent", rel), render(fs.readFileSync(path.join(ROOT, "front-agent", rel), "utf8"), vars), /\.sh$/.test(rel) ? 0o755 : undefined);
   write(".factory/front-agent/factory.config.json", JSON.stringify(c, null, 2) + "\n");
   for (const rel of walk(path.join(ROOT, "server"))) write(path.join(".factory/server", rel), fs.readFileSync(path.join(ROOT, "server", rel), "utf8"), /\.sh$/.test(rel) ? 0o755 : undefined);
@@ -139,6 +141,7 @@ async function init() {
   const steps = [
     `Read docs/dev-workflow.md (the process) and AGENTS.md (the agents' rules). Commit the new files with a message that references the adoption ADR, e.g. \`git commit -m "Adopt agentic-factory (ADR-0001)"\`; protected files need that reference.`,
     remote && `Set up ${remote.name}: copy .factory/server/ there and follow docs/server-setup.md in the factory repo. Logins (gh, ${c.agents.default}, tailscale${c.agents.runner === "orca" ? ", Orca pairing" : ""}) are yours. Then put its Orca repo id into factory.config.json → hosts.workers[].orcaRepoId and run \`agentic-factory update\` to refresh the bundles.`,
+    `Skills at user level, on EVERY host that runs a Controller or Front agent: \`agentic-factory install-skills\` here${remote ? `; on ${remote.name}: \`mkdir -p ~/.claude/skills ~/.agents/skills && cp -R ~/controller/skills/* ~/.claude/skills/ && cp -R ~/controller/skills/* ~/.agents/skills/\`` : ""}. Without the Orca skills (orchestration, orca-cli) the agents cannot start, watch or release workers.`,
     `Controller: copy .factory/controller/ to ${ctl.kind === "local" ? "~/controller on this machine" : `${ctl.name}:~/controller`}, install the gate (\`install -m 755 ~/controller/gate ~/.local/bin/gate\`), start \`bash ~/controller/loadlog.sh &\`, then start an agent session there with: "Read ~/controller/CONTROLLER.md and act as the Controller."`,
     `Front agent: copy .factory/front-agent/ to ~/front-agent/${c.project.name} on this machine and start your agent session with: "Read ~/front-agent/${c.project.name}/FRONT_AGENT.md and act as the Front agent."`,
     c.hosts.frontAgent.preview.enabled && `Preview: clone the repo to ~/Development/${c.project.name}-preview, fill ${c.hosts.frontAgent.preview.envFile}, then load the launchd agent from .factory/front-agent/preview.plist.template (fill the paths) with \`launchctl bootstrap gui/$(id -u) <plist>\`.`,
@@ -204,6 +207,7 @@ async function initNonInteractiveRefresh() {
   for (const rel of walk(path.join(ROOT, "skills"))) write(path.join(".agents/skills", rel), fs.readFileSync(path.join(ROOT, "skills", rel), "utf8"));
   for (const rel of walk(path.join(ROOT, "controller"))) write(path.join(".factory/controller", rel), render(fs.readFileSync(path.join(ROOT, "controller", rel), "utf8"), vars), /gate$|\.sh$/.test(rel) ? 0o755 : undefined);
   write(".factory/controller/factory.config.json", JSON.stringify(c, null, 2) + "\n");
+  for (const s of USER_SKILLS) for (const rel of walk(path.join(ROOT, "skills", s))) write(path.join(".factory/controller/skills", s, rel), fs.readFileSync(path.join(ROOT, "skills", s, rel), "utf8"));
   for (const rel of walk(path.join(ROOT, "front-agent"))) write(path.join(".factory/front-agent", rel), render(fs.readFileSync(path.join(ROOT, "front-agent", rel), "utf8"), vars), /\.sh$/.test(rel) ? 0o755 : undefined);
   write(".factory/front-agent/factory.config.json", JSON.stringify(c, null, 2) + "\n");
   for (const rel of walk(path.join(ROOT, "server"))) write(path.join(".factory/server", rel), fs.readFileSync(path.join(ROOT, "server", rel), "utf8"), /\.sh$/.test(rel) ? 0o755 : undefined);
@@ -226,10 +230,18 @@ function doctor() {
   fs.existsSync(".agents/skills/ponytail/SKILL.md") ? ok(".agents/skills") : bad(".agents/skills");
   for (const t of [c.agents.default, c.agents.fallback?.agent].filter(Boolean)) has(t) ? ok(`${t} CLI`) : info(`${t} CLI not on this machine`);
   if (c.agents.runner === "orca") has("orca") || has("orca-ide") ? ok("orca CLI") : bad("orca CLI (runner is orca)");
+  // User-level skills: the Controller and Front agent sessions run outside the repo and need these on their host.
+  const userSkillDirs = [path.join(os.homedir(), ".claude/skills"), path.join(os.homedir(), ".agents/skills")];
+  for (const s of c.agents.runner === "orca" ? ["orchestration", "orca-cli", "writing-for-agents", "retro"] : ["writing-for-agents", "retro"]) userSkillDirs.some((d) => fs.existsSync(path.join(d, s, "SKILL.md"))) ? ok(`user-level skill ${s}`) : bad(`user-level skill ${s} (run: agentic-factory install-skills)`);
   if (c.steering.mode === "github-issues") has("gh") ? ok("gh CLI") : bad("gh CLI (steering is github-issues)");
   for (const h of c.hosts.workers.filter((h) => h.kind === "remote")) {
-    const r = spawnSync("ssh", [...(h.sshConfig ? ["-F", h.sshConfig.replace(/^~/, os.homedir())] : []), "-o", "ConnectTimeout=5", h.ssh, "echo ok"], { encoding: "utf8" });
+    const sshArgs = [...(h.sshConfig ? ["-F", h.sshConfig.replace(/^~/, os.homedir())] : []), "-o", "ConnectTimeout=5", h.ssh];
+    const r = spawnSync("ssh", [...sshArgs, "echo ok"], { encoding: "utf8" });
     r.stdout?.trim() === "ok" ? ok(`ssh ${h.ssh}`) : bad(`ssh ${h.ssh} reachable`);
+    if (r.stdout?.trim() === "ok" && h.name === c.hosts.controller.host) {
+      const sk = spawnSync("ssh", [...sshArgs, "for s in orchestration orca-cli writing-for-agents retro; do [ -f ~/.claude/skills/$s/SKILL.md ] || [ -f ~/.agents/skills/$s/SKILL.md ] || echo $s; done"], { encoding: "utf8" }).stdout.trim();
+      sk ? bad(`${h.name}: user-level skills missing: ${sk.split("\n").join(", ")} (copy ~/controller/skills/* into ~/.claude/skills and ~/.agents/skills there)`) : ok(`${h.name}: user-level skills present`);
+    }
     if (c.agents.runner === "orca" && !h.orcaRepoId) info(`${h.name}: orcaRepoId not set yet`);
   }
   const ctl = c.hosts.workers.find((h) => h.name === c.hosts.controller.host);
@@ -240,6 +252,29 @@ function doctor() {
   if (c.hosts.frontAgent.preview.enabled) { const r = spawnSync("curl", ["-s", "-m", "2", "-o", "/dev/null", "-w", "%{http_code}", `http://localhost:${c.hosts.frontAgent.preview.port}/`], { encoding: "utf8" }); /^[23]/.test(r.stdout) ? ok(`preview answers on ${c.hosts.frontAgent.preview.port}`) : info(`preview not running on ${c.hosts.frontAgent.preview.port}`); }
   process.exit(fail ? 1 : 0);
 }
+
+// --- install-skills ---------------------------------------------------------------------------------
+// The Controller and the Front agent run OUTSIDE the project repo (~/controller, ~/front-agent/<project>), so the
+// project's .agents/skills are invisible to them. The Orca skills (orchestration, orca-cli) and the writing/retro
+// skills they rely on must be installed at user level on every host that runs a Controller or Front agent.
+const USER_SKILLS = ["orchestration", "orca-cli", "writing-for-agents", "retro", "handoff", "grilling", "grill-with-docs", "domain-modeling", "wayfinder", "to-spec", "to-tickets", "prototype", "setup-matt-pocock-skills"];
+function installSkills() {
+  const all = flag("--all");
+  const names = all ? walkDirs(path.join(ROOT, "skills")) : USER_SKILLS;
+  const targets = [path.join(os.homedir(), ".claude/skills"), path.join(os.homedir(), ".agents/skills")];
+  let n = 0;
+  for (const t of targets) {
+    fs.mkdirSync(t, { recursive: true });
+    for (const s of names) {
+      const src = path.join(ROOT, "skills", s), dst = path.join(t, s);
+      if (!fs.existsSync(src)) continue;
+      if (fs.existsSync(dst) && !flag("--force")) { say(`  keep   ${dst} (exists; --force to replace)`); continue; }
+      fs.rmSync(dst, { recursive: true, force: true }); fs.cpSync(src, dst, { recursive: true }); n++; say(`  install ${dst}`);
+    }
+  }
+  say(`${n} skills installed. Orca's own guide loads from the binary: \`orca skills get orchestration\`.`);
+}
+const walkDirs = (dir) => fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
 
 // --- selfcheck (for the factory repo itself) ------------------------------------------------------
 function selfcheck() {
@@ -258,6 +293,6 @@ function selfcheck() {
   process.exit(fail ? 1 : 0);
 }
 
-const commands = { init, update, doctor, selfcheck };
-if (!commands[cmd]) { say(`agentic-factory ${PKG.version}\n  init       onboarding: ask the project's questions, write factory.config.json, copy handbooks, hooks, skills and bundles\n  update     re-render from a newer factory; locally changed files are kept, new versions land in .factory/new/\n  doctor     check config, hooks, tools, hosts and the controller's status\n  selfcheck  (factory repo) syntax and placeholder check\nFlags: --yes (take defaults)`); process.exit(cmd ? 1 : 0); }
+const commands = { init, update, doctor, selfcheck, "install-skills": installSkills };
+if (!commands[cmd]) { say(`agentic-factory ${PKG.version}\n  init            onboarding: ask the project's questions, write factory.config.json, copy handbooks, hooks, skills and bundles\n  update          re-render from a newer factory; locally changed files are kept, new versions land in .factory/new/\n  install-skills  install the Orca and coordination skills at user level (~/.claude/skills, ~/.agents/skills) on this host; required wherever a Controller or Front agent runs. --all for every vendored skill, --force to replace\n  doctor          check config, hooks, tools, user-level skills, hosts and the controller's status\n  selfcheck       (factory repo) syntax and placeholder check\nFlags: --yes (take defaults)`); process.exit(cmd ? 1 : 0); }
 await commands[cmd]();
