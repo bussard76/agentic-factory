@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+node tools/factory-guardrails.mjs test-count
+node tools/factory-guardrails.mjs staged-safety
+node tools/factory-guardrails.mjs static-checks

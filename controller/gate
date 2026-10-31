@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# gate <command…>: runs a full gate in a parallel slot, first come first served (docs/testing.md).
+# Pools: browser gates (command mentions e2e/playwright/cypress) and unit gates. Slot counts come from
+# ~/controller/gate-slots.json (written by capacity.mjs) or GATE_SLOTS / GATE_E2E_SLOTS, default 3 / 2.
+# Fairness: waiters queue on a per-pool doorman lock; only the head of the queue polls for a free slot, so newer
+# gates cannot overtake older ones. Wait and run time go to the journal (type gate).
+PROJECT="${FACTORY_PROJECT:-$(node -e 'try{console.log(JSON.parse(require("fs").readFileSync(process.env.HOME+"/controller/factory.config.json","utf8")).project.name)}catch{console.log("factory")}' 2>/dev/null)}"
+SLOTS_FILE="$HOME/controller/gate-slots.json"
+case "$*" in *e2e*|*playwright*|*cypress*) pool=e2e; def=${GATE_E2E_SLOTS:-2}; key=e2e;; *) pool=unit; def=${GATE_SLOTS:-3}; key=unit;; esac
+slots=$( [ -f "$SLOTS_FILE" ] && node -e "console.log(JSON.parse(require('fs').readFileSync('$SLOTS_FILE','utf8')).$key||$def)" 2>/dev/null || echo "$def" )
+t0=$(date +%s)
+exec 8>"/tmp/$PROJECT-gate-$pool-doorman.lock"
+flock 8
+while true; do
+  for i in $(seq 1 "$slots"); do
+    exec 9>"/tmp/$PROJECT-gate-$pool-$i.lock"
+    if flock -n 9; then
+      exec 8>&-
+      t1=$(date +%s)
+      "$@"; rc=$?
+      t2=$(date +%s)
+      [ -f "$HOME/controller/journal.mjs" ] && node "$HOME/controller/journal.mjs" gate "${GATE_TASK:-gate}" slot_pool="$pool" wait_min=$(( (t1 - t0) / 60 )) minutes=$(( (t2 - t1) / 60 )) verdict=$([ $rc = 0 ] && echo pass || echo fail) >/dev/null 2>&1
+      exit $rc
+    fi
+    exec 9>&-
+  done
+  sleep 3
+done

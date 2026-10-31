@@ -1,0 +1,15 @@
+{
+  "name": "agentic-factory",
+  "version": "0.1.0",
+  "description": "A DevOps harness for building software with coordinated AI agents: a front agent for the human, an unattended controller, independent reviewers, measured capacity and a self-improving pipeline.",
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "bin": { "agentic-factory": "bin/agentic-factory.mjs" },
+  "files": ["bin", "controller", "front-agent", "server", "skills", "templates", "docs", "site", "factory.config.example.json"],
+  "scripts": {
+    "check": "node bin/agentic-factory.mjs selfcheck",
+    "test": "node --test test/"
+  },
+  "keywords": ["agents", "devops", "codex", "claude-code", "orca", "workflow", "harness"]
+}

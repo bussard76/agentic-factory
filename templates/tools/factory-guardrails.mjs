@@ -1,0 +1,139 @@
+#!/usr/bin/env node
+// Git guardrails installed by agentic-factory. Called from .githooks with a subcommand.
+//   test-count       the indexed test count must not drop
+//   staged-safety    whitespace and conflict markers, a staged-secret scan, no .env
+//   static-checks    the project's typecheck and lint (factory.config.json → commands), skipped for docs-only commits
+//   protected-files  protected paths change only with an ADR-NNNN reference in the commit message
+//   review-gate      pushes to the main branch need review coverage under docs/reviews/
+// Never bypass with --no-verify. Rules: docs/review-protocol.md.
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+
+const config = existsSync("factory.config.json") ? JSON.parse(readFileSync("factory.config.json", "utf8")) : {};
+const MAIN = config.project?.mainBranch ?? "main";
+const commands = config.commands ?? {};
+
+const git = (...args) => execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 28 });
+const tryGit = (...args) => { try { return git(...args); } catch { return ""; } };
+const fail = (message) => { console.error(`\n[factory] ${message}\nSee docs/review-protocol.md. Never use --no-verify.\n`); process.exit(1); };
+const headExists = () => Boolean(tryGit("rev-parse", "--verify", "HEAD").trim());
+
+function listFiles(revision) {
+  const out = revision === "index" ? git("ls-files", "-z") : headExists() ? git("ls-tree", "-r", "--name-only", "-z", "HEAD") : "";
+  return out.split("\0").filter(Boolean);
+}
+const show = (revision, path) => tryGit("show", `${revision === "index" ? "" : "HEAD"}:${path}`);
+const stagedPaths = () => git("diff", "--cached", "--name-only", "--no-renames", "-z").split("\0").filter(Boolean);
+const isDocsOnly = (paths) => paths.length > 0 && paths.every((p) => (p.startsWith("docs/") && !p.startsWith("docs/adr/")) || (/^[^/]+\.md$/.test(p) && !/^(AGENTS|ARCHITECTURE)\.md$/.test(p)));
+
+// --- test-count --------------------------------------------------------------------------------
+const TEST_FILE = /\.(test|spec)\.[cm]?[jt]sx?$|_test\.(py|go)$|Test\.(java|kt)$/;
+const TEST_CALL = /\b(?:it|test|describe\.each|test\.each)\s*\(|^\s*def test_|@Test\b|^func Test/gm;
+function countTests(revision) {
+  return listFiles(revision).filter((p) => TEST_FILE.test(p)).reduce((n, p) => n + (show(revision, p).match(TEST_CALL)?.length ?? 0), 0);
+}
+function testCount() {
+  if (!headExists()) return;
+  const before = countTests("HEAD"), after = countTests("index");
+  if (after < before) fail(`Test count decreased from ${before} to ${after}. Restore the tests; never weaken a suite.`);
+}
+
+// --- staged-safety -----------------------------------------------------------------------------
+const SECRET_PATTERNS = [
+  [/-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/, "private key"],
+  [/\b(?:sk|rk)-[A-Za-z0-9_-]{20,}\b/, "API key"],
+  [/\bAKIA[0-9A-Z]{16}\b/, "AWS access key"],
+  [/\bgh[pousr]_[A-Za-z0-9]{30,}\b/, "GitHub token"],
+  [/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/, "Slack token"],
+  [/\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\b/, "JWT"],
+  [/(?:password|passwd|secret|token|api[_-]?key)\s*[:=]\s*["'][^"'\s]{8,}["']/i, "credential assignment"],
+];
+function stagedSafety() {
+  const check = spawnSync("git", ["diff", "--cached", "--check"], { encoding: "utf8" });
+  if (check.status !== 0) fail(`Whitespace errors or conflict markers in the staged diff:\n${check.stdout}`);
+  const paths = stagedPaths();
+  const env = paths.filter((p) => /(^|\/)\.env(\.|$)/.test(p) && !/\.env\.example$/.test(p));
+  if (env.length) fail(`Never commit environment files: ${env.join(", ")}`);
+  const findings = [];
+  for (const p of paths) {
+    if (/\.(png|jpe?g|gif|webp|pdf|zip|woff2?|ttf|otf|ico)$/i.test(p)) continue;
+    const content = show("index", p);
+    if (content.includes("\0")) continue;
+    content.split("\n").forEach((line, i) => {
+      if (/factory-guardrails\.mjs$/.test(p)) return;
+      for (const [re, label] of SECRET_PATTERNS) if (re.test(line)) findings.push(`${p}:${i + 1}: looks like a ${label}`);
+    });
+  }
+  if (findings.length) fail(`Possible secrets staged:\n${findings.join("\n")}\nUse invented values and keep real ones in .env.`);
+}
+
+// --- static-checks -----------------------------------------------------------------------------
+function staticChecks() {
+  const paths = stagedPaths();
+  if (isDocsOnly(paths)) { console.log("[factory] documentation-only commit: static checks skipped"); return; }
+  for (const key of ["typecheck", "lint"]) {
+    const cmd = commands[key];
+    if (!cmd) continue;
+    const r = spawnSync(cmd, { shell: true, stdio: "inherit" });
+    if (r.status !== 0) fail(`${key} failed (${cmd}).`);
+  }
+}
+
+// --- protected-files ---------------------------------------------------------------------------
+const PROTECTED = /^(?:ARCHITECTURE\.md$|AGENTS\.md$|docs\/adr\/|\.githooks\/|tools\/factory-guardrails\.mjs$)/;
+function dependencyLists(revision) {
+  const raw = listFiles(revision).includes("package.json") ? show(revision, "package.json") : "{}";
+  const m = JSON.parse(raw || "{}");
+  const keys = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
+  return JSON.stringify(Object.fromEntries(keys.map((k) => [k, Object.fromEntries(Object.entries(m[k] ?? {}).sort())])));
+}
+function protectedFiles(messagePath) {
+  const changed = stagedPaths();
+  const hits = changed.filter((p) => PROTECTED.test(p));
+  if (changed.includes("package.json") && headExists() && dependencyLists("HEAD") !== dependencyLists("index")) hits.push("package.json dependency lists");
+  if (!hits.length) return;
+  const message = readFileSync(messagePath, "utf8");
+  const refs = [...message.matchAll(/\bADR-(\d{4})\b/g)].map((m) => m[1]);
+  const accepted = refs.some((n) => listFiles("index").some((p) => new RegExp(`^docs/adr/(?:ADR-)?${n}[-.].*\\.md$`).test(p) && /^Status:\s*accepted/m.test(show("index", p))));
+  if (!accepted) fail(`Protected files changed without an accepted ADR reference in the commit message:\n${hits.join("\n")}\nAdd "ADR-NNNN" of an accepted ADR (Status: accepted) to the message.`);
+}
+
+// --- review-gate -------------------------------------------------------------------------------
+function reviewGate() {
+  const updates = readFileSync(0, "utf8").trim().split("\n").filter(Boolean).map((l) => l.split(" "));
+  for (const [, localSha, remoteRef, remoteSha] of updates) {
+    if (remoteRef !== `refs/heads/${MAIN}`) continue;
+    if (/^0+$/.test(localSha)) continue; // deleting the branch introduces no commits
+    const range = /^0+$/.test(remoteSha) ? localSha : `${remoteSha}..${localSha}`;
+    const commits = tryGit("rev-list", "--no-merges", range).trim().split("\n").filter(Boolean);
+    const merges = tryGit("rev-list", "--merges", range).trim().split("\n").filter(Boolean);
+    const reviews = parseReviews(localSha);
+    const uncovered = [];
+    for (const sha of [...commits, ...merges]) {
+      const files = commitFiles(sha, merges.includes(sha));
+      if (isDocsOnly(files) || files.every((f) => f.startsWith("docs/reviews/"))) continue;
+      const covered = reviews.some((r) => tryGit("merge-base", "--is-ancestor", sha, r.sha) === "" && onlyReviewsAfter(r.sha, localSha));
+      if (!covered) uncovered.push(sha.slice(0, 10));
+    }
+    if (uncovered.length) fail(`Push to ${MAIN} rejected. Commits without a passing independent review:\n${uncovered.join("\n")}\nA findings file under docs/reviews/ with "Verdict: pass" and "Reviewed commit: <40-char SHA>" covering each commit is required; after the reviewed commit only docs/reviews/ may change.`);
+  }
+}
+function commitFiles(sha, isMerge) {
+  if (!isMerge) return tryGit("diff-tree", "--no-commit-id", "--name-only", "-r", sha).trim().split("\n").filter(Boolean);
+  // A merge's own changes: what differs from the automatic merge of its parents.
+  const parents = tryGit("rev-list", "--parents", "-n", "1", sha).trim().split(" ").slice(1);
+  if (parents.length < 2) return [];
+  const auto = tryGit("merge-tree", "--write-tree", parents[0], parents[1]).trim().split("\n")[0];
+  return auto ? tryGit("diff", "--name-only", auto, sha).trim().split("\n").filter(Boolean) : ["<conflict>"];
+}
+function parseReviews(tip) {
+  const files = tryGit("ls-tree", "-r", "--name-only", tip, "docs/reviews/").trim().split("\n").filter(Boolean);
+  return files.map((f) => tryGit("show", `${tip}:${f}`)).map((t) => ({ pass: /^Verdict:\s*pass\b/m.test(t), sha: /^Reviewed commit:\s*([0-9a-f]{40})\b/m.exec(t)?.[1] })).filter((r) => r.pass && r.sha);
+}
+function onlyReviewsAfter(reviewed, tip) {
+  const files = tryGit("diff", "--name-only", reviewed, tip).trim().split("\n").filter(Boolean);
+  return files.every((f) => f.startsWith("docs/reviews/") || isDocsOnly([f]));
+}
+
+const [cmd, arg] = process.argv.slice(2);
+({ "test-count": testCount, "staged-safety": stagedSafety, "static-checks": staticChecks, "protected-files": () => protectedFiles(arg), "review-gate": reviewGate }[cmd] ?? (() => fail(`unknown subcommand ${cmd}`)))();
