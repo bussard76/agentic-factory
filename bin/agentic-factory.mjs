@@ -105,7 +105,8 @@ async function init() {
     { label: "Only on this machine", value: "local" },
     { label: "On this machine and on one remote server (ssh alias)", value: "both" },
     { label: "Only on a remote server", value: "remote" }], "local");
-  const localHost = { name: "local", kind: "local", projectsDir: path.dirname(cwd).replace(os.homedir(), "~"), workspacesDir: "~/orca/workspaces", orcaEnvironment: "", orcaRepoId: "", capacity: { suiteWorkersMax: 2, readOnlyWorkersMax: 2 } };
+  // projectDir is the explicit checkout path, so the project name may differ from the directory name.
+  const localHost = { name: "local", kind: "local", projectDir: cwd.replace(os.homedir(), "~"), projectsDir: path.dirname(cwd).replace(os.homedir(), "~"), workspacesDir: "~/orca/workspaces", orcaEnvironment: "", orcaRepoId: "", capacity: { suiteWorkersMax: 2, readOnlyWorkersMax: 2 } };
   const remoteHost = { name: "build-server", kind: "remote", ssh: "build-server", sshConfig: "", projectsDir: "~/projects", workspacesDir: "~/orca/workspaces", orcaEnvironment: "", orcaRepoId: "", capacity: { suiteWorkersMax: 8, readOnlyWorkersMax: 6, gate: { unitSlots: 3, e2eSlots: 2 } } };
   if (where !== "local") {
     remoteHost.name = await askText("   Name of the remote host (also its Orca environment name)?", "build-server");
@@ -152,7 +153,7 @@ async function init() {
   say("\nWriting:");
   write("factory.config.json", JSON.stringify(c, null, 2) + "\n");
   for (const rel of walk(path.join(ROOT, "templates"))) write(rel, render(fs.readFileSync(path.join(ROOT, "templates", rel), "utf8"), vars), /\.githooks\/|tools\//.test(rel) ? 0o755 : undefined);
-  write("docs/dev-workflow.md", render(fs.readFileSync(path.join(ROOT, "docs", c.project.language === "de" ? "de/workflow.md" : "workflow.md"), "utf8"), vars));
+  write("docs/dev-workflow.md", absolutizeDocLinks(render(fs.readFileSync(path.join(ROOT, "docs", c.project.language === "de" ? "de/workflow.md" : "workflow.md"), "utf8"), vars), c.project.language));
   for (const rel of walk(path.join(ROOT, "skills"))) write(path.join(".agents/skills", rel), fs.readFileSync(path.join(ROOT, "skills", rel), "utf8"));
   if (!fs.existsSync(".claude")) fs.mkdirSync(".claude");
   if (!fs.existsSync(".claude/skills")) fs.symlinkSync("../.agents/skills", ".claude/skills");
@@ -166,16 +167,19 @@ async function init() {
   for (const rel of walk(path.join(ROOT, "server"))) write(path.join(".factory/server", rel), fs.readFileSync(path.join(ROOT, "server", rel), "utf8"), /\.sh$/.test(rel) ? 0o755 : undefined);
   fs.mkdirSync(".factory", { recursive: true });
   fs.writeFileSync(".factory/manifest.json", JSON.stringify(manifest, null, 2) + "\n");
-  sh("git", ["config", "core.hooksPath", ".githooks"]);
   for (const dir of ["docs/reviews", "docs/reports", "docs/handoffs"]) { fs.mkdirSync(dir, { recursive: true }); if (!fs.existsSync(path.join(dir, ".gitkeep"))) fs.writeFileSync(path.join(dir, ".gitkeep"), ""); }
   appendGitignore([".factory/new/", ".build/", ".env", ".env.*", "!.env.example", ".scratch/"]);
+  // The adoption commit: only the files init wrote, committed with the ADR reference and pushed BEFORE the hooks are
+  // armed, so origin/<main> carries AGENTS.md, the handbooks and the hooks for the first workers and the first wave.
+  const adopted = commitAdoption(Object.keys(manifest.files), c.project.mainBranch);
+  sh("git", ["config", "core.hooksPath", ".githooks"]);
   if (installNow) { say("\nUser-level skills:"); installSkills(); }
 
   // --- the human's checklist -----------------------------------------------------------------
   const remote = c.hosts.workers.find((h) => h.kind === "remote");
   const ctl = c.hosts.workers.find((h) => h.name === c.hosts.controller.host);
   const steps = [
-    `Read docs/dev-workflow.md (the process) and AGENTS.md (the agents' rules). Commit the new files with a message that references the adoption ADR, e.g. \`git commit -m "Adopt agentic-factory (ADR-0001)"\`; protected files need that reference.`,
+    adopted ? `Read docs/dev-workflow.md (the process) and AGENTS.md (the agents' rules). The adoption commit "Adopt agentic-factory (ADR-0001)" is on ${adopted}. From now on protected files need an ADR reference in the commit message; try a commit without one to see the hook speak.` : `Read docs/dev-workflow.md (the process) and AGENTS.md (the agents' rules). Commit the new files with a message that references the adoption ADR, e.g. \`git commit -m "Adopt agentic-factory (ADR-0001)"\`, and push to origin so workers and waves see them.`,
     remote && `Set up ${remote.name}: copy .factory/server/ there and follow docs/server-setup.md in the factory repo. Logins (gh, ${c.agents.default}, tailscale${c.agents.runner === "orca" ? ", Orca pairing" : ""}) are yours. Then put its Orca repo id into factory.config.json → hosts.workers[].orcaRepoId and run \`agentic-factory update\` to refresh the bundles.`,
     `Skills at user level, on EVERY host that runs a Controller or Front agent: ${installNow ? "done here" : "`agentic-factory install-skills` here"}${remote ? `; on ${remote.name}: \`mkdir -p ~/.claude/skills ~/.agents/skills && cp -R ~/controller/skills/* ~/.claude/skills/ && cp -R ~/controller/skills/* ~/.agents/skills/\`` : ""}. Without the Orca skills (orchestration, orca-cli) the agents cannot start, watch or release workers.`,
     c.agents.runner === "orca" && !orcaRunning && `Orca: ${d.tools.orca ? `start it (\`${ORCA_BIN} open --json\`) and register the repo (\`${ORCA_BIN} repo add --path <repo> --json\`, id into hosts.workers[].orcaRepoId)` : "install it (https://orca.earendil.works), then register the repo and put its id into hosts.workers[].orcaRepoId"}; the Orca skills load their guide from the binary (\`${ORCA_BIN} skills get orchestration\`).`,
@@ -195,7 +199,7 @@ function templateVars(c) {
   const projectDir = ctl.kind === "local" ? path.join(ctl.projectsDir, c.project.name) : `${ctl.projectsDir}/${c.project.name}`;
   const orca = c.agents.runner === "orca";
   return {
-    PROJECT: c.project.name, HUMAN: c.project.humanName, MAIN: c.project.mainBranch, DATE: new Date().toISOString().slice(0, 10),
+    PROJECT: c.project.name, HUMAN: c.project.humanName, MAIN: c.project.mainBranch, BRANCH_PREFIX: c.project.branchPrefix ?? "agents/", DATE: new Date().toISOString().slice(0, 10),
     VERIFY: c.commands.verify || "the verify command", E2E: c.commands.e2e || "the browser suite", RELEASE: (c.commands.release ?? []).join(" and ") || "the release gates",
     UI_LANGUAGE: c.project.language === "de" ? "German" : "English", LANGUAGE_NAME: c.project.language === "de" ? "German" : "English",
     MAX_ROUNDS: String(c.reviews.maxRounds), SUITE_MAX: String(ctl.capacity?.suiteWorkersMax ?? c.capacity.suiteWorkersMax), READONLY_MAX: String(ctl.capacity?.readOnlyWorkersMax ?? c.capacity.readOnlyWorkersMax),
@@ -210,11 +214,28 @@ function templateVars(c) {
     NUDGE_LINE: orca ? "An answer to an escalation does not wake an idle worker. Always also send the text into its terminal with `orca terminal send --terminal <handle> --text \"…\" --enter`." : "Terminal workers cannot be nudged; restart a stalled one in its worktree with a resume spec.",
     STEERING_SCRIPT: c.steering.mode === "github-issues" ? "issues.mjs" : "tasks.mjs",
     PREVIEW_URL: c.hosts.frontAgent.preview.enabled ? `http://localhost:${c.hosts.frontAgent.preview.port}` : "n/a", PREVIEW_PORT: String(c.hosts.frontAgent.preview.port), PREVIEW_CMD: c.hosts.frontAgent.preview.command, PREVIEW_ENV_FILE: c.hosts.frontAgent.preview.envFile ?? "", INSTALL_CMD: c.commands.install ?? "",
-    SSH_ALIAS: remote?.ssh ?? "local", PREVIEW_PLIST: `de.${c.project.name}.preview`, PREVIEW_LABEL: `de.${c.project.name}.preview`, PREVIEW_SCRIPT: `${os.homedir()}/front-agent/${c.project.name}/preview-update.sh`, HOME: os.homedir(),
+    SSH_ALIAS: remote?.ssh ?? "local",
+    CONTROLLER_LOCATION: ctl.kind === "local" ? "on this machine (`~/controller`)" : `on the server \`${ctl.name}\` (ssh alias \`${ctl.ssh}\`, \`~/controller\`)`,
+    INBOX_CMD: ctl.kind === "local" ? "`cat >> ~/controller/inbox.md`" : `\`ssh ${ctl.ssh} 'cat >> ~/controller/inbox.md'\``,
+    PREVIEW_PLIST: `de.${c.project.name}.preview`, PREVIEW_LABEL: `de.${c.project.name}.preview`, PREVIEW_SCRIPT: `${os.homedir()}/front-agent/${c.project.name}/preview-update.sh`, HOME: os.homedir(),
     COMMIT_PATTERN: `mv .env ../.${c.project.name}.env; git add …; git commit …; mv ../.${c.project.name}.env .env`,
   };
 }
 const render = (text, vars) => text.replace(/\{\{([A-Z_]+)\}\}/g, (m, k) => (k in vars ? vars[k] : m));
+// The workflow guide copied into a project links to sibling docs that are not copied; point those links at the factory repo.
+const FACTORY_DOCS_URL = "https://github.com/bussard76/agentic-factory/blob/main/docs";
+const absolutizeDocLinks = (text, lang) => text.replace(/\]\((\.\.\/)?([a-z-]+\.md)(#[^)]*)?\)/g, (m, up, f, hash) => `](${FACTORY_DOCS_URL}/${up || lang === "en" ? "" : "de/"}${f}${hash ?? ""})`);
+function commitAdoption(files, branch) {
+  const r = spawnSync("git", ["add", "--", ".gitignore", ".factory/manifest.json", ".claude", "docs/reviews/.gitkeep", "docs/reports/.gitkeep", "docs/handoffs/.gitkeep", ...files.filter((f) => !f.startsWith(".factory/") && fs.existsSync(f))], { stdio: "ignore" });
+  if (r.status !== 0) return "";
+  if (spawnSync("git", ["diff", "--cached", "--quiet"]).status === 0) return "";
+  const c = spawnSync("git", ["commit", "-q", "-m", "Adopt agentic-factory (ADR-0001)"], { encoding: "utf8" });
+  if (c.status !== 0) { say(`  adoption commit failed: ${(c.stderr || c.stdout).trim().slice(0, 200)}`); return ""; }
+  const p = spawnSync("git", ["push", "-q", "-u", "origin", branch], { encoding: "utf8" });
+  if (p.status !== 0) { say(`  adoption commit created locally; push failed: ${(p.stderr || "").trim().slice(0, 200)}`); return "this branch (not pushed)"; }
+  say(`  commit Adopt agentic-factory (ADR-0001), pushed to origin/${branch}`);
+  return `origin/${branch}`;
+}
 function walk(dir, base = dir) { return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name), base) : [path.relative(base, path.join(dir, e.name))])); }
 function appendGitignore(lines) { const p = ".gitignore"; const cur = fs.existsSync(p) ? fs.readFileSync(p, "utf8") : ""; const add = lines.filter((l) => !cur.split("\n").includes(l)); if (add.length) fs.writeFileSync(p, cur + (cur.endsWith("\n") || !cur ? "" : "\n") + add.join("\n") + "\n"); }
 
@@ -241,7 +262,7 @@ async function initNonInteractiveRefresh() {
     fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, content); if (mode) fs.chmodSync(target, mode); manifest.files[rel] = hash(content); written++; say(`  update ${rel}`);
   };
   for (const rel of walk(path.join(ROOT, "templates"))) write(rel, render(fs.readFileSync(path.join(ROOT, "templates", rel), "utf8"), vars), /\.githooks\/|tools\//.test(rel) ? 0o755 : undefined);
-  write("docs/dev-workflow.md", render(fs.readFileSync(path.join(ROOT, "docs", c.project.language === "de" ? "de/workflow.md" : "workflow.md"), "utf8"), vars));
+  write("docs/dev-workflow.md", absolutizeDocLinks(render(fs.readFileSync(path.join(ROOT, "docs", c.project.language === "de" ? "de/workflow.md" : "workflow.md"), "utf8"), vars), c.project.language));
   for (const rel of walk(path.join(ROOT, "skills"))) write(path.join(".agents/skills", rel), fs.readFileSync(path.join(ROOT, "skills", rel), "utf8"));
   for (const rel of walk(path.join(ROOT, "controller"))) write(path.join(".factory/controller", rel), render(fs.readFileSync(path.join(ROOT, "controller", rel), "utf8"), vars), /gate$|\.sh$/.test(rel) ? 0o755 : undefined);
   write(".factory/controller/factory.config.json", JSON.stringify(c, null, 2) + "\n");
@@ -325,6 +346,8 @@ function selfcheck() {
   const c = JSON.parse(fs.readFileSync(path.join(ROOT, "factory.config.example.json"), "utf8"));
   const vars = templateVars(c);
   for (const dir of ["templates", "controller", "front-agent"]) for (const rel of walk(path.join(ROOT, dir))) { const out = render(fs.readFileSync(path.join(ROOT, dir, rel), "utf8"), vars); const left = out.match(/\{\{[A-Z_]+\}\}/g); if (left) { say(`UNRESOLVED ${dir}/${rel}: ${[...new Set(left)].join(" ")}`); fail++; } }
+  // Runtime state must never ship in the bundles.
+  for (const rel of walk(path.join(ROOT, "controller"))) if (/^(journal\.ndjson|workers\.json|quota\.json|model-tiers\.json|gate-slots.*\.json|capacity-state.*\.json|wave-handle\.txt|specs\/|logs\/|events\/)/.test(rel)) { say(`RUNTIME STATE in controller/: ${rel}`); fail++; }
   say(fail ? `${fail} problems` : "selfcheck ok");
   process.exit(fail ? 1 : 0);
 }

@@ -75,7 +75,7 @@ flowchart TD
 4. **Independent test:** another worker checks against the spec and runs the full suites. Findings go back to the Developer; then a fresh Tester checks again.
 5. **Conformance:** for levels 2 and 3 an Architect checks that the code implements the decided architecture, coarsely.
 6. **Wave:** the Controller collects passed tasks and merges them. The full suites run once on the merged state, then it goes to `main`. A wave starts when two tasks are waiting, one has waited 60 minutes, or a task blocks others.
-7. **Acceptance:** the human's preview pulls the new `main` automatically. The human tests there with real data. Findings become new tickets.
+7. **Acceptance:** the human's preview pulls the new `main` automatically. The human tests there in their own environment, on a private copy where data is involved. Findings become new tickets.
 
 **Bugs** take the same path. First a test must show the bug; no reproduction, no fix.
 
@@ -91,7 +91,7 @@ Every ticket, whether a GitHub issue or a task file, becomes exactly one branch 
 | 4. Review round 1 | Tester (fresh context, read-only) | temporary branch from the reviewed SHA with `origin/main` merged in; findings on `agents/t12-review-1` | runs the full gates itself through `gate`; checks the flows; commits only `docs/reviews/T12-review-1.md` with `Reviewed commit: <SHA>` and `Verdict` |
 | 5a. `fail` | Developer | **the same worktree and branch** `agents/t12` | fixes each finding test-first, commits, pushes; "Rework 1" in the report; a new Tester writes `T12-review-2.md` on `agents/t12-review-2` |
 | 5b. `pass` | Architect (level 2/3 only) | `agents/t12-conformance` from the passed SHA | coarse boundary check, `T12-architecture-conformance.md` |
-| 6. Wave | Controller | worktree `<workspaces>/<project>/coordinator-integration/`, branch `integration` reset to `origin/main` | merges the passed branches (octopus, else one by one), runs the full gates once, **pushes `integration` to `main`**; the pre-push hook verifies that every commit is covered by a `Verdict: pass` review whose SHA is in its history |
+| 6. Wave | Controller | worktree `<workspaces>/<project>/coordinator-integration/`, branch `integration` reset to `origin/main` | merges each passed task branch **together with the review branch of its passing round** (`agents/t12` and `agents/t12-review-2`, plus the conformance branch for level 2/3), octopus or one by one, runs the full gates once, **pushes `integration` to `main`**; the pre-push hook verifies that every commit is an ancestor of a `Verdict: pass` review SHA found in the pushed tree |
 | 7. Preview and acceptance | human | the preview clone on the human's machine | follows `main` automatically; findings become new tickets |
 | 8. Cleanup | Controller, every cycle | all worker hosts | closes the worker's terminal, releases the dispatch, removes worktree `t12/` once its branch is merged or safely on origin, deletes merged `agents/t12*` branches, closes the issue or sets `Status: integrated` |
 
@@ -110,7 +110,8 @@ gitGraph
   commit id: "T12-review-2.md: pass"
   checkout main
   branch integration
-  merge agents/t12 id: "wave: merge, full gates"
+  merge agents/t12 id: "wave: merge task"
+  merge agents/t12-review-2 id: "wave: merge review, full gates"
   checkout main
   merge integration id: "push integration:main"
 ```

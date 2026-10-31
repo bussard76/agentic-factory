@@ -43,14 +43,9 @@ Es entstehen:
 
 Lies `docs/dev-workflow.md` einmal. Das ist der ganze Prozess in klarer Sprache.
 
-## 3. Die Einführung committen
+## 3. Der Einführungs-Commit
 
-```bash
-git add -A
-git commit -m "Adopt agentic-factory (ADR-0001)"
-```
-
-Der ADR-Verweis ist Pflicht: `AGENTS.md`, die Hooks und der ADR-Ordner sind geschützte Dateien. Probiere einmal einen Commit ohne den Verweis, um den Hook sprechen zu hören. (`doctor` kommt nach Schritt 4: Er prüft auch die Skills auf Benutzerebene, die du dort installierst.)
+`init` hat die geschriebenen Dateien bereits als `Adopt agentic-factory (ADR-0001)` committet und nach `origin` gepusht, damit die ersten Worker und die erste Wave von einem `main` starten, das `AGENTS.md`, die Handbücher und die Hooks enthält. Ab jetzt sind `AGENTS.md`, die Hooks und der ADR-Ordner geschützte Dateien: Ein Commit, der sie berührt, braucht einen `ADR-NNNN`-Verweis in der Nachricht. Probiere einen ohne, um den Hook sprechen zu hören. (`doctor` kommt nach Schritt 4: Er prüft auch die Skills auf Benutzerebene, die du dort installierst.)
 
 ## 4. Die Skills auf Benutzerebene installieren, dann den Controller starten
 
@@ -110,7 +105,7 @@ Der Controller nimmt das Ticket im nächsten Zyklus auf (alle 10 Minuten oder so
 1. **Architekt**, Spec-Review → `docs/reviews/T01-architecture-spec.md`, `Verdict: pass`
 2. **Developer** baut testgetrieben auf `agents/t01`, pusht, berichtet
 3. **Tester** prüft auf aktuellem `main` plus Branch, lässt die vollen Gates über `gate` laufen, schreibt `docs/reviews/T01-review-1.md`
-4. bei `fail`: Nacharbeit im selben Worktree; bei `pass`: die **Wave** führt auf dem Integrations-Branch zusammen, lässt die Gates einmal laufen, pusht nach `main`
+4. bei `fail`: Nacharbeit im selben Worktree; bei `pass`: die **Wave** führt den Task-Branch und seinen bestandenen Review-Branch auf dem Integrations-Branch zusammen, lässt die Gates einmal laufen, pusht nach `main`
 5. **Aufräumen**: fertige Worktrees verschwinden, der Status zeigt die Zahlen
 
 Versuche einmal, von Hand ohne Review nach `main` zu pushen. Der Pre-Push-Hook lehnt ab und sagt warum.

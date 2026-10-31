@@ -5,3 +5,14 @@ node_modules/
 .env.*
 !.env.example
 /tmp/
+# Controller runtime state must never ship in the bundles (selfcheck fails on it)
+controller/journal.ndjson
+controller/workers.json
+controller/quota.json
+controller/model-tiers.json
+controller/gate-slots*.json
+controller/capacity-state*.json
+controller/wave-handle.txt
+controller/specs/
+controller/logs/
+controller/events/

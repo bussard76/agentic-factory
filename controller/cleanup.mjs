@@ -54,9 +54,17 @@ for (const host of hosts) {
     }
   }
 }
-// Forget finished local workers whose worktree is gone.
+// Forget finished workers: terminal-runner workers whose pid is dead, Orca workers whose terminal is gone or exited.
 if (!dry) {
-  for (const [k, w] of Object.entries(workers)) if (w.pid && !alive(w.pid) && !fs.existsSync(w.worktree ?? "")) delete workers[k];
+  for (const host of hosts) {
+    if (RUNNER !== "orca") continue;
+    let terms = null;
+    try { terms = JSON.parse(trySh(ORCA, ["terminal", "list", ...orcaEnvArgsOn(host), "--json"]) || "null")?.result?.terminals ?? null; } catch {}
+    if (terms === null) continue;   // unknown state: forget nothing on this host
+    const live = new Set(terms.filter((t) => t.status !== "exited").map((t) => t.handle));
+    for (const [k, w] of Object.entries(workers)) if ((w.host ?? "local") === host.name && w.terminal && !live.has(w.terminal)) delete workers[k];
+  }
+  for (const [k, w] of Object.entries(workers)) if (w.pid && !alive(w.pid)) delete workers[k];
   writeJson("workers.json", workers);
   journal("cleanup", "controller", { note: `removed ${removed}, kept ${kept}, pruned ${pruned}` });
 }

@@ -4,7 +4,7 @@
 // stay short, and falls on pressure or load timeouts. State per host in capacity-state.<host>.json; every change is a
 // `decision` event in the journal. Usage: node capacity.mjs [--on <host>] [--verbose] [--reset]
 import fs from "node:fs";
-import { PROJECT, argHost, file, journal, onHost, readJson, writeJson } from "./lib.mjs";
+import { ORCA, PROJECT, RUNNER, argHost, file, journal, onHost, orcaEnvArgsOn, readJson, trySh, writeJson } from "./lib.mjs";
 
 const host = argHost(process.argv);
 const CAP = host.capacity;
@@ -13,7 +13,7 @@ const CAL = { mode: "auto", startSuite: 2, startReadonly: 2, step: 1, raiseAfter
 // --- measure (one shell round trip: PSI, memory, load, threads, gate queue, busy processes with cwd) ---------------
 const probe = onHost(host, `
 for k in cpu memory io; do printf "psi_%s=%s\\n" $k "$(awk '/^some/{for(i=1;i<=NF;i++) if($i ~ /^avg10=/){split($i,a,"="); printf "%s", a[2]}}' /proc/pressure/$k 2>/dev/null)"; done
-printf "avail_kb=%s\\n" "$(awk '/MemAvailable/{print $2}' /proc/meminfo 2>/dev/null || sysctl -n hw.memsize 2>/dev/null | awk '{print int($1/1024/4)}')"
+printf "avail_kb=%s\\n" "$( (awk '/MemAvailable/{print $2; f=1} END{exit !f}' /proc/meminfo 2>/dev/null) || (vm_stat 2>/dev/null | awk -v ps="$(sysctl -n hw.pagesize 2>/dev/null || echo 16384)" '/Pages (free|inactive|speculative)/{gsub("\\\\.","",$NF); s+=$NF} END{if (s>0) print int(s*ps/1024)}') )"
 printf "load1=%s\\n" "$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || sysctl -n vm.loadavg | awk '{print $2}')"
 printf "threads=%s\\n" "$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
 for p in unit e2e; do d="\${TMPDIR:-/tmp}/${PROJECT}-gate-$p"; printf "queue_%s=%s\\n" $p "$(ls "$d" 2>/dev/null | grep -c '^ticket-')"; done
@@ -25,7 +25,12 @@ const cpu = num(kv.psi_cpu), mem = num(kv.psi_memory), io = num(kv.psi_io);
 const availGb = (num(kv.avail_kb) ?? 0) / 1e6, load1 = num(kv.load1) ?? 0, threads = num(kv.threads) ?? 1;
 const queue = { unit: num(kv.queue_unit) ?? 0, e2e: num(kv.queue_e2e) ?? 0 };
 const foreign = probe.split("\n").filter((l) => l.startsWith("proc=")).map((l) => l.slice(5).split("|")).filter(([pcpu, , cwd]) => Number(pcpu) >= 5 && cwd && !cwd.includes(`/${PROJECT}`)).reduce((s, [pcpu]) => s + Number(pcpu) / 100, 0);
-const workers = Object.values(readJson("workers.json", {})).filter((w) => (w.host ?? "local") === host.name);
+// Count only LIVE workers on this host: Orca workers whose terminal still exists and is not exited, terminal-runner
+// workers whose pid is alive. Finished workers must not fill the calibrated cap.
+const liveTerminals = RUNNER === "orca" ? (() => { try { return new Set(JSON.parse(trySh(ORCA, ["terminal", "list", ...orcaEnvArgsOn(host), "--json"]) || "{}").result?.terminals?.filter((t) => t.status !== "exited").map((t) => t.handle) ?? []); } catch { return null; } })() : null;
+const alivePid = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } };
+const workers = Object.values(readJson("workers.json", {})).filter((w) => (w.host ?? "local") === host.name)
+  .filter((w) => (w.terminal ? (liveTerminals ? liveTerminals.has(w.terminal) : true) : w.pid ? alivePid(w.pid) : false));
 const suite = workers.filter((w) => !w.readonly).length, readonly = workers.filter((w) => w.readonly).length;
 const quota = readJson("quota.json", {});
 const recentTimeouts = recentLoadTimeouts(30);
@@ -33,7 +38,8 @@ const recentTimeouts = recentLoadTimeouts(30);
 // --- pressure flags and reasons (before any calibration decision uses them) -----------------------------------------
 const t = { cpu: CAP.pressure?.cpuAvg10MaxPercent ?? 20, mem: CAP.pressure?.memoryAvg10MaxPercent ?? 5, avail: CAP.availableMemoryMinGb ?? 8, queue: CAP.gateQueueMax ?? 3 };
 const cpuHot = cpu === null ? load1 > threads * 0.9 : cpu > t.cpu;      // without PSI (non-Linux): load vs threads
-const memHot = (mem !== null && mem > t.mem) || availGb < t.avail;
+const memKnown = (num(kv.avail_kb) ?? 0) > 0;                              // no MemAvailable and no vm_stat: skip the memory rule, say so
+const memHot = (mem !== null && mem > t.mem) || (memKnown && availGb < t.avail);
 const queueHot = queue.unit + queue.e2e >= t.queue;
 const pressure = [];
 if (cpuHot) pressure.push(`cpu pressure ${cpu ?? `load ${load1}`}`);
@@ -42,6 +48,7 @@ if (queueHot) pressure.push(`gate queue ${queue.unit + queue.e2e}`);
 if (recentTimeouts) pressure.push(`${recentTimeouts} load timeouts in 30 min`);
 if (foreign > threads / 4) pressure.push(`foreign load ~${foreign.toFixed(1)}`);
 const hot = pressure.length > 0;
+const notes = memKnown ? [] : ["available memory unknown on this host: memory rule skipped"];
 
 // --- calibrated caps --------------------------------------------------------------------------------------------------
 const stateName = `capacity-state.${host.name}.json`;
@@ -77,7 +84,7 @@ writeJson(`gate-slots.${host.name}.json`, slots);
 if (host.kind === "local") writeJson("gate-slots.json", slots);
 else onHost(host, `mkdir -p ~/controller && printf '%s' '${JSON.stringify(slots)}' > ~/controller/gate-slots.json`);
 
-const verdict = { host: host.name, suite: suiteVerdict, readonly: roVerdict, caps: { suite: state.suiteMax, readonly: state.readonlyMax, calibration: CAL.mode }, gateUnitSlots: slots.unit, gateE2eSlots: slots.e2e, reason: reasons.join("; ") || "capacity available",
+const verdict = { host: host.name, suite: suiteVerdict, readonly: roVerdict, caps: { suite: state.suiteMax, readonly: state.readonlyMax, calibration: CAL.mode }, gateUnitSlots: slots.unit, gateE2eSlots: slots.e2e, reason: [...reasons, ...notes].join("; ") || "capacity available",
   measured: { cpuAvg10: cpu, memAvg10: mem, ioAvg10: io, load1, threads, availGb: Number(availGb.toFixed(1)), suite, readonly, queue, foreign: Number(foreign.toFixed(1)), recentTimeouts, quota, history: state.history.slice(-5) } };
 journal("capacity", "controller", { host: host.name, note: `${suiteVerdict}/${roVerdict} cap ${state.suiteMax}`, cpu, mem, avail_gb: verdict.measured.availGb, queue: queue.unit + queue.e2e });
 console.log(JSON.stringify(process.argv.includes("--verbose") ? verdict : { ...verdict, measured: undefined }));

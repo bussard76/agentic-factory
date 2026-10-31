@@ -1,6 +1,6 @@
 # Onboarding: what `init` asks and why
 
-`npx agentic-factory init` is a guided onboarding for a new project. It asks one question at a time, offers a recommended answer first, writes `factory.config.json`, copies the handbooks, templates, hooks and skills, and prints the steps only the human can do. Running it again on an existing project shows diffs and asks before overwriting anything.
+`npx agentic-factory init` is a guided onboarding for a new project. It asks one question at a time, offers a recommended answer first, writes `factory.config.json`, copies the handbooks, templates, hooks and skills, commits them as `Adopt agentic-factory (ADR-0001)`, pushes, and prints the steps only the human can do. Running it again (or `update`) never overwrites a file you changed: the new version lands in `.factory/new/` for you to merge.
 
 | # | Question | Why it matters | Default |
 |---|---|---|---|

@@ -31,6 +31,7 @@ export const FALLBACK = config.agents?.fallback ?? {};
 // --- hosts -------------------------------------------------------------------------------------
 const workerHosts = (config.hosts?.workers?.length ? config.hosts.workers : [{ name: "local", kind: "local" }]).map((h) => ({
   name: h.name, kind: h.kind ?? (h.ssh ? "remote" : "local"), ssh: h.ssh, sshConfig: h.sshConfig,
+  projectDir: h.projectDir,   // explicit checkout path on that host; default <projectsDir>/<project name>
   projectsDir: h.projectsDir ?? "~/projects", workspacesDir: h.workspacesDir ?? "~/orca/workspaces",
   orcaEnvironment: h.orcaEnvironment ?? "", orcaRepoId: h.orcaRepoId ?? "",
   capacity: { ...(config.capacity ?? {}), ...(h.capacity ?? {}), gate: { ...(config.capacity?.gate ?? {}), ...(h.capacity?.gate ?? {}) } },
@@ -43,7 +44,7 @@ export function hostNamed(name) {
 }
 export const argHost = (argv = process.argv) => { const i = argv.indexOf("--on"); return hostNamed(i >= 0 ? argv[i + 1] : undefined); };
 // Paths on a host. For a remote host these are remote paths (no local expansion); for a local host they are expanded.
-export const projectDirOn = (h) => (h.kind === "local" ? path.join(expand(h.projectsDir), PROJECT) : `${h.projectsDir}/${PROJECT}`);
+export const projectDirOn = (h) => h.projectDir ? (h.kind === "local" ? expand(h.projectDir) : h.projectDir) : (h.kind === "local" ? path.join(expand(h.projectsDir), PROJECT) : `${h.projectsDir}/${PROJECT}`);
 export const workspacesOn = (h) => (h.kind === "local" ? path.join(expand(h.workspacesDir), PROJECT) + "/" : `${h.workspacesDir}/${PROJECT}/`);
 export const integrationOn = (h) => `${workspacesOn(h)}coordinator-integration`;
 export const worktreeRefOn = (h, dir) => `id:${h.orcaRepoId}::${workspacesOn(h)}${dir}`;
@@ -56,7 +57,7 @@ export function onHost(h, command, opts = {}) {
 // The project checkout the Controller itself reads (docs, tasks): on the controller's own host.
 const ctl = config.hosts?.controller ?? {};
 const ctlHost = workerHosts.find((h) => h.name === (ctl.host ?? "local")) ?? workerHosts[0];
-export const PROJECT_DIR = ctlHost.kind === "local" ? projectDirOn(ctlHost) : projectDirOn({ ...ctlHost, kind: "local", projectsDir: ctl.projectsDir ?? ctlHost.projectsDir });
+export const PROJECT_DIR = ctlHost.kind === "local" ? projectDirOn(ctlHost) : projectDirOn({ ...ctlHost, kind: "local", projectDir: ctl.projectDir ?? ctlHost.projectDir, projectsDir: ctl.projectsDir ?? ctlHost.projectsDir });
 export const CONTROLLER_DIR = expand(ctl.controllerDir ?? "~/controller");
 
 // --- orca --------------------------------------------------------------------------------------

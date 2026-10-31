@@ -5,7 +5,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { RUNNER, file, orcaJson } from "./lib.mjs";
 
-const hours = Number(process.argv[process.argv.indexOf("--hours") + 1] || 4);
+const hi = process.argv.indexOf("--hours");
+const hours = hi >= 0 ? Number(process.argv[hi + 1]) : 4;
+if (!Number.isFinite(hours) || hours <= 0) throw new Error("--hours needs a positive number");
 const end = Date.now() + hours * 3600e3;
 
 if (RUNNER === "orca") {

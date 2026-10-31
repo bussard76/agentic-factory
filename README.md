@@ -40,7 +40,7 @@ cd your-project
 npx github:<your-fork>/agentic-factory init     # or: npx agentic-factory init, once published
 ```
 
-`init` is the onboarding. It asks the questions a new project has to answer, writes `factory.config.json`, copies the handbooks, templates, hooks and skills into your repo, and prints the next steps for the human (logins, pairing, loading the preview). It never touches an existing file without showing the diff. [`docs/onboarding.md`](docs/onboarding.md) explains every question.
+`init` is the onboarding. It asks the questions a new project has to answer, writes `factory.config.json`, copies the handbooks, templates, hooks and skills into your repo, commits them as `Adopt agentic-factory (ADR-0001)` and pushes, then prints the next steps for the human (logins, pairing, loading the preview). A file you changed yourself is never overwritten: the new version lands in `.factory/new/` for you to merge. [`docs/onboarding.md`](docs/onboarding.md) explains every question.
 
 Then, on **every machine that runs a Controller or a Front agent**:
 

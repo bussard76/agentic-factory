@@ -58,7 +58,7 @@ On every worker event, and otherwise every 10 minutes:
 2. **Act per event:**
    - **Developer done:** start the Tester (`mkspec test`).
    - **Tester failed:** rework in the same worktree (`mkspec rework`, `start.mjs --worktree <dir> --force`). Second failure: one tier higher. After {{MAX_ROUNDS}} rounds with a working feature: `mkspec reeval`, integrate, open points become debt plus an acceptance item.
-   - **Tester passed:** level 2/3 → conformance review (`mkspec conf`, `--readonly`). Then a wave as soon as {{WAVE_PASSED}} passed tasks wait, one has waited {{WAVE_MINUTES}} minutes, or the task is on the critical path.
+   - **Tester passed:** level 2/3 → conformance review (`mkspec conf`, `--readonly`). Then a wave as soon as {{WAVE_PASSED}} passed tasks wait, one has waited {{WAVE_MINUTES}} minutes, or the task is on the critical path. **A wave merges each task branch AND the review branch of its passing round** (`origin/{{BRANCH_PREFIX}}t12 origin/{{BRANCH_PREFIX}}t12-review-2`, plus the conformance branch for level 2/3): the push gate reads the findings files from the pushed tree and rejects a wave without them.
    - **Wave red:** a known load flake gets one isolated rerun; three green isolated runs are the evidence. A real failure goes back to the task.
    - **Question or escalation:** decide it if it is level 1/2 and covered by the recorded rules; write the decision into the task or the decisions file. Otherwise "Needs {{HUMAN}}".
    - **Stall, early stop, repeated self-caused error, escalation on the ladder, escaped defect:** nudge, and start a Retro (`mkspec retro`, `--readonly`) per the triggers in `docs/coordinator.md`.

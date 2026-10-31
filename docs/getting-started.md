@@ -43,14 +43,9 @@ It writes:
 
 Read `docs/dev-workflow.md` once. It is the whole process in plain language.
 
-## 3. Commit the adoption
+## 3. The adoption commit
 
-```bash
-git add -A
-git commit -m "Adopt agentic-factory (ADR-0001)"
-```
-
-The ADR reference is required: `AGENTS.md`, the hooks and the ADR folder are protected files. Try committing without it once to see the hook speak. (`doctor` comes after step 4: it also checks the user-level skills you install there.)
+`init` has already committed the files it wrote as `Adopt agentic-factory (ADR-0001)` and pushed the commit to `origin`, so the first workers and the first wave start from a `main` that carries `AGENTS.md`, the handbooks and the hooks. From now on `AGENTS.md`, the hooks and the ADR folder are protected files: a commit that touches them needs an `ADR-NNNN` reference in its message. Try one without it to see the hook speak. (`doctor` comes after step 4: it also checks the user-level skills you install there.)
 
 ## 4. Install the skills at user level, then start the Controller
 
@@ -110,7 +105,7 @@ The Controller picks the ticket up on its next cycle (every 10 minutes, or immed
 1. **Architect** spec review → `docs/reviews/T01-architecture-spec.md`, `Verdict: pass`
 2. **Developer** builds test-first on `agents/t01`, pushes, reports
 3. **Tester** reviews on current `main` plus the branch, runs the full gates through `gate`, writes `docs/reviews/T01-review-1.md`
-4. on `fail`: rework in the same worktree; on `pass`: the **wave** merges to the integration branch, runs the gates once, pushes to `main`
+4. on `fail`: rework in the same worktree; on `pass`: the **wave** merges the task branch and its passing review branch into the integration branch, runs the gates once, pushes to `main`
 5. **cleanup**: finished worktrees disappear, the status shows the counts
 
 Try pushing something to `main` by hand without a review. The pre-push hook refuses it and tells you why.

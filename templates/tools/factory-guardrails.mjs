@@ -112,12 +112,13 @@ function reviewGate() {
     for (const sha of [...commits, ...merges]) {
       const files = commitFiles(sha, merges.includes(sha));
       if (isDocsOnly(files) || files.every((f) => f.startsWith("docs/reviews/"))) continue;
-      // Fail closed: the reviewed SHA must exist, the commit must be its ancestor (exit status 0, not output), and
-      // only review files may change between the reviewed SHA and the pushed tip.
-      const covered = reviews.some((r) => shaExists(r.sha) && isAncestor(sha, r.sha) && isAncestor(r.sha, localSha) && onlyReviewsAfter(r.sha, localSha));
+      // Fail closed: the reviewed SHA must exist, the commit must be its ancestor and the reviewed SHA an ancestor of
+      // the pushed tip (exit status, never output). Commits added after a review are not ancestors of its SHA and
+      // therefore uncovered; merges are judged by their own changes above, so several reviewed tasks can share a wave.
+      const covered = reviews.some((r) => shaExists(r.sha) && isAncestor(sha, r.sha) && isAncestor(r.sha, localSha));
       if (!covered) uncovered.push(sha.slice(0, 10));
     }
-    if (uncovered.length) fail(`Push to ${MAIN} rejected. Commits without a passing independent review:\n${uncovered.join("\n")}\nA findings file under docs/reviews/ with "Verdict: pass" and "Reviewed commit: <40-char SHA>" covering each commit is required; after the reviewed commit only docs/reviews/ may change.`);
+    if (uncovered.length) fail(`Push to ${MAIN} rejected. Commits without a passing independent review:\n${uncovered.join("\n")}\nA findings file under docs/reviews/ with "Verdict: pass" and "Reviewed commit: <40-char SHA>" must be in the pushed tree, and each commit must be an ancestor of a reviewed SHA (merge the review branch into the wave).`);
   }
 }
 const shaExists = (sha) => spawnSync("git", ["cat-file", "-e", `${sha}^{commit}`]).status === 0;
@@ -133,12 +134,6 @@ function commitFiles(sha, isMerge) {
 function parseReviews(tip) {
   const files = tryGit("ls-tree", "-r", "--name-only", tip, "docs/reviews/").trim().split("\n").filter(Boolean);
   return files.map((f) => tryGit("show", `${tip}:${f}`)).map((t) => ({ pass: /^Verdict:\s*pass\b/m.test(t), sha: /^Reviewed commit:\s*([0-9a-f]{40})\b/m.exec(t)?.[1] })).filter((r) => r.pass && r.sha);
-}
-function onlyReviewsAfter(reviewed, tip) {
-  const r = spawnSync("git", ["diff", "--name-only", reviewed, tip], { encoding: "utf8" });
-  if (r.status !== 0) return false;   // a failing git command never counts as coverage
-  const files = r.stdout.trim().split("\n").filter(Boolean);
-  return files.every((f) => f.startsWith("docs/reviews/") || isDocsOnly([f]));
 }
 
 const [cmd, arg] = process.argv.slice(2);

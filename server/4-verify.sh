@@ -5,7 +5,7 @@ set -uo pipefail
 export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null
 ok(){ printf 'OK      %s\n' "$1"; }; bad(){ printf 'MISSING %s\n' "$1"; FAIL=1; }; FAIL=0
 REPO=""; GATES=""; for a in "$@"; do [ "$a" = "--gates" ] && GATES=1 || REPO="$a"; done
-for c in git node pnpm docker gh tailscale flock lsof; do command -v $c >/dev/null && ok "$c $($c --version 2>&1 | head -1 | cut -c1-40)" || bad $c; done
+for c in git node pnpm docker gh tailscale; do command -v $c >/dev/null && ok "$c $($c --version 2>&1 | head -1 | cut -c1-40)" || bad $c; done
 for c in codex claude pi orca-ide uv; do command -v $c >/dev/null && ok "$c" || echo "info    $c not installed"; done
 id -nG | grep -qw docker && ok "docker group" || bad "docker group (log in again)"
 docker run --rm hello-world >/dev/null 2>&1 && ok "docker run" || bad "docker run"
