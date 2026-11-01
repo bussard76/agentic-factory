@@ -7,7 +7,7 @@ One human. One agent that talks to them. One unattended controller that runs man
 - **Intro:** the ten-minute overview, published with GitLab Pages at **https://gitlabci-pages.exxeta.info/agentic-factory-93b60a/** (GitLab login required; the page is `site/index.html`, in German).
 - **Getting started, step by step:** [`docs/getting-started.md`](docs/getting-started.md) (English), [`docs/de/erste-schritte.md`](docs/de/erste-schritte.md) (Deutsch). From zero to the first reviewed change on `main`, all on your own machine.
 - **Process for people:** [`docs/workflow.md`](docs/workflow.md) (English), [`docs/de/workflow.md`](docs/de/workflow.md) (Deutsch).
-- **Set up a project:** `npx agentic-factory init` in your repo (see [Quick start](#quick-start)).
+- **Set up a project:** start `claude "Read ~/agentic-factory/START.md and set up this project."` in your repo (see [Quick start](#quick-start)).
 
 ## What you get
 
@@ -28,34 +28,20 @@ One human. One agent that talks to them. One unattended controller that runs man
 
 | | |
 |---|---|
-| **Orca** (required) | [github.com/stablyai/orca](https://github.com/stablyai/orca). The runner: every worker gets its own worktree and terminal, the Controller and workers exchange structured messages, remote servers are paired over a private network. `init` stops if the Orca CLI is missing. The Orca skills (`orchestration`, `orca-cli`) must be installed at user level on every host that runs a Controller or Front agent (`agentic-factory install-skills`). |
+| **Orca** (required) | [github.com/stablyai/orca](https://github.com/stablyai/orca), installed and running. The runner provides worktrees, terminals and messages. |
 | **One agent CLI** | Codex, Claude Code or Pi, logged in. Workers, Controller and Front agent are sessions of these. |
-| **Node 22+, git** | the scripts and hooks |
+| **Node 22+, git** | git configured with your name and email; the project is a git repository |
 | optional | a Linux server for the Controller and workers ([`docs/server-setup.md`](docs/server-setup.md), about an hour); `gh` for GitHub-issue steering; Figma or Pencil for stage 1 of outside-in |
 
 A plain-terminal runner without Orca exists behind `init --experimental-terminal-runner`. It is unsupported and not what the docs describe.
 
 ```bash
-cd your-project
-npx github:<your-fork>/agentic-factory init     # or: npx agentic-factory init, once published
+git clone https://github.com/bussard76/agentic-factory ~/agentic-factory
+cd /path/to/your-project
+claude "Read ~/agentic-factory/START.md and set up this project."
 ```
 
-`init` is the onboarding. It asks the questions a new project has to answer, writes `factory.config.json`, copies the handbooks, templates, hooks and skills into your repo, commits them as `Adopt agentic-factory (ADR-0001)` and pushes, then prints the next steps for the human (logins, pairing, loading the preview). A file you changed yourself is never overwritten: the new version lands in `.factory/new/` for you to merge. [`docs/onboarding.md`](docs/onboarding.md) explains every question.
-
-Then, on **every machine that runs a Controller or a Front agent**:
-
-```bash
-npx agentic-factory install-skills   # the Orca skills (orchestration, orca-cli) and the coordination skills at user level
-```
-
-Those two sessions run outside the project repo and cannot see its `.agents/skills`. Without the Orca skills an agent cannot start, watch or release workers; this is the one step people forget.
-
-Later:
-
-```bash
-npx agentic-factory update    # re-render from a newer factory; files you changed are kept, new versions land in .factory/new/
-npx agentic-factory doctor    # check hosts, tools, hooks, user-level skills and config
-```
+Use `codex` or `pi` instead if that is your logged-in CLI. The Front agent asks the [onboarding questions](docs/onboarding.md) in conversation, creates the adoption commit, starts the Controller and checks the setup. It then reports the project phase and guides the first feature. The [manual CLI path](docs/getting-started.md#appendix-what-the-agent-does-for-you-and-how-to-do-it-by-hand) remains available; updates preserve edited files in `.factory/new/` for merging.
 
 ## Known limits (read before you trust the gates)
 
@@ -113,7 +99,7 @@ Version 0.1.0, extracted on 2026-10-31 from a project that has run this way sinc
 - every project gets its own copy through `init` and changes it freely; `update` brings newer factory versions in without overwriting local changes (new versions land in `.factory/new/` for you to merge)
 - what proves itself in a project flows back into the factory as a pull request
 - the numbers in the config (capacity, models, rounds) are starting values that the factory calibrates from measurements
-- a remote server is an option, not a must; so is the day/night rhythm; so is Orca
+- a remote server and the day/night rhythm are options; Orca is required
 
 The tools target Linux servers and macOS, with Orca as the runner everywhere.
 

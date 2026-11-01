@@ -1,136 +1,94 @@
 # Erste Schritte: von null bis zur ersten Wave
 
-Diese Anleitung führt ein neues Projekt von nichts bis zur ersten geprüften Änderung auf `main`, alles auf dem eigenen Rechner. Ein Remote-Server kommt später und ist optional. Rechne mit etwa einer Stunde, das meiste davon ist Lesen.
+Starte einen Agenten in deinem Projekt. Er begleitet dich durch die Einrichtung und das erste Feature; ein Remote-Server ist optional.
 
 ## 0. Was du brauchst
 
-- **Orca**, installiert und gestartet ([github.com/stablyai/orca](https://github.com/stablyai/orca)). Es ist der Runner: Worktrees und Terminals pro Worker, strukturierte Nachrichten zwischen Controller und Workern, Remote-Server. `init` bricht ohne Orca ab.
-- **Node 22+**, **git** und ein Repository für dein Projekt (ein frisches `git init` reicht).
-- **Eine Agenten-CLI**, eingeloggt: Codex (`codex`), Claude Code (`claude`) oder Pi (`pi`). Worker, Controller und Front-Agent sind alle Sitzungen davon.
-- Optional: **gh** (Steuerung über GitHub-Issues), **Figma** oder **Pencil** (für Stufe 1 von Outside-in).
+- [Orca](https://github.com/stablyai/orca), installiert und gestartet.
+- Node 22+ und Git mit deinem Namen und deiner E-Mail (`git config --global user.name` und `user.email`). Dein Projekt braucht ein Git-Repository; `git init` reicht.
+- Eine angemeldete Agenten-CLI: Claude Code, Codex oder Pi.
+- Optional: `gh` für GitHub-Issues, Figma oder Pencil für den Entwurf.
 
 ## 1. Die Fabrik holen
 
 ```bash
 git clone https://github.com/bussard76/agentic-factory ~/agentic-factory
+```
+
+## 2. Den Front-Agenten im Projekt starten
+
+```bash
+cd /pfad/zu/deinem-projekt
+claude "Read ~/agentic-factory/START.md and set up this project."
+```
+
+Statt `claude` kannst du `codex` oder `pi` verwenden. Der Front-Agent prüft die Voraussetzungen, stellt die [Onboarding-Fragen](../onboarding.md) einzeln, erstellt und pusht den Einführungs-Commit, startet die Fabrik und prüft sie. Er erklärt dir den Projektstand und den nächsten Schritt. Von da an sprichst du mit diesem Agenten; zu Beginn jeder Sitzung prüft er den Status und handelt entsprechend der aktuellen Phase.
+
+## 3. Das erste Feature, outside-in
+
+Sag dem Front-Agenten, was du möchtest. Er erarbeitet mit dir zuerst die Oberfläche (Entwurf oder klickbarer Prototyp), dann die ein- und ausgehenden Daten und schließlich die Logik in Worten und als Diagramm. Nach deiner Zustimmung schreibt er ein fertiges Ticket und informiert den Controller. Halte das erste Feature klein: ein sichtbares Verhalten und ein oder zwei Abnahmesätze.
+
+Der Controller organisiert Architekturprüfung, Umsetzung, unabhängigen Test und Integrations-Wave. Die [Branch- und Worktree-Mechanik](workflow.md#branches-und-worktrees-die-mechanik-eines-tickets) erklärt die Einzelheiten.
+
+## 4. Auf der Preview abnehmen
+
+Probiere das integrierte Verhalten mit dem Front-Agenten auf der Preview aus. Ist sie aktiviert, folgt sie `main`; der mitgelieferte Updater kann über die launchd-Vorlage oder Cron laufen. Melde dem Front-Agenten deine Beobachtungen, damit er daraus Tickets macht.
+
+## 5. Später: Remote-Server, weitere Hosts und Rhythmus
+
+- **Remote-Server und Hosts:** Folge der [Server-Einrichtung](../server-setup.md), konfiguriere `hosts.workers` und `hosts.controller.host` und führe `update` und `start` aus. Installiere die Benutzer-Skills auf jedem Host mit Controller oder Front-Agent.
+- **Rhythmus:** `rhythm.mode` wählt tags planen/nachts bauen, durchgehend oder eigene Ruhezeiten.
+- **Kalibrierung:** Lass Kapazitäts- und Agenten-Kalibrierung auf `auto`, damit Messungen Limits und Modellstufen anpassen.
+- **GitHub-Issues:** Wähle `steering.mode: github-issues`, lege die Labels an und führe `setup-matt-pocock-skills` für den gemeinsamen Tracker aus.
+
+## 6. Wenn etwas hakt
+
+| Symptom | Was du prüfst |
+|---|---|
+| Voraussetzung oder Hook schlägt fehl | Lies die Meldung und den vorgeschlagenen Schritt; Hooks nicht umgehen. |
+| Controller tut nichts | Prüfe `~/controller/status.md`, `inbox.md` und `node capacity.mjs --verbose`. |
+| Worker steht still | Prüfe `node stallwatch.mjs` und sein Orca-Terminal. |
+| Tests wackeln unter Last | Prüfe `~/load.log` und das Gate-Journal; senke `capacity.calibration.startSuite`. |
+| Update behält deine Änderung | Führe die neue Version aus `.factory/new/` zusammen. |
+
+## Anhang: Was der Agent für dich tut (und wie es von Hand geht)
+
+Diese Befehle laufen im Projektverzeichnis; passe den Pfad zur Fabrik bei Bedarf an:
+
+```bash
 alias agentic-factory='node ~/agentic-factory/bin/agentic-factory.mjs'
+agentic-factory init                         # interaktives Onboarding
+agentic-factory init --print-questions       # JSON, schreibt nichts
+agentic-factory init --print-questions --answers /pfad/zu/antworten.json
+agentic-factory init --answers /pfad/zu/antworten.json
+agentic-factory install-skills               # Benutzer-Skills auf diesem Host
+agentic-factory start                        # Bündel, Gate, Load-Log, Controller-Sitzung
+agentic-factory status --json                # Phase und nächster Schritt
+agentic-factory doctor                       # Einrichtung prüfen
+agentic-factory update                       # aktualisieren, eigene Änderungen behalten
 ```
 
-(Sobald das Paket auf npm liegt, ersetzt `npx agentic-factory` den Alias.) Git braucht Name und E-Mail (`git config --global user.name …`), weil die Agenten unter deiner Identität committen.
+Die Antworten sind ein Objekt mit Frage-IDs als Schlüssel; die Datei gehört außerhalb des Repositories. `init` funktioniert auch allein interaktiv. Ohne Remote erstellt es ein lokales Bare-`origin` unter `~/.factory-remotes/<projekt>-<hash>.git`; mit `git remote set-url origin <url>` kannst du es später ersetzen. Die Einführungsdateien werden als `Adopt agentic-factory (ADR-0001)` committet und gepusht (bei bestehenden ADRs mit der nächsten freien Nummer).
 
-## 2. Das Onboarding im Projekt starten
-
-```bash
-cd ~/pfad/zu/deinem-projekt
-agentic-factory init
-```
-
-`init` stellt eine Frage nach der anderen, die empfohlene Antwort zuerst. Für den ersten Versuch nimm die Vorgaben, mit einer Ausnahme: Antworte bei den Hosts mit **„Nur auf diesem Rechner“**. Die Sprache des Leitfadens richtet sich nach deinem `LANG` (Deutsch oder Englisch); die Befehle, die die Hooks ausführen, werden vor der Bestätigung angezeigt. Die Fragen und ihr Grund stehen in [onboarding.md](../onboarding.md).
-
-Hat das Repo noch kein Remote, legt `init` ein **lokales Bare-Remote** an (`~/.factory-remotes/<projekt>-<hash>.git`, eines pro Projektverzeichnis) und setzt es als `origin`, weil alle Skripte über `origin` holen und pushen. Ersetze es jederzeit durch ein echtes Remote: `git remote set-url origin <url>`.
-
-Es entstehen:
-
-| | |
+| Dateien von `init` | Zweck |
 |---|---|
-| `factory.config.json` | alles Projektspezifische; keine Geheimnisse |
-| `AGENTS.md`, `CODING_STANDARDS.md` | die Regeln der Agenten und die Maßstäbe des Reviewers |
-| `docs/coordinator.md`, `docs/dev-workflow.md`, `docs/review-protocol.md`, `docs/architect-protocol.md`, `docs/debt.md` | die Handbücher, ausgefüllt für dein Projekt |
-| `docs/adr/0001-adopt-agentic-factory.md`, `docs/tasks/T00-template.md` | der Einführungs-ADR und die Ticket-Vorlage |
-| `.githooks/` (oder das bestehende Hook-Verzeichnis des Projekts), `tools/factory-guardrails.mjs` | die Git-Schutzregeln, schon aktiv (`core.hooksPath`); eigene Hooks bleiben als `<hook>.own` erhalten und laufen zuerst |
-| `.agents/skills/` (+ Link `.claude/skills`) | die mitgelieferten Skills |
-| `.factory/controller/`, `.factory/front-agent/`, `.factory/server/` | die Bündel für Controller, Front-Agent und einen späteren Server; von git ignoriert (`update` erzeugt sie neu, auf die Hosts kommen sie von Hand); nur `.factory/manifest.json` wird committet |
+| `factory.config.json` | Projekteinstellungen ohne Geheimnisse |
+| `AGENTS.md`, `CODING_STANDARDS.md` | Agentenregeln und Review-Maßstäbe |
+| `docs/coordinator.md`, `docs/dev-workflow.md`, `docs/review-protocol.md`, `docs/architect-protocol.md`, `docs/debt.md` | Projekthandbücher |
+| `docs/adr/0001-adopt-agentic-factory.md`, `docs/tasks/T00-template.md` | Einführungs-ADR und Ticket-Vorlage |
+| `.githooks/` (oder vorhandenes Hook-Verzeichnis), `tools/factory-guardrails.mjs` | Aktivierte Schutzregeln; vorhandene Hooks laufen zuerst als `<hook>.own` |
+| `.agents/skills/` und Link `.claude/skills` | Mitgelieferte Skills |
+| `.factory/controller/`, `.factory/front-agent/`, `.factory/server/` | Ignorierte Bündel, die `update` neu erzeugt; `.factory/manifest.json` wird committet |
 
-Lies `docs/dev-workflow.md` einmal. Das ist der ganze Prozess in klarer Sprache.
-
-## 3. Der Einführungs-Commit
-
-`init` hat die geschriebenen Dateien bereits als `Adopt agentic-factory (ADR-0001)` committet und nach `origin` gepusht, damit die ersten Worker und die erste Wave von einem `main` starten, das `AGENTS.md`, die Handbücher und die Hooks enthält. Ab jetzt sind `AGENTS.md`, die Hooks und der ADR-Ordner geschützte Dateien: Ein Commit, der sie berührt, braucht einen `ADR-NNNN`-Verweis in der Nachricht. Probiere einen ohne, um den Hook sprechen zu hören. (`doctor` kommt nach Schritt 4: Er prüft auch die Skills auf Benutzerebene, die du dort installierst.)
-
-## 4. Die Skills auf Benutzerebene installieren, dann den Controller starten
-
-Controller und Front-Agent laufen außerhalb des Repos und sehen die `.agents/skills` des Projekts nicht. Installiere die Skills, auf die sie angewiesen sind, auf Benutzerebene, und zwar auf **jedem** Host, auf dem einer von beiden läuft. Entscheidend sind die Orca-Skills: Ohne `orchestration` und `orca-cli` kann ein Agent keine Worker starten, beobachten oder freigeben.
+Um die Sitzungen nach `init` von Hand zu starten, installiere die Skills, kopiere die Bündel und starte Gate und Load-Log:
 
 ```bash
-agentic-factory install-skills            # ~/.claude/skills und ~/.agents/skills auf diesem Rechner
-```
-
-Jetzt `agentic-factory doctor` ausführen: Alles sollte `OK` sein außer dem Controller, der noch nicht läuft. Dann der Controller:
-
-```bash
+agentic-factory install-skills
 cp -R .factory/controller ~/controller
-mkdir -p ~/.local/bin && install -m 755 ~/controller/gate ~/.local/bin/gate   # das Gate braucht nur node, kein flock
+mkdir -p ~/.local/bin && install -m 755 ~/controller/gate ~/.local/bin/gate
 (cd ~/controller && nohup bash loadlog.sh >/dev/null 2>&1 &)
+PROJECT=dein-projektname
+mkdir -p ~/front-agent && cp -R .factory/front-agent "$HOME/front-agent/$PROJECT"
 ```
 
-Öffne ein Terminal in `~/controller` und starte dort eine Agenten-Sitzung, zum Beispiel:
-
-```bash
-claude "Lies ~/controller/CONTROLLER.md und handle als Controller für dieses Projekt."
-# oder: codex "Lies ~/controller/CONTROLLER.md und handle als Controller für dieses Projekt."
-```
-
-Der Controller liest sein Handbuch, zieht das Projekt, findet keine Tickets, schreibt `~/controller/status.md` und wartet. Schau in die Statusdatei: Das ist, was der Front-Agent dir zeigen wird.
-
-## 5. Den Front-Agent starten
-
-```bash
-mkdir -p ~/front-agent && cp -R .factory/front-agent ~/front-agent/<projekt>
-```
-
-Im Projektverzeichnis eine zweite Agenten-Sitzung starten:
-
-```bash
-claude "Lies ~/front-agent/<projekt>/FRONT_AGENT.md und handle als Front-Agent. Ich bin <dein Name>."
-```
-
-Ab jetzt sprichst du nur noch mit dieser Sitzung. Frag sie nach dem Stand; sie liest `~/controller/status.md` und zeigt dir die Tabelle.
-
-## 6. Die erste Funktion, von außen nach innen
-
-Sag dem Front-Agent, was du willst. Er wird:
-
-1. die **Oberfläche** mit dir skizzieren (ein Figma-Frame oder ein Klick-Fake über den `prototype`-Skill) und nach `design/<feature>/` exportieren
-2. die **Daten rein und raus** am Fake auflisten
-3. die **Logik** mit dir in Worten und als Mermaid-Diagramm abstimmen (`grilling`)
-4. das **Ticket** schreiben: `docs/tasks/T01-<slug>.md` aus der Vorlage (oder ein GitHub-Issue mit `ready-for-agent`), mit `Status: ready`
-5. eine Zeile in `~/controller/inbox.md` legen
-
-Halte die erste Funktion winzig: ein sichtbares Verhalten, ein oder zwei Abnahmesätze. Es geht darum, die Maschine einmal laufen zu sehen.
-
-## 7. Zusehen, wie die Maschine läuft
-
-Der Controller nimmt das Ticket im nächsten Zyklus auf (alle 10 Minuten oder sofort, wenn er angestoßen wird). In `status.md` und in deinen Worktrees unter `~/orca/workspaces/<projekt>/` (oder wohin `workspacesDir` zeigt) siehst du:
-
-1. **Architekt**, Spec-Review → `docs/reviews/T01-architecture-spec.md`, `Verdict: pass`
-2. **Developer** baut testgetrieben auf `agents/t01`, pusht, berichtet
-3. **Tester** prüft auf aktuellem `main` plus Branch, lässt die vollen Gates über `gate` laufen, schreibt `docs/reviews/T01-review-1.md`
-4. bei `fail`: Nacharbeit im selben Worktree; bei `pass`: die **Wave** führt den Task-Branch und seinen bestandenen Review-Branch auf dem Integrations-Branch zusammen, lässt die Gates einmal laufen, pusht nach `main`
-5. **Aufräumen**: fertige Worktrees verschwinden, der Status zeigt die Zahlen
-
-Versuche einmal, von Hand ohne Review nach `main` zu pushen. Der Pre-Push-Hook lehnt ab und sagt warum.
-
-Die genaue Branch- und Worktree-Mechanik eines Tickets, Schritt für Schritt, steht in [workflow.md](workflow.md#branches-und-worktrees-die-mechanik-eines-tickets).
-
-## 8. Auf dem Preview abnehmen
-
-Wenn du den Preview aktiviert hast, hält `front-agent/preview-update.sh` einen separaten Klon auf dem aktuellen `main` und startet deine App auf dem konfigurierten Port neu, sobald `main` sich bewegt. Lade ihn als launchd-Agent (macOS) aus `preview.plist.template` oder per cron. Teste das neue Verhalten dort; Befunde gehen an den Front-Agent und werden Tickets.
-
-## 9. Später: Remote-Server, mehr Hosts, die Nachtschicht
-
-- **Remote-Server:** [server-setup.md](../server-setup.md) mit `.factory/server/` durchgehen, den Host in `factory.config.json` → `hosts.workers` eintragen, `hosts.controller.host` darauf setzen, wenn der Controller dorthin ziehen soll, `agentic-factory update` ausführen, das neue `.factory/controller/`-Bündel auf den Server kopieren und dort die Skills auf Benutzerebene aus dem Bündel installieren (`cp -R ~/controller/skills/* ~/.claude/skills/ && cp -R ~/controller/skills/* ~/.agents/skills/`). Mehrere Hosts gehen genauso; `start.mjs --on <host>` wählt einen.
-- **Rhythmus:** `rhythm.mode` schaltet zwischen tags planen/nachts bauen, durchgehend und eigenen Ruhezeiten.
-- **Kalibrierung:** `capacity.calibration.mode` und `agents.calibration` auf `auto` lassen. Obergrenzen und Modellstufen starten niedrig und folgen den Messungen; der nächtliche Audit sagt dir, was sich geändert hat und warum.
-- **GitHub-Issues** statt Task-Dateien: `steering.mode: github-issues`, die Labels anlegen, einmal `setup-matt-pocock-skills` ausführen, damit `wayfinder`, `to-tickets` und `to-spec` denselben Tracker nutzen.
-
-## 10. Wenn etwas hakt
-
-| Symptom | Schau in |
-|---|---|
-| `init` verweigert oder ein Hook blockiert einen Commit | Die Meldung nennt Regel und Datei; `--no-verify` ist nie die Antwort |
-| Der Controller tut nichts | `~/controller/status.md` (frisch?), `inbox.md` (ist das Ticket `ready`?), `node capacity.mjs --verbose` (wartet er auf Kapazität?) |
-| Ein Worker steht still | Ausgabe von `node stallwatch.mjs`; in Orca eine Zeile in sein Terminal schicken |
-| Tests wackeln unter Last | `~/load.log`, das Journal (`type: gate`), `capacity.calibration.startSuite` senken |
-| Du hast eine Vorlage geändert und `update` behält deine Version | So gewollt; die neue Fassung liegt in `.factory/new/` zum Zusammenführen |
-
-Alles, was die Fabrik entscheidet, steht im Journal (`~/controller/journal.ndjson`). Alles, was du entscheidest, kommt sofort in `docs/coordinator.md` und `docs/dev-workflow.md`.
+Starte in einem Terminal in `~/controller` mit `claude "Read ~/controller/CONTROLLER.md and act as the Controller for this project."`. Starte im Projektverzeichnis den Front-Agenten mit `claude "Read ~/front-agent/<projekt>/FRONT_AGENT.md and act as the Front agent."`. Statt `claude` geht deine gewählte CLI. Für einen entfernten Controller siehe [Server-Einrichtung](../server-setup.md).

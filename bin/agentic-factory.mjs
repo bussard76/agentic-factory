@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // agentic-factory CLI: init (onboarding), update, doctor, selfcheck. Node 22+, no dependencies.
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -15,17 +15,40 @@ const cmd = args[0];
 const flag = (f) => args.includes(f);
 const opt = (f, d) => { const i = args.indexOf(f); return i >= 0 ? args[i + 1] : d; };
 const yes = flag("--yes");
+// The Front agent runs the onboarding as a conversation: `init --print-questions` lists the questions (with the
+// answers given so far) as JSON and changes nothing; `init --answers <file>` runs init with the human's answers.
+const printQuestions = cmd === "init" && flag("--print-questions");
+const answersFile = opt("--answers");
+const presetAnswers = answersFile ? JSON.parse(fs.readFileSync(answersFile, "utf8")) : {};
+const batch = yes || printQuestions || Boolean(answersFile);
 const sh = (c, a, o = {}) => { try { return execFileSync(c, a, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], ...o }).trim(); } catch { return ""; } };
 const has = (bin) => spawnSync("sh", ["-c", `command -v ${bin}`], { stdio: "ignore" }).status === 0;
 const hash = (s) => createHash("sha256").update(s).digest("hex").slice(0, 16);
-const say = (s = "") => console.log(s);
+// In --print-questions mode stdout carries only the JSON; printed lines become the context of the next question.
+let sayBuffer = [];
+const say = (s = "") => (printQuestions ? sayBuffer.push(String(s).trim()) : console.log(s));
 
-const rl = yes ? null : readline.createInterface({ input: process.stdin, output: process.stdout });
+// Only the interactive init reads the keyboard; any other command would otherwise wait for stdin to close.
+const rl = batch || cmd !== "init" ? null : readline.createInterface({ input: process.stdin, output: process.stdout });
+// Every question asked, in order, for --print-questions (and to validate --answers).
+const asked = [];
+const takeContext = () => { const c = sayBuffer.filter(Boolean).join("\n"); sayBuffer = []; return c; };
+function preset(id, options) {
+  if (!(id in presetAnswers)) return undefined;
+  let v = presetAnswers[id];
+  if (options && typeof v === "boolean") v = v ? "yes" : "no";
+  v = v === null ? "" : String(v);
+  if (options && !options.some((o) => o.value === v)) { console.error(`--answers: "${id}" must be one of ${options.map((o) => o.value).join(", ")} (got "${v}")`); process.exit(1); }
+  return v;
+}
 // The Orca executable: ORCA_CLI_COMMAND if set; on Linux outside an Orca terminal `orca-ide` (bare `orca` is the GNOME screen reader there).
 const ORCA_BIN = process.env.ORCA_CLI_COMMAND ?? (process.platform === "linux" && !process.env.ORCA_TERMINAL && has("orca-ide") ? "orca-ide" : "orca");
-async function ask(question, options, def) {
-  // One question at a time, recommended option first. With --yes, the default is taken.
-  if (yes) return def;
+async function ask(id, question, options, def) {
+  // One question at a time, recommended option first. With --yes, the default is taken; with --answers, the given one.
+  const given = preset(id, options);
+  asked.push({ id, type: "choice", question: question.trim(), context: takeContext() || undefined, options: options.map(({ label, value, hint }) => ({ value, label, ...(hint ? { hint } : {}) })), recommended: def, answer: given ?? null });
+  if (given !== undefined) return given;
+  if (batch) return def;
   say(`\n${question}`);
   options.forEach((o, i) => say(`  ${i + 1}) ${o.label}${o.value === def ? "  (recommended)" : ""}${o.hint ? `\n     ${o.hint}` : ""}`));
   const a = (await rl.question(`> [${options.findIndex((o) => o.value === def) + 1}] `)).trim();
@@ -34,7 +57,12 @@ async function ask(question, options, def) {
   return n >= 1 && n <= options.length ? options[n - 1].value : a;
 }
 // Enter keeps the default; a single "-" clears the value (for optional commands).
-async function askText(question, def) { if (yes) return def; const a = (await rl.question(`\n${question} [${def || "none"}] (Enter = keep, - = none) `)).trim(); return a === "-" ? "" : a || def; }
+async function askText(id, question, def) {
+  const given = preset(id);
+  asked.push({ id, type: "text", question: question.trim(), context: takeContext() || undefined, recommended: def ?? "", answer: given ?? null });
+  if (given !== undefined) return given;
+  if (batch) return def;
+  const a = (await rl.question(`\n${question} [${def || "none"}] (Enter = keep, - = none) `)).trim(); return a === "-" ? "" : a || def; }
 
 // --- detection -----------------------------------------------------------------------------------
 function detect() {
@@ -63,9 +91,11 @@ function detect() {
 // --- init ------------------------------------------------------------------------------------------
 async function init() {
   say(`agentic-factory ${PKG.version}: onboarding for ${cwd}`);
-  if (spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { stdio: "ignore" }).status !== 0) { say("Not a git repository. Run `git init` first."); process.exit(1); }
+  const emit = (o) => { console.log(JSON.stringify(o, null, 2)); process.exit(0); };
+  if (spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { stdio: "ignore" }).status !== 0) { if (printQuestions) emit({ blocker: "not a git repository: run `git init` first", questions: [] }); say("Not a git repository. Run `git init` first."); process.exit(1); }
   const d = detect();
   // A re-run on an initialised project is an update: keep the project's recorded answers, refresh the files, commit nothing.
+  if (printQuestions && fs.existsSync(".factory/manifest.json") && fs.existsSync("factory.config.json")) emit({ initialised: true, questions: [], next: "already initialised: run `status`, and `start` if the Controller is not running" });
   if (fs.existsSync(".factory/manifest.json") && fs.existsSync("factory.config.json")) {
     say("Already initialised (factory.config.json and .factory/manifest.json exist). Refreshing from the recorded answers; change answers by editing factory.config.json. Nothing is committed.");
     await initNonInteractiveRefresh();
@@ -74,9 +104,11 @@ async function init() {
   }
   // Every script fetches origin and merges origin/<main>. A repo without a remote gets a local bare one, so the
   // first wave works on a single machine; replace it with a real remote any time (git remote set-url origin …).
-  if (!sh("git", ["remote"])) {
+  const needsRemote = !sh("git", ["remote"]);
+  const bare = path.join(os.homedir(), ".factory-remotes", `${d.name}-${hash(cwd).slice(0, 6)}.git`);
+  if (needsRemote) d.repo = printQuestions ? "local bare remote (init creates it under ~/.factory-remotes)" : `local:${bare}`;
+  const createRemote = () => {
     // Keyed by name plus a hash of the absolute path, so two projects with the same directory name never share a remote.
-    const bare = path.join(os.homedir(), ".factory-remotes", `${d.name}-${hash(cwd).slice(0, 6)}.git`);
     fs.mkdirSync(path.dirname(bare), { recursive: true });
     const existed = fs.existsSync(bare);
     if (!existed) spawnSync("git", ["init", "-q", "--bare", bare]);
@@ -90,23 +122,22 @@ async function init() {
       if (p.status !== 0) foreign();
     } else if (existed && sh("git", ["-C", bare, "rev-parse", "--verify", "-q", "HEAD"])) foreign();
     say(`No remote found: ${existed ? "using the existing" : "created a"} local bare remote at ${bare} as origin (replace it later with git remote set-url origin <url>).`);
-    d.repo = `local:${bare}`;
-  }
+  };
   const c = JSON.parse(fs.readFileSync(path.join(ROOT, "factory.config.example.json"), "utf8"));
   delete c.$comment;
   c.factoryVersion = PKG.version;
   c.project.adoptedOn = process.env.FACTORY_TODAY ?? new Date().toISOString().slice(0, 10);
-  c.project.name = await askText("1. Project name (used for branches, worktrees, locks, the preview)?", d.name);
-  c.project.repo = await askText("   Repository?", d.repo || `github.com/<owner>/${c.project.name}`);
+  c.project.name = await askText("project.name", "1. Project name (used for branches, worktrees, locks, the preview)?", d.name);
+  c.project.repo = await askText("project.repo", "   Repository?", d.repo || `github.com/<owner>/${c.project.name}`);
   c.project.mainBranch = sh("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).replace("origin/", "") || sh("git", ["branch", "--show-current"]) || "main";
-  c.project.humanName = await askText("2. Who is the human the agents work for (name as the handbooks should address them)?", os.userInfo().username);
+  c.project.humanName = await askText("project.humanName", "2. Who is the human the agents work for (name as the handbooks should address them)?", os.userInfo().username);
   const langDefault = /^de/i.test(process.env.LANG ?? process.env.LC_ALL ?? "") ? "de" : "en";
-  c.project.language = await ask("   In which language should the human-facing workflow guide be written?", [{ label: "English", value: "en" }, { label: "Deutsch", value: "de" }], langDefault);
-  c.rhythm.mode = await ask("3. Working rhythm?", [
+  c.project.language = await ask("project.language", "   In which language should the human-facing workflow guide be written?", [{ label: "English", value: "en" }, { label: "Deutsch", value: "de" }], langDefault);
+  c.rhythm.mode = await ask("rhythm.mode", "3. Working rhythm?", [
     { label: "Day: plan, test, decide. Night: the Controller builds unattended. Morning handover.", value: "day-plan-night-build" },
     { label: "Continuous: build whenever signed-off work exists; questions as they arise", value: "continuous" },
     { label: "Custom quiet hours (edit rhythm.quietHours afterwards)", value: "custom" }], "day-plan-night-build");
-  c.steering.mode = await ask("4. Where do tickets live?", [
+  c.steering.mode = await ask("steering.mode", "4. Where do tickets live?", [
     { label: "GitHub issues (labels, native blocking; wayfinder maps visible in the tracker)", value: "github-issues" },
     { label: "Task files docs/tasks/T<n>-*.md (everything in git, no tracker)", value: "orca-tasks" }], d.github && d.tools.gh ? "github-issues" : "orca-tasks");
   // Orca is a prerequisite: workers, worktrees, terminals, messages and remote hosts all run through it.
@@ -116,16 +147,17 @@ async function init() {
   let orcaRunning = false;
   if (c.agents.runner === "orca" && !skipOrca) {
     if (!d.tools.orca) {
+      if (printQuestions) emit({ blocker: "Orca is required and its CLI (orca / orca-ide) is not on this machine: install it (https://github.com/stablyai/orca) and start it", questions: [] });
       say(`\nOrca is required and its CLI (orca / orca-ide) is not on this machine. Install Orca (https://github.com/stablyai/orca), start it, then run init again.\n(For experiments without Orca: --experimental-terminal-runner. Unsupported.)`);
       process.exit(1);
     }
     orcaRunning = /"ok":\s*true/.test(sh(ORCA_BIN, ["status", "--json"]));
     say(orcaRunning ? `5. Orca: installed and running (${ORCA_BIN}).` : `5. Orca: installed but not running. Start it with \`${ORCA_BIN} open --json\`; the repo is registered with Orca when it runs.`);
   } else if (c.agents.runner === "terminal") say("5. Runner: plain terminals (experimental, unsupported).");
-  c.agents.default = await ask("6. Default agent CLI for workers?", [{ label: "Codex", value: "codex" }, { label: "Claude Code", value: "claude" }, { label: "Pi", value: "pi" }], d.tools.codex ? "codex" : d.tools.claude ? "claude" : "pi");
+  c.agents.default = await ask("agents.default", "6. Default agent CLI for workers?", [{ label: "Codex", value: "codex" }, { label: "Claude Code", value: "claude" }, { label: "Pi", value: "pi" }], d.tools.codex ? "codex" : d.tools.claude ? "claude" : "pi");
   if (c.agents.default === "claude") { c.agents.models = { small: "haiku", default: "sonnet", large: "opus" }; c.agents.fallback = { agent: "codex", models: { small: "gpt-6-luna", default: "gpt-6.1-terra", large: "gpt-6.1-sol" }, quotaThresholdPercent: 10 }; }
-  for (const t of ["small", "default", "large"]) c.agents.models[t] = await askText(`   Model for the "${t}" tier (as the ${c.agents.default} CLI names it; a starting value, calibrated later)?`, c.agents.models[t]);
-  const where = await ask("7. Where do workers run? (a remote server is an option, not a must; you can add more hosts later)", [
+  for (const t of ["small", "default", "large"]) c.agents.models[t] = await askText(`agents.models.${t}`, `   Model for the "${t}" tier (as the ${c.agents.default} CLI names it; a starting value, calibrated later)?`, c.agents.models[t]);
+  const where = await ask("hosts.where", "7. Where do workers run? (a remote server is an option, not a must; you can add more hosts later)", [
     { label: "Only on this machine", value: "local" },
     { label: "On this machine and on one remote server (ssh alias)", value: "both" },
     { label: "Only on a remote server", value: "remote" }], "local");
@@ -133,33 +165,42 @@ async function init() {
   const localHost = { name: "local", kind: "local", projectDir: cwd.replace(os.homedir(), "~"), projectsDir: path.dirname(cwd).replace(os.homedir(), "~"), workspacesDir: "~/orca/workspaces", orcaEnvironment: "", orcaRepoId: "", capacity: { suiteWorkersMax: 2, readOnlyWorkersMax: 2 } };
   const remoteHost = { name: "build-server", kind: "remote", ssh: "build-server", sshConfig: "", projectsDir: "~/projects", workspacesDir: "~/orca/workspaces", orcaEnvironment: "", orcaRepoId: "", capacity: { suiteWorkersMax: 8, readOnlyWorkersMax: 6, gate: { unitSlots: 3, e2eSlots: 2 } } };
   if (where !== "local") {
-    remoteHost.name = await askText("   Name of the remote host (also its Orca environment name)?", "build-server");
-    remoteHost.ssh = await askText("   SSH alias for it (from your ssh config)?", remoteHost.name);
-    remoteHost.sshConfig = await askText("   Path to an ssh config file, or empty for ~/.ssh/config?", "");
+    remoteHost.name = await askText("hosts.remote.name", "   Name of the remote host (also its Orca environment name)?", "build-server");
+    remoteHost.ssh = await askText("hosts.remote.ssh", "   SSH alias for it (from your ssh config)?", remoteHost.name);
+    remoteHost.sshConfig = await askText("hosts.remote.sshConfig", "   Path to an ssh config file, or empty for ~/.ssh/config?", "");
     remoteHost.orcaEnvironment = c.agents.runner === "orca" ? remoteHost.name : "";
   }
   c.hosts.workers = where === "local" ? [localHost] : where === "both" ? [localHost, remoteHost] : [remoteHost];
   // Register this repo with the local Orca so the local host has its repo id (remote hosts register on the server).
-  if (c.agents.runner === "orca" && orcaRunning && !skipOrca && where !== "remote") {
+  if (c.agents.runner === "orca" && orcaRunning && !skipOrca && !printQuestions && where !== "remote") {
     const list = sh(ORCA_BIN, ["repo", "list", "--json"]);
     let id = (list.match(new RegExp(`"id":\\s*"([0-9a-f-]{36})"[^{}]*"path":\\s*"${cwd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`)) ?? [])[1];
     if (!id) { const added = sh(ORCA_BIN, ["repo", "add", "--path", cwd, "--json"]); id = (added.match(/"id":\s*"([0-9a-f-]{36})"/g) ?? []).map((m) => m.match(/[0-9a-f-]{36}/)[0]).at(-1); }
     if (id) { localHost.orcaRepoId = id; say(`   Registered with Orca: repo id ${id}.`); } else say("   Could not register the repo with Orca; set hosts.workers[].orcaRepoId by hand (orca repo add --path <repo> --json).");
   }
-  c.hosts.controller = { host: await ask("8. Where does the Controller run?", c.hosts.workers.map((h) => ({ label: h.kind === "local" ? "On this machine (a second agent session next to the Front agent)" : `On ${h.name} (unattended, survives this machine sleeping)`, value: h.name })), c.hosts.workers.at(-1).name), controllerDir: "~/controller" };
-  c.capacity.calibration.mode = await ask("9. Capacity: the limits per host are starting values. Calibrate them automatically?", [{ label: "Auto: start low, raise step by step while the host stays quiet, lower on pressure; the audit verifies", value: "auto" }, { label: "Manual: use the configured limits as they are", value: "manual" }], "auto");
-  c.agents.calibration = await ask("   Models: calibrate the tier per role from measured pass rates and rounds?", [{ label: "Auto", value: "auto" }, { label: "Manual: only recommend", value: "manual" }], "auto");
+  c.hosts.controller = { host: await ask("hosts.controller", "8. Where does the Controller run?", c.hosts.workers.map((h) => ({ label: h.kind === "local" ? "On this machine (a second agent session next to the Front agent)" : `On ${h.name} (unattended, survives this machine sleeping)`, value: h.name })), c.hosts.workers.at(-1).name), controllerDir: "~/controller" };
+  c.capacity.calibration.mode = await ask("capacity.calibration", "9. Capacity: the limits per host are starting values. Calibrate them automatically?", [{ label: "Auto: start low, raise step by step while the host stays quiet, lower on pressure; the audit verifies", value: "auto" }, { label: "Manual: use the configured limits as they are", value: "manual" }], "auto");
+  c.agents.calibration = await ask("agents.calibration", "   Models: calibrate the tier per role from measured pass rates and rounds?", [{ label: "Auto", value: "auto" }, { label: "Manual: only recommend", value: "manual" }], "auto");
   say(`\n10. Commands the hooks, Testers and waves will run (package manager: ${d.pm}, from ${d.hasLock ? "the lockfile" : "package.json or PATH"}; edit factory.config.json to change):`);
-  for (const k of ["install", "typecheck", "lint", "unit", "verify", "e2e"]) c.commands[k] = await askText(`    ${k}?`, d.commands[k] ?? c.commands[k] ?? "");
+  for (const k of ["install", "typecheck", "lint", "unit", "verify", "e2e"]) c.commands[k] = await askText(`commands.${k}`, `    ${k}?`, d.commands[k] ?? c.commands[k] ?? "");
   if (yes) for (const k of ["install", "typecheck", "lint", "unit", "verify", "e2e"]) say(`    ${k}: ${c.commands[k] || "(none)"}`);
   c.commands.release = d.commands.release.length ? d.commands.release : c.commands.release;
-  c.hosts.frontAgent.preview.enabled = (await ask("11. Local preview that follows main on this machine (the human accepts there)?", [{ label: "Yes", value: "yes" }, { label: "No", value: "no" }], "yes")) === "yes";
-  if (c.hosts.frontAgent.preview.enabled) { c.hosts.frontAgent.preview.port = Number(await askText("   Port?", "8180")); c.hosts.frontAgent.preview.command = await askText("   Start command?", d.scripts.dev ? `${d.pm} dev` : c.hosts.frontAgent.preview.command); c.hosts.frontAgent.preview.envFile = `~/.config/${c.project.name}/preview.env`; }
-  c.reviews.maxRounds = Number(await askText("12. Review rounds before a working feature is integrated and the rest becomes debt?", "2"));
-  c.design = { tool: await ask("13. Design tool for stage 1 of outside-in?", [{ label: "Figma via its local MCP server", value: "figma" }, { label: "Pencil", value: "pencil" }, { label: "None for now", value: "none" }], d.tools.figma ? "figma" : "none"), exportDir: "design" };
+  c.hosts.frontAgent.preview.enabled = (await ask("preview.enabled", "11. Local preview that follows main on this machine (the human accepts there)?", [{ label: "Yes", value: "yes" }, { label: "No", value: "no" }], "yes")) === "yes";
+  if (c.hosts.frontAgent.preview.enabled) { c.hosts.frontAgent.preview.port = Number(await askText("preview.port", "   Port?", "8180")); c.hosts.frontAgent.preview.command = await askText("preview.command", "   Start command?", d.scripts.dev ? `${d.pm} dev` : c.hosts.frontAgent.preview.command); c.hosts.frontAgent.preview.envFile = `~/.config/${c.project.name}/preview.env`; }
+  c.reviews.maxRounds = Number(await askText("reviews.maxRounds", "12. Review rounds before a working feature is integrated and the rest becomes debt?", "2"));
+  c.design = { tool: await ask("design.tool", "13. Design tool for stage 1 of outside-in?", [{ label: "Figma via its local MCP server", value: "figma" }, { label: "Pencil", value: "pencil" }, { label: "None for now", value: "none" }], d.tools.figma ? "figma" : "none"), exportDir: "design" };
   say("\n14. Hard rules (they go into AGENTS.md and docs/coordinator.md):\n  - no real data or secrets in the repo, .env never committed\n  - the factory has no outward effects: nothing changes outside the repo and the demo environment\n  - workers never push to main; --no-verify is forbidden\n  - tests run on demo data or a private copy, never on the original\n  - no real model calls in tests");
-  if ((await ask("   Confirm all of them?", [{ label: "Yes", value: "yes" }, { label: "No, stop here", value: "no" }], "yes")) !== "yes") { say("Stopped. Nothing written."); process.exit(1); }
-  const installNow = (await ask("15. Install the user-level skills on this machine now (needed by the Front agent here, and by the Controller if it runs here)?", [{ label: "Yes", value: "yes" }, { label: "Later (agentic-factory install-skills)", value: "no" }], "yes")) === "yes";
+  if ((await ask("rules.confirm", "   Confirm all of them?", [{ label: "Yes", value: "yes" }, { label: "No, stop here", value: "no" }], "yes")) !== "yes") { say("Stopped. Nothing written."); process.exit(1); }
+  const installNow = (await ask("skills.installNow", "15. Install the user-level skills on this machine now (needed by the Front agent here, and by the Controller if it runs here)?", [{ label: "Yes", value: "yes" }, { label: "Later (agentic-factory install-skills)", value: "no" }], "yes")) === "yes";
+  // --print-questions: hand the questions to the Front agent and stop before anything is written. Follow-up questions
+  // (remote host details, preview port) appear once the answer that opens them is in the answers file.
+  if (printQuestions) {
+    const open = asked.filter((q) => q.answer === null).map((q) => q.id);
+    emit({ factory: PKG.version, project: cwd, detected: { name: d.name, repo: d.repo, packageManager: d.pm, tools: d.tools }, questions: asked, open,
+      next: open.length ? "ask the open questions one at a time (recommended option first, say why it matters: docs/onboarding.md), write all answers as {id: value} to a file outside the repo, run --print-questions --answers <file> again until `open` is empty and no new question appears, then run init --answers <file>" : "all answered: run init --answers <file>" });
+  }
+
+  if (needsRemote) createRemote();
 
   // --- write -----------------------------------------------------------------------------------
   const hadManifest = fs.existsSync(".factory/manifest.json");
@@ -237,10 +278,8 @@ async function init() {
   const steps = [
     adopted ? `Read docs/dev-workflow.md (the process) and AGENTS.md (the agents' rules). The adoption commit "Adopt agentic-factory (${vars.ADOPTION_ADR})" is on ${adopted}.${mode === "own" ? " Your own hooks stay in force; the factory hooks were not installed." : ` From now on protected files need an ADR reference in the commit message; try a commit without one to see the hook speak. A new or proposed ADR is committed by citing ${vars.ADOPTION_ADR} in the message; once accepted, cite the ADR itself.`}` : `Read docs/dev-workflow.md (the process) and AGENTS.md (the agents' rules). Commit the new files with a message that references the adoption ADR, e.g. \`git commit -m "Adopt agentic-factory (${vars.ADOPTION_ADR})"\`, and push to origin so workers and waves see them.`,
     remote && `Set up ${remote.name}: copy .factory/server/ there and follow docs/server-setup.md in the factory repo. Logins (gh, ${c.agents.default}, tailscale${c.agents.runner === "orca" ? ", Orca pairing" : ""}) are yours. Then put its Orca repo id into factory.config.json → hosts.workers[].orcaRepoId and run \`agentic-factory update\` to refresh the bundles.`,
-    `Skills at user level, on EVERY host that runs a Controller or Front agent: ${installNow ? "done here" : "`agentic-factory install-skills` here"}${remote ? `; on ${remote.name}: \`mkdir -p ~/.claude/skills ~/.agents/skills && cp -R ~/controller/skills/* ~/.claude/skills/ && cp -R ~/controller/skills/* ~/.agents/skills/\`` : ""}. Without the Orca skills (orchestration, orca-cli) the agents cannot start, watch or release workers.`,
     c.agents.runner === "orca" && !orcaRunning && `Orca: ${d.tools.orca ? `start it (\`${ORCA_BIN} open --json\`) and register the repo (\`${ORCA_BIN} repo add --path <repo> --json\`, id into hosts.workers[].orcaRepoId)` : "install it (https://github.com/stablyai/orca), then register the repo and put its id into hosts.workers[].orcaRepoId"}; the Orca skills load their guide from the binary (\`${ORCA_BIN} skills get orchestration\`).`,
-    `Controller: copy .factory/controller/ to ${ctl.kind === "local" ? "~/controller on this machine" : `${ctl.name}:~/controller`}, install the gate (\`mkdir -p ~/.local/bin && install -m 755 ~/controller/gate ~/.local/bin/gate\`; it needs only node), start \`bash ~/controller/loadlog.sh &\`, then start an agent session there with: "Read ~/controller/CONTROLLER.md and act as the Controller."`,
-    `Front agent: copy .factory/front-agent/ to ~/front-agent/${c.project.name} on this machine and start your agent session with: "Read ~/front-agent/${c.project.name}/FRONT_AGENT.md and act as the Front agent."`,
+    `Start the machine: \`agentic-factory start\` installs the user-level skills${remote ? ` (here and on ${ctl.kind === "remote" ? ctl.name : "the Controller's host"})` : ""}, copies the Front agent bundle to ~/front-agent/${c.project.name} and the Controller bundle to ${ctl.kind === "local" ? "~/controller" : `${ctl.name}:~/controller`}, installs the gate, starts the load log and the Controller's session in an Orca terminal. The Front agent runs it for you; \`agentic-factory status\` shows the phase.`,
     c.hosts.frontAgent.preview.enabled && `Preview: clone the repo to ~/Development/${c.project.name}-preview, fill ${c.hosts.frontAgent.preview.envFile}, then load the launchd agent from .factory/front-agent/preview.plist.template (fill the paths) with \`launchctl bootstrap gui/$(id -u) <plist>\`.`,
     c.steering.mode === "github-issues" ? "Create the labels: ready-for-agent, in-progress, needs-human, debt:tests, debt:edge-case, debt:security, debt:load, debt:style (gh label create …)." : "Create your first ticket from docs/tasks/T00-template.md.",
     "Run `agentic-factory doctor` any time to check the setup.",
@@ -281,6 +320,7 @@ function templateVars(c) {
     CONTROLLER_LOCATION: ctl.kind === "local" ? "on this machine (`~/controller`)" : `on the server \`${ctl.name}\` (ssh alias \`${ctl.ssh}\`, \`~/controller\`)`,
     INBOX_CMD: ctl.kind === "local" ? "`cat >> ~/controller/inbox.md`" : `\`ssh ${ctl.ssh} 'cat >> ~/controller/inbox.md'\``,
     PREVIEW_PLIST: `de.${c.project.name}.preview`, PREVIEW_LABEL: `de.${c.project.name}.preview`, PREVIEW_SCRIPT: `${os.homedir()}/front-agent/${c.project.name}/preview-update.sh`, HOME: os.homedir(),
+    FACTORY_CLI: `node ${path.join(ROOT, "bin/agentic-factory.mjs").replace(os.homedir(), "~")}`,
     COMMIT_PATTERN: `mv .env ../.${c.project.name}.env; git add …; git commit …; mv ../.${c.project.name}.env .env`,
     // Project-specific Controller rules live in the project (docs/controller-rules.md) and are rendered into CONTROLLER.md.
     PROJECT_RULES: fs.existsSync("docs/controller-rules.md") ? fs.readFileSync("docs/controller-rules.md", "utf8").trim() : "_None yet. Put project-specific hard rules, data boundaries, known flakes and decision pointers into `docs/controller-rules.md`; `agentic-factory update` renders them here._",
@@ -513,6 +553,159 @@ function selfcheck() {
   process.exit(fail ? 1 : 0);
 }
 
-const commands = { init, update, doctor, selfcheck, "install-skills": installSkills };
-if (!commands[cmd]) { say(`agentic-factory ${PKG.version}\n  init            onboarding: ask the project's questions, write factory.config.json, copy handbooks, hooks, skills and bundles (--keep-own-hooks: leave the project's hooks untouched, hooks.mode own)\n  update          re-render from a newer factory; locally changed files are kept, new versions land in .factory/new/\n  install-skills  install the Orca and coordination skills at user level (~/.claude/skills, ~/.agents/skills) on this host; required wherever a Controller or Front agent runs. --all for every vendored skill, --force to replace\n  doctor          check config, hooks, tools, user-level skills, hosts and the controller's status\n  selfcheck       (factory repo) syntax and placeholder check\nFlags: --yes (take defaults)`); process.exit(cmd ? 1 : 0); }
+// --- status and start: the Front agent's view and its one-command setup ----------------------------
+const readConfig = () => (fs.existsSync("factory.config.json") ? JSON.parse(fs.readFileSync("factory.config.json", "utf8")) : null);
+const expandHome = (p) => String(p ?? "").replace(/^~(?=\/|$)/, os.homedir());
+const sshArgsFor = (h) => [...(h.sshConfig ? ["-F", expandHome(h.sshConfig)] : []), "-o", "ConnectTimeout=5", h.ssh];
+const controllerTitle = (c) => `${c.project.name} · Controller`;
+const orcaTerminals = () => (process.env.FACTORY_SKIP_ORCA === "1" ? "" : sh(ORCA_BIN, ["terminal", "list", "--json"]));
+const agentCommand = (agent, prompt) => `${agent} ${JSON.stringify(prompt)}`;
+
+// Reads the Controller's status.md (local file or over ssh): age in minutes and the open "Needs <human>" items.
+function controllerStatus(c) {
+  const ctl = c.hosts.workers.find((h) => h.name === c.hosts.controller.host);
+  const file = `${c.hosts.controller.controllerDir ?? "~/controller"}/status.md`;
+  let text = "", ageMin = null;
+  if (!ctl || ctl.kind === "local") {
+    const f = expandHome(file);
+    if (fs.existsSync(f)) { text = fs.readFileSync(f, "utf8"); ageMin = Math.round((Date.now() - fs.statSync(f).mtimeMs) / 60000); }
+  } else {
+    const out = sh("ssh", [...sshArgsFor(ctl), `f=${file}; [ -f "$f" ] && { stat -c %Y "$f" 2>/dev/null || stat -f %m "$f"; cat "$f"; }`]);
+    if (out) { const [ts, ...rest] = out.split("\n"); ageMin = Math.round((Date.now() / 1000 - Number(ts)) / 60); text = rest.join("\n"); }
+  }
+  const needs = (text.split(/^## /m).find((s) => /^Needs\b/.test(s)) ?? "").split("\n").slice(1).filter((l) => /^\s*([-*]|\d+\.|\|)/.test(l) && !/^\s*\|?\s*-{3}/.test(l) && !/\b(none|nothing|keine)\b/i.test(l));
+  return { host: ctl?.name ?? "local", kind: ctl?.kind ?? "local", ageMin, needs: needs.map((l) => l.trim()) };
+}
+
+function collectStatus() {
+  const c = readConfig();
+  const major = Number(process.versions.node.split(".")[0]);
+  const runner = c?.agents?.runner ?? "orca";
+  const orcaInstalled = has("orca") || has("orca-ide");
+  const orcaRunning = orcaInstalled && process.env.FACTORY_SKIP_ORCA !== "1" ? /"ok":\s*true/.test(sh(ORCA_BIN, ["status", "--json"])) : false;
+  const agents = ["codex", "claude", "pi"].filter(has);
+  const prerequisites = [
+    { item: "node >= 22", ok: major >= 22, fix: "install Node 22 or newer" },
+    { item: "git repository", ok: spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { stdio: "ignore" }).status === 0, fix: "git init" },
+    { item: "git identity", ok: Boolean(sh("git", ["config", "user.name"]) && sh("git", ["config", "user.email"])), fix: "git config --global user.name … and user.email …" },
+    ...(runner === "orca" ? [{ item: "Orca installed", ok: orcaInstalled, fix: "install Orca: https://github.com/stablyai/orca" }, { item: "Orca running", ok: orcaRunning || process.env.FACTORY_SKIP_ORCA === "1", fix: `${ORCA_BIN} open --json` }] : []),
+    { item: "agent CLI", ok: c ? has(c.agents.default) : agents.length > 0, fix: c ? `install and log in to ${c.agents.default}` : "install and log in to codex, claude or pi" },
+    ...(c?.steering?.mode === "github-issues" ? [{ item: "gh CLI", ok: has("gh"), fix: "install gh and run gh auth login" }] : []),
+  ];
+  const s = { factory: PKG.version, project: cwd, prerequisites, initialised: Boolean(c && fs.existsSync(".factory/manifest.json")) };
+  if (!s.initialised) { s.phase = prerequisites.every((p) => p.ok) ? "onboarding" : "prerequisites"; s.next = s.phase === "onboarding" ? "run the onboarding as a conversation: init --print-questions, then init --answers <file>" : "fix the missing prerequisites (they need the human)"; return s; }
+  const userSkill = (n) => [".claude/skills", ".agents/skills"].some((d) => fs.existsSync(path.join(os.homedir(), d, n, "SKILL.md")));
+  const ctl = controllerStatus(c);
+  const ctlTerminal = orcaTerminals().includes(controllerTitle(c));
+  s.setup = {
+    hooksArmed: (c.hooks?.mode ?? "factory") === "own" || sh("git", ["config", "core.hooksPath"]) === (c.hooks?.hooksPath ?? ".githooks"),
+    userSkills: ["orchestration", "orca-cli"].every(userSkill),
+    frontAgentBundle: fs.existsSync(path.join(os.homedir(), "front-agent", c.project.name, "FRONT_AGENT.md")),
+    controller: { host: ctl.host, statusAgeMin: ctl.ageMin, terminal: ctlTerminal, running: ctlTerminal || (ctl.ageMin !== null && ctl.ageMin <= 25) },
+  };
+  // The work: design exports, tickets by status, domain and architecture documents, open debt, open questions.
+  const features = fs.existsSync("design") ? fs.readdirSync("design", { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) : [];
+  const tickets = { total: 0, byStatus: {} };
+  if (c.steering.mode === "github-issues") {
+    const out = has("gh") ? sh("gh", ["issue", "list", "--state", "open", "--limit", "200", "--json", "labels"], { timeout: 15000 }) : "";
+    if (out) for (const i of JSON.parse(out)) { tickets.total++; const st = i.labels.map((l) => l.name).find((n) => /^(ready-for-agent|needs-triage|needs-info|ready-for-human|in-progress|blocked)$/.test(n)) ?? "open"; tickets.byStatus[st] = (tickets.byStatus[st] ?? 0) + 1; }
+    else tickets.unavailable = "gh not available or not logged in";
+  } else if (fs.existsSync("docs/tasks")) {
+    for (const f of fs.readdirSync("docs/tasks").filter((f) => /^T\d+.*\.md$/.test(f) && !/^T00-/.test(f))) {
+      const st = (/^Status:\s*([a-z-]+)/m.exec(fs.readFileSync(path.join("docs/tasks", f), "utf8")) ?? [])[1] ?? "unknown";
+      tickets.total++; tickets.byStatus[st] = (tickets.byStatus[st] ?? 0) + 1;
+    }
+  }
+  const n = (k) => tickets.byStatus[k] ?? 0;
+  const active = n("ready") + n("building") + n("review") + n("passed") + n("ready-for-agent") + n("in-progress");
+  const drafts = n("draft") + n("needs-triage") + n("needs-info");
+  const adrs = fs.existsSync("docs/adr") ? fs.readdirSync("docs/adr").filter((f) => /\.md$/.test(f) && !/0000-template/.test(f)).length : 0;
+  // The template's example row (placeholders in angle brackets) is not debt.
+  const debtOpen = fs.existsSync("docs/debt.md") ? fs.readFileSync("docs/debt.md", "utf8").split("\n").filter((l) => /\|\s*open\s*\|/.test(l) && !/<[a-z][^>]*>/.test(l)).length : 0;
+  s.work = { designedFeatures: features, tickets, adrs, architecture: fs.existsSync("ARCHITECTURE.md"), glossary: ["GLOSSARY.md", "CONTEXT.md", "docs/glossary.md"].some((f) => fs.existsSync(f)), debtOpen, needsHuman: ctl.needs };
+  // The phase is a hint for the Front agent's next question, derived from what is in the repo; the human decides.
+  const setupMissing = !s.setup.hooksArmed || !s.setup.userSkills || !s.setup.frontAgentBundle || !s.setup.controller.running;
+  if (!prerequisites.every((p) => p.ok)) [s.phase, s.next] = ["prerequisites", "fix the missing prerequisites (they need the human)"];
+  else if (setupMissing) [s.phase, s.next] = ["start", "run `start`: user-level skills, the Front agent bundle and the Controller"];
+  else if (ctl.needs.length) [s.phase, s.next] = ["decisions", "the Controller waits for the human: ask the open questions one at a time"];
+  else if (!features.length && !tickets.total) [s.phase, s.next] = ["outside-in: surface", "sketch the surface of the first feature with the human (design tool or a clickable fake with the prototype skill), export it to design/<feature>/"];
+  else if (drafts || (features.length > tickets.total && !active)) [s.phase, s.next] = ["outside-in: data and logic", "for the designed features: list data in and out on the fake, agree the logic in words and a diagram (grilling), then write the tickets as ready"];
+  else if (active) [s.phase, s.next] = ["building", "the Controller works on the ready tickets: show the status table; accept what reaches main on the preview"];
+  else [s.phase, s.next] = ["accept and next", "accept what was integrated on the preview, then choose the next feature"];
+  s.hints = [
+    ...(!s.work.glossary ? ["the business terms are not written down yet (no GLOSSARY.md): capture them with domain-modeling while specifying"] : []),
+    ...(!s.work.architecture && tickets.total ? ["no ARCHITECTURE.md yet: the Architect's spec reviews have nothing to check against"] : []),
+    ...(debtOpen ? [`${debtOpen} open debt items: they must be closed or accepted before a release`] : []),
+  ];
+  return s;
+}
+
+function status() {
+  const s = collectStatus();
+  if (flag("--json")) { console.log(JSON.stringify(s, null, 2)); return; }
+  say(`agentic-factory ${s.factory}: ${s.project}`);
+  for (const p of s.prerequisites) say(`${p.ok ? "OK     " : "MISSING"} ${p.item}${p.ok ? "" : `  (${p.fix})`}`);
+  if (s.setup) {
+    const st = s.setup;
+    say(`${st.hooksArmed ? "OK     " : "MISSING"} hooks armed`);
+    say(`${st.userSkills ? "OK     " : "MISSING"} user-level skills (orchestration, orca-cli)`);
+    say(`${st.frontAgentBundle ? "OK     " : "MISSING"} Front agent bundle`);
+    say(`${st.controller.running ? "OK     " : "MISSING"} Controller on ${st.controller.host}${st.controller.statusAgeMin !== null ? ` (status.md ${st.controller.statusAgeMin} min old)` : ""}`);
+    const w = s.work;
+    say(`\nDesigned features: ${w.designedFeatures.length ? w.designedFeatures.join(", ") : "none"}`);
+    say(`Tickets: ${w.tickets.total ? Object.entries(w.tickets.byStatus).map(([k, v]) => `${v} ${k}`).join(", ") : w.tickets.unavailable ?? "none"}`);
+    say(`ADRs: ${w.adrs} · ARCHITECTURE.md: ${w.architecture ? "yes" : "no"} · glossary: ${w.glossary ? "yes" : "no"} · open debt: ${w.debtOpen}`);
+    if (w.needsHuman.length) say(`Needs the human:\n  ${w.needsHuman.join("\n  ")}`);
+  }
+  say(`\nPhase: ${s.phase}\nNext:  ${s.next}`);
+  for (const h of s.hints ?? []) say(`Hint:  ${h}`);
+}
+
+// Sets everything up that the Front agent needs to hand over to the Controller: user-level skills, the bundles,
+// the gate, the load log and the Controller's own agent session in an Orca terminal. Idempotent.
+async function start() {
+  const c = readConfig();
+  if (!c || !fs.existsSync(".factory/manifest.json")) { say("Not initialised: run init first (the Front agent does this as a conversation)."); process.exit(1); }
+  if (!fs.existsSync(".factory/controller/CONTROLLER.md") || !fs.existsSync(".factory/front-agent/FRONT_AGENT.md")) { say("Bundles missing (a fresh clone): regenerating them from factory.config.json."); await initNonInteractiveRefresh(); }
+  say("\nUser-level skills:"); installSkills();
+  const fa = path.join(os.homedir(), "front-agent", c.project.name);
+  fs.mkdirSync(fa, { recursive: true }); fs.cpSync(".factory/front-agent", fa, { recursive: true, force: true }); say(`\nFront agent bundle: ${fa.replace(os.homedir(), "~")}`);
+  const ctl = c.hosts.workers.find((h) => h.name === c.hosts.controller.host) ?? { kind: "local", name: "local" };
+  const dir = c.hosts.controller.controllerDir ?? "~/controller";
+  const prompt = `Read ${dir}/CONTROLLER.md and act as the Controller for the project ${c.project.name}.`;
+  const session = `cd ${dir} && ${agentCommand(c.agents.default, prompt)}`;
+  const title = controllerTitle(c);
+  let failed = 0;
+  if (ctl.kind === "local") {
+    const d = expandHome(dir);
+    fs.mkdirSync(d, { recursive: true }); fs.cpSync(".factory/controller", d, { recursive: true, force: true }); say(`Controller bundle: ${dir}`);
+    const bin = path.join(os.homedir(), ".local/bin"); fs.mkdirSync(bin, { recursive: true }); fs.copyFileSync(path.join(d, "gate"), path.join(bin, "gate")); fs.chmodSync(path.join(bin, "gate"), 0o755); say("Gate: ~/.local/bin/gate");
+    const loadlog = path.join(d, "loadlog.sh");
+    if (sh("ps", ["-ax", "-o", "command"]).split("\n").some((l) => l.includes(loadlog))) say("Load log: already running");
+    else { spawn("bash", [loadlog], { cwd: d, detached: true, stdio: "ignore" }).unref(); say("Load log: started (~/load.log)"); }
+  } else {
+    const remoteDir = dir;
+    const r = spawnSync("rsync", ["-a", "-e", `ssh ${sshArgsFor(ctl).slice(0, -1).map((a) => JSON.stringify(a)).join(" ")}`, ".factory/controller/", `${ctl.ssh}:${remoteDir}/`], { encoding: "utf8" });
+    if (r.status !== 0) { failed++; say(`Controller bundle: copy to ${ctl.name} failed: ${(r.stderr || "").trim().slice(0, 200)}`); }
+    else {
+      say(`Controller bundle: ${ctl.name}:${remoteDir}`);
+      const s = spawnSync("ssh", [...sshArgsFor(ctl), `mkdir -p ~/.local/bin && install -m 755 ${remoteDir}/gate ~/.local/bin/gate && for s in ${remoteDir}/skills/*; do n=$(basename "$s"); for t in ~/.claude/skills ~/.agents/skills; do mkdir -p "$t"; [ -e "$t/$n" ] || cp -R "$s" "$t/"; done; done; pgrep -f loadlog.sh >/dev/null || (cd ${remoteDir} && nohup bash loadlog.sh >/dev/null 2>&1 &); echo ok`], { encoding: "utf8" });
+      s.stdout?.trim().endsWith("ok") ? say(`Gate, user-level skills and load log on ${ctl.name}: ok`) : (failed++, say(`Gate, skills or load log on ${ctl.name} failed: ${(s.stderr || "").trim().slice(0, 200)}`));
+    }
+  }
+  // The Controller's own agent session, in an Orca terminal so the Front agent can read it and send it text.
+  if (orcaTerminals().includes(title)) say(`Controller session: already running (Orca terminal "${title}")`);
+  else if (process.env.FACTORY_SKIP_ORCA === "1" || c.agents.runner !== "orca") say(`Controller session: start it in a terminal${ctl.kind === "local" ? "" : ` on ${ctl.name}`}:\n  ${session}`);
+  else {
+    const where = ctl.kind === "local" ? ["--worktree", `path:${cwd}`] : ["--environment", ctl.orcaEnvironment || ctl.name, "--worktree", `path:${ctl.projectDir ?? `${ctl.projectsDir}/${c.project.name}`}`];
+    const r = spawnSync(ORCA_BIN, ["terminal", "create", ...where, "--title", title, "--command", session, "--json"], { encoding: "utf8" });
+    if (r.status === 0 && /"ok":\s*true/.test(r.stdout)) say(`Controller session: started (Orca terminal "${title}"). It may ask once for permissions there.`);
+    else { failed++; say(`Controller session: Orca could not create the terminal (${(r.stderr || r.stdout || "").trim().slice(0, 200)}). Start it by hand:\n  ${session}`); }
+  }
+  say(failed ? `\n${failed} step(s) failed; fix them and run start again.` : "\nStarted. `status` shows the phase and the next step.");
+  process.exit(failed ? 1 : 0);
+}
+
+const commands = { init, update, doctor, selfcheck, status, start, "install-skills": installSkills };
+if (!commands[cmd]) { say(`agentic-factory ${PKG.version}\n  init            onboarding: ask the project's questions, write factory.config.json, copy handbooks, hooks, skills and bundles (--keep-own-hooks: leave the project's hooks untouched, hooks.mode own)\n  update          re-render from a newer factory; locally changed files are kept, new versions land in .factory/new/\n  install-skills  install the Orca and coordination skills at user level (~/.claude/skills, ~/.agents/skills) on this host; required wherever a Controller or Front agent runs. --all for every vendored skill, --force to replace\n  doctor          check config, hooks, tools, user-level skills, hosts and the controller's status\n  selfcheck       (factory repo) syntax and placeholder check\n  status          prerequisites, setup, the work in the repo and the phase with the next step (--json for the Front agent)\n  start           user-level skills, Front agent and Controller bundles, gate, load log and the Controller's session in Orca\nFlags: --yes (take defaults), --print-questions (init: the questions as JSON, nothing written), --answers <file> (init: answers as {id: value})\n\nUsually you run none of this yourself: start an agent in your project with\n  claude "Read ${path.join(ROOT, "START.md").replace(os.homedir(), "~")} and set up this project."`); process.exit(cmd ? 1 : 0); }
 await commands[cmd]();
