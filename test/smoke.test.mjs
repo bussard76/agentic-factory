@@ -38,6 +38,7 @@ test("agent entry questions, answers, status and start in an isolated home", asy
     assert.equal(status.code, 0, status.err); assert.equal(JSON.parse(status.out).phase, "onboarding");
     let r = run("init", "--print-questions"); assert.equal(r.status, 0, r.stderr);
     const questions = JSON.parse(r.stdout); assert.ok(questions.open.length);
+    assert.equal(questions.questions.find((q) => q.id === "project.repo").recommended, `local:${path.join(entryHome, ".factory-remotes", `project-${createHashHex(fs.realpathSync(project))}.git`)}`);
     const rules = questions.questions.find((q) => q.id === "rules.confirm"); assert.ok(rules); assert.match(rules.context, /no real data or secrets/); assert.match(rules.context, /workers never push to main/);
     assert.equal(gitEntry("status", "--porcelain"), ""); assert.equal(gitEntry("remote"), "");
     const answers = path.join(base, "answers.json"); fs.writeFileSync(answers, JSON.stringify({ "hosts.where": "both" }));
@@ -45,8 +46,18 @@ test("agent entry questions, answers, status and start in an isolated home", asy
     assert.ok(JSON.parse(r.stdout).questions.some((q) => q.id === "hosts.remote.ssh"));
     fs.writeFileSync(answers, JSON.stringify({ "agents.default": "invalid" })); r = run("init", "--answers", answers);
     assert.notEqual(r.status, 0); assert.match(r.stderr, /agents\.default.*codex, claude, pi/);
+    for (const [values, pattern] of [
+      [{ "preview.port": "abc" }, /preview\.port.*number/], [{ "reviews.maxRounds": "x" }, /reviews\.maxRounds.*number/],
+      [{ "project.name": " " }, /project\.name.*empty/], [{ "hosts.remote.name": "" }, /hosts\.remote\.name.*empty/],
+      [{ "hosts.remote.ssh": "" }, /hosts\.remote\.ssh.*empty/], [{ "host.where": "local" }, /unknown id.*valid ids/],
+      [{ "rules.confirm": "no" }, /rules\.confirm.*yes/], [{ "rules.confirm": true }, /rules\.confirm.*yes/],
+    ]) {
+      fs.writeFileSync(answers, JSON.stringify({ "rules.confirm": "yes", ...values })); r = run("init", "--answers", answers);
+      assert.notEqual(r.status, 0); assert.match(r.stderr, pattern); assert.equal(gitEntry("remote"), ""); assert.equal(gitEntry("status", "--porcelain"), "");
+    }
+    fs.writeFileSync(answers, "{}"); r = run("init", "--answers", answers); assert.notEqual(r.status, 0); assert.match(r.stderr, /rules\.confirm.*yes/);
     assert.equal(gitEntry("remote"), "", "invalid answers must not create a remote");
-    fs.writeFileSync(answers, JSON.stringify({ "project.humanName": "Test Human", "agents.default": "claude", "skills.installNow": "no" }));
+    fs.writeFileSync(answers, JSON.stringify({ "project.humanName": "Test Human", "agents.default": "claude", "skills.installNow": "no", "rules.confirm": "yes" }));
     r = run("init", "--answers", answers); assert.equal(r.status, 0, r.stdout + r.stderr);
     const config = JSON.parse(fs.readFileSync(path.join(project, "factory.config.json"), "utf8"));
     assert.equal(config.project.humanName, "Test Human"); assert.equal(config.agents.default, "claude");
@@ -56,6 +67,32 @@ test("agent entry questions, answers, status and start in an isolated home", asy
     const front = fs.readFileSync(path.join(entryHome, "front-agent", config.project.name, "FRONT_AGENT.md"), "utf8");
     assert.ok(front.includes(CLI)); assert.doesNotMatch(front, /\{\{.*?\}\}/);
     assert.ok(fs.existsSync(path.join(entryHome, "controller", "CONTROLLER.md"))); assert.ok(fs.existsSync(path.join(entryHome, ".local/bin/gate")));
+    const statusFile = path.join(entryHome, "controller", "status.md");
+    fs.writeFileSync(statusFile, "## Needs human\n| Question | Since |\n|---|---|\n- none\n- Offer a none-of-the-above option?\n");
+    r = run("status", "--json"); let updated = JSON.parse(r.stdout); assert.deepEqual(updated.work.needsHuman, ["- Offer a none-of-the-above option?"]); assert.equal(updated.phase, "decisions");
+    fs.writeFileSync(statusFile, "## Needs human\n| Question | Since |\n|---|---|\n- nothing\n- keine\n");
+    r = run("status", "--json"); assert.deepEqual(JSON.parse(r.stdout).work.needsHuman, []);
+    const gh = path.join(bin, "gh"); fs.writeFileSync(gh, `#!/bin/sh\nprintf '%s\\n' '[{"number":7,"title":"Choose","labels":[{"name":"needs-human"}]}]'\n`, { mode: 0o755 });
+    config.steering.mode = "github-issues"; fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
+    r = run("status", "--json"); updated = JSON.parse(r.stdout); assert.equal(updated.work.tickets.byStatus["needs-human"], 1); assert.deepEqual(updated.work.needsHuman, ["Issue #7: Choose"]); assert.equal(updated.phase, "decisions");
+    const fakeOrca = path.join(bin, "orca");
+    const writeOrca = (title) => fs.writeFileSync(fakeOrca, `#!/bin/sh\nif [ "$1" = status ]; then printf '%s\\n' '{"ok":true}'; else printf '%s\\n' '${JSON.stringify({ result: { terminals: [{ title }] } })}'; fi\n`, { mode: 0o755 });
+    fs.unlinkSync(statusFile); writeOrca(`other-${config.project.name} · Controller`);
+    const withOrca = () => spawnSync("node", [CLI, "status", "--json"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
+    assert.equal(JSON.parse(withOrca().stdout).setup.controller.terminal, false);
+    writeOrca(`${config.project.name} · Controller`); assert.equal(JSON.parse(withOrca().stdout).setup.controller.terminal, true);
+    const calls = path.join(base, "calls");
+    fs.writeFileSync(fakeOrca, `#!/bin/sh\nif [ "$1" = terminal ] && [ "$2" = create ]; then printf '%s\\n' "$@" > '${calls}.orca'; printf '%s\\n' '{"ok":true}'; else printf '%s\\n' '{"result":{"terminals":[]}}'; fi\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "rsync"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "ssh"), `#!/bin/sh\ncase "$*" in *'printf '*) printf '/remote/home\\n';; *) printf '%s\\n' "$*" > '${calls}.ssh'; printf 'ok\\n';; esac\n`, { mode: 0o755 });
+    config.hosts.workers = [{ name: "remote", kind: "remote", ssh: "fake", projectsDir: "~/projects", orcaEnvironment: "saved-server" }]; config.hosts.controller.host = "remote";
+    fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
+    r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
+    assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(fs.readFileSync(`${calls}.ssh`, "utf8"), /pgrep -f "\[b\]ash loadlog\.sh"/);
+    const orcaArgs = fs.readFileSync(`${calls}.orca`, "utf8"); assert.match(orcaArgs, /saved-server/); assert.match(orcaArgs, /path:\/remote\/home\/projects\/project/);
+    config.hosts.workers[0].orcaEnvironment = ""; fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
+    r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
+    assert.notEqual(r.status, 0); assert.match(r.stdout, /hosts\.workers\[\]\.orcaEnvironment/);
   } finally {
     spawnSync("pkill", ["-f", path.join(entryHome, "controller", "loadlog.sh")]);
     fs.rmSync(base, { recursive: true, force: true });

@@ -32,6 +32,20 @@ const say = (s = "") => (printQuestions ? sayBuffer.push(String(s).trim()) : con
 const rl = batch || cmd !== "init" ? null : readline.createInterface({ input: process.stdin, output: process.stdout });
 // Every question asked, in order, for --print-questions (and to validate --answers).
 const asked = [];
+const validAnswerIds = ["project.name", "project.repo", "project.humanName", "project.language", "rhythm.mode", "steering.mode", "agents.default", ...["small", "default", "large"].map((t) => `agents.models.${t}`), "hosts.where", "hosts.remote.name", "hosts.remote.ssh", "hosts.remote.sshConfig", "hosts.remote.orcaEnvironment", "hosts.controller", "capacity.calibration", "agents.calibration", ...["install", "typecheck", "lint", "unit", "verify", "e2e"].map((k) => `commands.${k}`), "preview.enabled", "preview.port", "preview.command", "reviews.maxRounds", "design.tool", "rules.confirm", "skills.installNow"];
+function validateAnswers() {
+  if (!answersFile) return;
+  if (!presetAnswers || typeof presetAnswers !== "object" || Array.isArray(presetAnswers)) { console.error("--answers: expected an object keyed by question id"); process.exit(1); }
+  for (const [id, value] of Object.entries(presetAnswers)) {
+    if (!validAnswerIds.includes(id)) { console.error(`--answers: unknown id "${id}"; valid ids: ${validAnswerIds.join(", ")}`); process.exit(1); }
+    if (["preview.port", "reviews.maxRounds"].includes(id) && !/^\d+$/.test(String(value ?? "").trim())) { console.error(`--answers: "${id}" must be a number`); process.exit(1); }
+    if (["project.name", "hosts.remote.name", "hosts.remote.ssh"].includes(id) && (value == null || !String(value).trim())) { console.error(`--answers: "${id}" must not be empty`); process.exit(1); }
+    const choices = { "project.language": ["en", "de"], "rhythm.mode": ["day-plan-night-build", "continuous", "custom"], "steering.mode": ["github-issues", "orca-tasks"], "agents.default": ["codex", "claude", "pi"], "hosts.where": ["local", "both", "remote"], "capacity.calibration": ["auto", "manual"], "agents.calibration": ["auto", "manual"], "preview.enabled": ["yes", "no"], "design.tool": ["figma", "pencil", "none"], "rules.confirm": ["yes", "no"], "skills.installNow": ["yes", "no"] }[id];
+    const normalized = typeof value === "boolean" ? (value ? "yes" : "no") : String(value ?? "");
+    if (choices && !choices.includes(normalized)) { console.error(`--answers: "${id}" must be one of ${choices.join(", ")} (got "${normalized}")`); process.exit(1); }
+  }
+  if (!printQuestions && presetAnswers["rules.confirm"] !== "yes") { console.error('--answers: "rules.confirm" must be present and yes'); process.exit(1); }
+}
 const takeContext = () => { const c = sayBuffer.filter(Boolean).join("\n"); sayBuffer = []; return c; };
 function preset(id, options) {
   if (!(id in presetAnswers)) return undefined;
@@ -90,6 +104,7 @@ function detect() {
 
 // --- init ------------------------------------------------------------------------------------------
 async function init() {
+  validateAnswers();
   say(`agentic-factory ${PKG.version}: onboarding for ${cwd}`);
   const emit = (o) => { console.log(JSON.stringify(o, null, 2)); process.exit(0); };
   if (spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { stdio: "ignore" }).status !== 0) { if (printQuestions) emit({ blocker: "not a git repository: run `git init` first", questions: [] }); say("Not a git repository. Run `git init` first."); process.exit(1); }
@@ -106,7 +121,7 @@ async function init() {
   // first wave works on a single machine; replace it with a real remote any time (git remote set-url origin …).
   const needsRemote = !sh("git", ["remote"]);
   const bare = path.join(os.homedir(), ".factory-remotes", `${d.name}-${hash(cwd).slice(0, 6)}.git`);
-  if (needsRemote) d.repo = printQuestions ? "local bare remote (init creates it under ~/.factory-remotes)" : `local:${bare}`;
+  if (needsRemote) d.repo = `local:${bare}`;
   const createRemote = () => {
     // Keyed by name plus a hash of the absolute path, so two projects with the same directory name never share a remote.
     fs.mkdirSync(path.dirname(bare), { recursive: true });
@@ -165,19 +180,13 @@ async function init() {
   const localHost = { name: "local", kind: "local", projectDir: cwd.replace(os.homedir(), "~"), projectsDir: path.dirname(cwd).replace(os.homedir(), "~"), workspacesDir: "~/orca/workspaces", orcaEnvironment: "", orcaRepoId: "", capacity: { suiteWorkersMax: 2, readOnlyWorkersMax: 2 } };
   const remoteHost = { name: "build-server", kind: "remote", ssh: "build-server", sshConfig: "", projectsDir: "~/projects", workspacesDir: "~/orca/workspaces", orcaEnvironment: "", orcaRepoId: "", capacity: { suiteWorkersMax: 8, readOnlyWorkersMax: 6, gate: { unitSlots: 3, e2eSlots: 2 } } };
   if (where !== "local") {
-    remoteHost.name = await askText("hosts.remote.name", "   Name of the remote host (also its Orca environment name)?", "build-server");
+    remoteHost.name = await askText("hosts.remote.name", "   Name of the remote host?", "build-server");
     remoteHost.ssh = await askText("hosts.remote.ssh", "   SSH alias for it (from your ssh config)?", remoteHost.name);
     remoteHost.sshConfig = await askText("hosts.remote.sshConfig", "   Path to an ssh config file, or empty for ~/.ssh/config?", "");
-    remoteHost.orcaEnvironment = c.agents.runner === "orca" ? remoteHost.name : "";
+    if (c.agents.runner === "orca") remoteHost.orcaEnvironment = await askText("hosts.remote.orcaEnvironment", "   Saved Orca environment name (set later in hosts.workers[].orcaEnvironment if unknown)?", "");
   }
   c.hosts.workers = where === "local" ? [localHost] : where === "both" ? [localHost, remoteHost] : [remoteHost];
   // Register this repo with the local Orca so the local host has its repo id (remote hosts register on the server).
-  if (c.agents.runner === "orca" && orcaRunning && !skipOrca && !printQuestions && where !== "remote") {
-    const list = sh(ORCA_BIN, ["repo", "list", "--json"]);
-    let id = (list.match(new RegExp(`"id":\\s*"([0-9a-f-]{36})"[^{}]*"path":\\s*"${cwd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`)) ?? [])[1];
-    if (!id) { const added = sh(ORCA_BIN, ["repo", "add", "--path", cwd, "--json"]); id = (added.match(/"id":\s*"([0-9a-f-]{36})"/g) ?? []).map((m) => m.match(/[0-9a-f-]{36}/)[0]).at(-1); }
-    if (id) { localHost.orcaRepoId = id; say(`   Registered with Orca: repo id ${id}.`); } else say("   Could not register the repo with Orca; set hosts.workers[].orcaRepoId by hand (orca repo add --path <repo> --json).");
-  }
   c.hosts.controller = { host: await ask("hosts.controller", "8. Where does the Controller run?", c.hosts.workers.map((h) => ({ label: h.kind === "local" ? "On this machine (a second agent session next to the Front agent)" : `On ${h.name} (unattended, survives this machine sleeping)`, value: h.name })), c.hosts.workers.at(-1).name), controllerDir: "~/controller" };
   c.capacity.calibration.mode = await ask("capacity.calibration", "9. Capacity: the limits per host are starting values. Calibrate them automatically?", [{ label: "Auto: start low, raise step by step while the host stays quiet, lower on pressure; the audit verifies", value: "auto" }, { label: "Manual: use the configured limits as they are", value: "manual" }], "auto");
   c.agents.calibration = await ask("agents.calibration", "   Models: calibrate the tier per role from measured pass rates and rounds?", [{ label: "Auto", value: "auto" }, { label: "Manual: only recommend", value: "manual" }], "auto");
@@ -200,6 +209,12 @@ async function init() {
       next: open.length ? "ask the open questions one at a time (recommended option first, say why it matters: docs/onboarding.md), write all answers as {id: value} to a file outside the repo, run --print-questions --answers <file> again until `open` is empty and no new question appears, then run init --answers <file>" : "all answered: run init --answers <file>" });
   }
 
+  if (c.agents.runner === "orca" && orcaRunning && !skipOrca && where !== "remote") {
+    const list = sh(ORCA_BIN, ["repo", "list", "--json"]);
+    let id = (list.match(new RegExp(`"id":\\s*"([0-9a-f-]{36})"[^{}]*"path":\\s*"${cwd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`)) ?? [])[1];
+    if (!id) { const added = sh(ORCA_BIN, ["repo", "add", "--path", cwd, "--json"]); id = (added.match(/"id":\s*"([0-9a-f-]{36})"/g) ?? []).map((m) => m.match(/[0-9a-f-]{36}/)[0]).at(-1); }
+    if (id) { localHost.orcaRepoId = id; say(`   Registered with Orca: repo id ${id}.`); } else say("   Could not register the repo with Orca; set hosts.workers[].orcaRepoId by hand (orca repo add --path <repo> --json).");
+  }
   if (needsRemote) createRemote();
 
   // --- write -----------------------------------------------------------------------------------
@@ -558,7 +573,10 @@ const readConfig = () => (fs.existsSync("factory.config.json") ? JSON.parse(fs.r
 const expandHome = (p) => String(p ?? "").replace(/^~(?=\/|$)/, os.homedir());
 const sshArgsFor = (h) => [...(h.sshConfig ? ["-F", expandHome(h.sshConfig)] : []), "-o", "ConnectTimeout=5", h.ssh];
 const controllerTitle = (c) => `${c.project.name} · Controller`;
-const orcaTerminals = () => (process.env.FACTORY_SKIP_ORCA === "1" ? "" : sh(ORCA_BIN, ["terminal", "list", "--json"]));
+const hasControllerTerminal = (title) => {
+  if (process.env.FACTORY_SKIP_ORCA === "1") return false;
+  try { const terminals = JSON.parse(sh(ORCA_BIN, ["terminal", "list", "--json"])).result?.terminals; return Array.isArray(terminals) && terminals.some((t) => t.title === title); } catch { return false; }
+};
 const agentCommand = (agent, prompt) => `${agent} ${JSON.stringify(prompt)}`;
 
 // Reads the Controller's status.md (local file or over ssh): age in minutes and the open "Needs <human>" items.
@@ -573,7 +591,9 @@ function controllerStatus(c) {
     const out = sh("ssh", [...sshArgsFor(ctl), `f=${file}; [ -f "$f" ] && { stat -c %Y "$f" 2>/dev/null || stat -f %m "$f"; cat "$f"; }`]);
     if (out) { const [ts, ...rest] = out.split("\n"); ageMin = Math.round((Date.now() / 1000 - Number(ts)) / 60); text = rest.join("\n"); }
   }
-  const needs = (text.split(/^## /m).find((s) => /^Needs\b/.test(s)) ?? "").split("\n").slice(1).filter((l) => /^\s*([-*]|\d+\.|\|)/.test(l) && !/^\s*\|?\s*-{3}/.test(l) && !/\b(none|nothing|keine)\b/i.test(l));
+  const lines = (text.split(/^## /m).find((s) => /^Needs\b/.test(s)) ?? "").split("\n").slice(1);
+  const separator = (l = "") => /^\s*\|?\s*:?-{3}/.test(l);
+  const needs = lines.filter((l, i) => /^\s*([-*]|\d+\.|\|)/.test(l) && !separator(l) && !(l.trim().startsWith("|") && separator(lines[i + 1])) && !/^(none|nothing|keine)$/i.test(l.replace(/^\s*(?:[-*]|\d+\.|\|)\s*/, "").replace(/\|\s*$/, "").trim()));
   return { host: ctl?.name ?? "local", kind: ctl?.kind ?? "local", ageMin, needs: needs.map((l) => l.trim()) };
 }
 
@@ -596,7 +616,7 @@ function collectStatus() {
   if (!s.initialised) { s.phase = prerequisites.every((p) => p.ok) ? "onboarding" : "prerequisites"; s.next = s.phase === "onboarding" ? "run the onboarding as a conversation: init --print-questions, then init --answers <file>" : "fix the missing prerequisites (they need the human)"; return s; }
   const userSkill = (n) => [".claude/skills", ".agents/skills"].some((d) => fs.existsSync(path.join(os.homedir(), d, n, "SKILL.md")));
   const ctl = controllerStatus(c);
-  const ctlTerminal = orcaTerminals().includes(controllerTitle(c));
+  const ctlTerminal = hasControllerTerminal(controllerTitle(c));
   s.setup = {
     hooksArmed: (c.hooks?.mode ?? "factory") === "own" || sh("git", ["config", "core.hooksPath"]) === (c.hooks?.hooksPath ?? ".githooks"),
     userSkills: ["orchestration", "orca-cli"].every(userSkill),
@@ -607,8 +627,8 @@ function collectStatus() {
   const features = fs.existsSync("design") ? fs.readdirSync("design", { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) : [];
   const tickets = { total: 0, byStatus: {} };
   if (c.steering.mode === "github-issues") {
-    const out = has("gh") ? sh("gh", ["issue", "list", "--state", "open", "--limit", "200", "--json", "labels"], { timeout: 15000 }) : "";
-    if (out) for (const i of JSON.parse(out)) { tickets.total++; const st = i.labels.map((l) => l.name).find((n) => /^(ready-for-agent|needs-triage|needs-info|ready-for-human|in-progress|blocked)$/.test(n)) ?? "open"; tickets.byStatus[st] = (tickets.byStatus[st] ?? 0) + 1; }
+    const out = has("gh") ? sh("gh", ["issue", "list", "--state", "open", "--limit", "200", "--json", "number,title,labels"], { timeout: 15000 }) : "";
+    if (out) for (const i of JSON.parse(out)) { tickets.total++; const labels = i.labels.map((l) => l.name); const st = labels.includes("needs-human") ? "needs-human" : labels.find((n) => [c.steering.readyLabel ?? "ready-for-agent", "needs-triage", "needs-info", "ready-for-human", "in-progress", "blocked"].includes(n)) ?? "open"; tickets.byStatus[st] = (tickets.byStatus[st] ?? 0) + 1; if (labels.includes("needs-human")) ctl.needs.push(`Issue #${i.number}: ${i.title}`); }
     else tickets.unavailable = "gh not available or not logged in";
   } else if (fs.existsSync("docs/tasks")) {
     for (const f of fs.readdirSync("docs/tasks").filter((f) => /^T\d+.*\.md$/.test(f) && !/^T00-/.test(f))) {
@@ -617,7 +637,7 @@ function collectStatus() {
     }
   }
   const n = (k) => tickets.byStatus[k] ?? 0;
-  const active = n("ready") + n("building") + n("review") + n("passed") + n("ready-for-agent") + n("in-progress");
+  const active = n("ready") + n("building") + n("review") + n("passed") + n(c.steering.readyLabel ?? "ready-for-agent") + n("in-progress");
   const drafts = n("draft") + n("needs-triage") + n("needs-info");
   const adrs = fs.existsSync("docs/adr") ? fs.readdirSync("docs/adr").filter((f) => /\.md$/.test(f) && !/0000-template/.test(f)).length : 0;
   // The template's example row (placeholders in angle brackets) is not debt.
@@ -689,18 +709,23 @@ async function start() {
     if (r.status !== 0) { failed++; say(`Controller bundle: copy to ${ctl.name} failed: ${(r.stderr || "").trim().slice(0, 200)}`); }
     else {
       say(`Controller bundle: ${ctl.name}:${remoteDir}`);
-      const s = spawnSync("ssh", [...sshArgsFor(ctl), `mkdir -p ~/.local/bin && install -m 755 ${remoteDir}/gate ~/.local/bin/gate && for s in ${remoteDir}/skills/*; do n=$(basename "$s"); for t in ~/.claude/skills ~/.agents/skills; do mkdir -p "$t"; [ -e "$t/$n" ] || cp -R "$s" "$t/"; done; done; pgrep -f loadlog.sh >/dev/null || (cd ${remoteDir} && nohup bash loadlog.sh >/dev/null 2>&1 &); echo ok`], { encoding: "utf8" });
+      const s = spawnSync("ssh", [...sshArgsFor(ctl), `mkdir -p ~/.local/bin && install -m 755 ${remoteDir}/gate ~/.local/bin/gate && for s in ${remoteDir}/skills/*; do n=$(basename "$s"); for t in ~/.claude/skills ~/.agents/skills; do mkdir -p "$t"; [ -e "$t/$n" ] || cp -R "$s" "$t/"; done; done; pgrep -f "[b]ash loadlog.sh" >/dev/null || (cd ${remoteDir} && nohup bash loadlog.sh >/dev/null 2>&1 &); echo ok`], { encoding: "utf8" });
       s.stdout?.trim().endsWith("ok") ? say(`Gate, user-level skills and load log on ${ctl.name}: ok`) : (failed++, say(`Gate, skills or load log on ${ctl.name} failed: ${(s.stderr || "").trim().slice(0, 200)}`));
     }
   }
   // The Controller's own agent session, in an Orca terminal so the Front agent can read it and send it text.
-  if (orcaTerminals().includes(title)) say(`Controller session: already running (Orca terminal "${title}")`);
+  if (hasControllerTerminal(title)) say(`Controller session: already running (Orca terminal "${title}")`);
   else if (process.env.FACTORY_SKIP_ORCA === "1" || c.agents.runner !== "orca") say(`Controller session: start it in a terminal${ctl.kind === "local" ? "" : ` on ${ctl.name}`}:\n  ${session}`);
   else {
-    const where = ctl.kind === "local" ? ["--worktree", `path:${cwd}`] : ["--environment", ctl.orcaEnvironment || ctl.name, "--worktree", `path:${ctl.projectDir ?? `${ctl.projectsDir}/${c.project.name}`}`];
+    const remoteHome = ctl.kind === "remote" ? sh("ssh", [...sshArgsFor(ctl), 'printf "%s\\n" "$HOME"']) : "";
+    const remotePath = ctl.projectDir ?? `${ctl.projectsDir}/${c.project.name}`;
+    if (ctl.kind === "remote" && (!ctl.orcaEnvironment || !remoteHome.startsWith("/") || (!remotePath.startsWith("/") && !/^~(?:\/|$)/.test(remotePath)))) { failed++; say(`Controller session: set hosts.workers[].orcaEnvironment to the saved Orca environment name and configure an absolute or ~/ remote project path; ensure ssh can resolve the remote home. Start it by hand:\n  ${session}`); }
+    else {
+    const where = ctl.kind === "local" ? ["--worktree", `path:${cwd}`] : ["--environment", ctl.orcaEnvironment, "--worktree", `path:${path.posix.resolve(remotePath.replace(/^~(?=\/|$)/, remoteHome))}`];
     const r = spawnSync(ORCA_BIN, ["terminal", "create", ...where, "--title", title, "--command", session, "--json"], { encoding: "utf8" });
     if (r.status === 0 && /"ok":\s*true/.test(r.stdout)) say(`Controller session: started (Orca terminal "${title}"). It may ask once for permissions there.`);
     else { failed++; say(`Controller session: Orca could not create the terminal (${(r.stderr || r.stdout || "").trim().slice(0, 200)}). Start it by hand:\n  ${session}`); }
+    }
   }
   say(failed ? `\n${failed} step(s) failed; fix them and run start again.` : "\nStarted. `status` shows the phase and the next step.");
   process.exit(failed ? 1 : 0);
