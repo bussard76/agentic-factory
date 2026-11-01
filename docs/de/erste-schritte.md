@@ -4,7 +4,7 @@ Diese Anleitung führt ein neues Projekt von nichts bis zur ersten geprüften Ä
 
 ## 0. Was du brauchst
 
-- **Orca**, installiert und gestartet ([orca.earendil.works](https://orca.earendil.works)). Es ist der Runner: Worktrees und Terminals pro Worker, strukturierte Nachrichten zwischen Controller und Workern, Remote-Server. `init` bricht ohne Orca ab.
+- **Orca**, installiert und gestartet ([github.com/stablyai/orca](https://github.com/stablyai/orca)). Es ist der Runner: Worktrees und Terminals pro Worker, strukturierte Nachrichten zwischen Controller und Workern, Remote-Server. `init` bricht ohne Orca ab.
 - **Node 22+**, **git** und ein Repository für dein Projekt (ein frisches `git init` reicht).
 - **Eine Agenten-CLI**, eingeloggt: Codex (`codex`), Claude Code (`claude`) oder Pi (`pi`). Worker, Controller und Front-Agent sind alle Sitzungen davon.
 - Optional: **gh** (Steuerung über GitHub-Issues), **Figma** oder **Pencil** (für Stufe 1 von Outside-in).

@@ -4,7 +4,7 @@ This guide takes a new project from nothing to the first reviewed change on `mai
 
 ## 0. What you need
 
-- **Orca**, installed and running ([orca.earendil.works](https://orca.earendil.works)). It is the runner: worktrees and terminals per worker, structured messages between Controller and workers, remote servers. `init` stops without it.
+- **Orca**, installed and running ([github.com/stablyai/orca](https://github.com/stablyai/orca)). It is the runner: worktrees and terminals per worker, structured messages between Controller and workers, remote servers. `init` stops without it.
 - **Node 22+**, **git**, and a repository for your project (a fresh `git init` is fine).
 - **One agent CLI** logged in: Codex (`codex`), Claude Code (`claude`) or Pi (`pi`). Workers, the Controller and the Front agent are all sessions of these.
 - Optional: **gh** (for GitHub-issue steering), **Figma** or **Pencil** (for stage 1 of outside-in).

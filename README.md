@@ -28,7 +28,7 @@ One human. One agent that talks to them. One unattended controller that runs man
 
 | | |
 |---|---|
-| **Orca** (required) | [orca.earendil.works](https://orca.earendil.works). The runner: every worker gets its own worktree and terminal, the Controller and workers exchange structured messages, remote servers are paired over a private network. `init` stops if the Orca CLI is missing. The Orca skills (`orchestration`, `orca-cli`) must be installed at user level on every host that runs a Controller or Front agent (`agentic-factory install-skills`). |
+| **Orca** (required) | [github.com/stablyai/orca](https://github.com/stablyai/orca). The runner: every worker gets its own worktree and terminal, the Controller and workers exchange structured messages, remote servers are paired over a private network. `init` stops if the Orca CLI is missing. The Orca skills (`orchestration`, `orca-cli`) must be installed at user level on every host that runs a Controller or Front agent (`agentic-factory install-skills`). |
 | **One agent CLI** | Codex, Claude Code or Pi, logged in. Workers, Controller and Front agent are sessions of these. |
 | **Node 22+, git** | the scripts and hooks |
 | optional | a Linux server for the Controller and workers ([`docs/server-setup.md`](docs/server-setup.md), about an hour); `gh` for GitHub-issue steering; Figma or Pencil for stage 1 of outside-in |
