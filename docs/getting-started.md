@@ -24,6 +24,8 @@ claude "Read ~/agentic-factory/START.md and set up this project."
 
 Use `codex` or `pi` instead of `claude` if that is your logged-in CLI. The Front agent checks prerequisites, asks a few [onboarding questions](onboarding.md) one at a time, writes and pushes the adoption commit, starts the machine and checks it. It tells you where the project stands and what comes next. From then on, talk to this agent; at each session start it checks the status and follows the current phase.
 
+Start every later session with the same sentence; the agent then reads `~/front-agent/<project>/FRONT_AGENT.md`.
+
 ## 3. The first feature, outside-in
 
 Tell the Front agent what you want. It leads you through the surface (a design or clickable fake), the data going in and out, and the logic in words and a diagram. Once you agree, it writes a ready ticket and tells the Controller. Keep the first feature small: one visible behaviour and one or two acceptance sentences.
@@ -84,7 +86,7 @@ To start the sessions manually after `init`, install skills, copy the bundles an
 
 ```bash
 agentic-factory install-skills
-cp -R .factory/controller ~/controller
+mkdir -p ~/controller && cp -R .factory/controller/. ~/controller/
 mkdir -p ~/.local/bin && install -m 755 ~/controller/gate ~/.local/bin/gate
 (cd ~/controller && nohup bash loadlog.sh >/dev/null 2>&1 &)
 PROJECT=your-project-name
