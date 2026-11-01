@@ -104,10 +104,11 @@ async function init() {
   }
   // Every script fetches origin and merges origin/<main>. A repo without a remote gets a local bare one, so the
   // first wave works on a single machine; replace it with a real remote any time (git remote set-url origin …).
-  if (printQuestions && !sh("git", ["remote"])) d.repo = "local bare remote (init creates it under ~/.factory-remotes)";
-  else if (!sh("git", ["remote"])) {
+  const needsRemote = !sh("git", ["remote"]);
+  const bare = path.join(os.homedir(), ".factory-remotes", `${d.name}-${hash(cwd).slice(0, 6)}.git`);
+  if (needsRemote) d.repo = printQuestions ? "local bare remote (init creates it under ~/.factory-remotes)" : `local:${bare}`;
+  const createRemote = () => {
     // Keyed by name plus a hash of the absolute path, so two projects with the same directory name never share a remote.
-    const bare = path.join(os.homedir(), ".factory-remotes", `${d.name}-${hash(cwd).slice(0, 6)}.git`);
     fs.mkdirSync(path.dirname(bare), { recursive: true });
     const existed = fs.existsSync(bare);
     if (!existed) spawnSync("git", ["init", "-q", "--bare", bare]);
@@ -121,8 +122,7 @@ async function init() {
       if (p.status !== 0) foreign();
     } else if (existed && sh("git", ["-C", bare, "rev-parse", "--verify", "-q", "HEAD"])) foreign();
     say(`No remote found: ${existed ? "using the existing" : "created a"} local bare remote at ${bare} as origin (replace it later with git remote set-url origin <url>).`);
-    d.repo = `local:${bare}`;
-  }
+  };
   const c = JSON.parse(fs.readFileSync(path.join(ROOT, "factory.config.example.json"), "utf8"));
   delete c.$comment;
   c.factoryVersion = PKG.version;
@@ -199,6 +199,8 @@ async function init() {
     emit({ factory: PKG.version, project: cwd, detected: { name: d.name, repo: d.repo, packageManager: d.pm, tools: d.tools }, questions: asked, open,
       next: open.length ? "ask the open questions one at a time (recommended option first, say why it matters: docs/onboarding.md), write all answers as {id: value} to a file outside the repo, run --print-questions --answers <file> again until `open` is empty and no new question appears, then run init --answers <file>" : "all answered: run init --answers <file>" });
   }
+
+  if (needsRemote) createRemote();
 
   // --- write -----------------------------------------------------------------------------------
   const hadManifest = fs.existsSync(".factory/manifest.json");
@@ -678,8 +680,9 @@ async function start() {
     const d = expandHome(dir);
     fs.mkdirSync(d, { recursive: true }); fs.cpSync(".factory/controller", d, { recursive: true, force: true }); say(`Controller bundle: ${dir}`);
     const bin = path.join(os.homedir(), ".local/bin"); fs.mkdirSync(bin, { recursive: true }); fs.copyFileSync(path.join(d, "gate"), path.join(bin, "gate")); fs.chmodSync(path.join(bin, "gate"), 0o755); say("Gate: ~/.local/bin/gate");
-    if (sh("ps", ["-ax", "-o", "command"]).split("\n").some((l) => /loadlog\.sh/.test(l))) say("Load log: already running");
-    else { spawn("bash", ["loadlog.sh"], { cwd: d, detached: true, stdio: "ignore" }).unref(); say("Load log: started (~/load.log)"); }
+    const loadlog = path.join(d, "loadlog.sh");
+    if (sh("ps", ["-ax", "-o", "command"]).split("\n").some((l) => l.includes(loadlog))) say("Load log: already running");
+    else { spawn("bash", [loadlog], { cwd: d, detached: true, stdio: "ignore" }).unref(); say("Load log: started (~/load.log)"); }
   } else {
     const remoteDir = dir;
     const r = spawnSync("rsync", ["-a", "-e", `ssh ${sshArgsFor(ctl).slice(0, -1).map((a) => JSON.stringify(a)).join(" ")}`, ".factory/controller/", `${ctl.ssh}:${remoteDir}/`], { encoding: "utf8" });

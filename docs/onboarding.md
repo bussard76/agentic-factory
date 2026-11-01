@@ -1,6 +1,6 @@
 # Onboarding: what `init` asks and why
 
-`npx agentic-factory init` is a guided onboarding for a new project. It asks one question at a time, offers a recommended answer first, writes `factory.config.json`, copies the handbooks, templates, hooks and skills, commits them as `Adopt agentic-factory (ADR-0001)`, pushes, and prints the steps only the human can do. Running it again (or `update`) never overwrites a file you changed: the new version lands in `.factory/new/` for you to merge.
+The Front agent asks these questions in conversation, one at a time, using the IDs from `init --print-questions` JSON to record answers for `init --answers <file>`. `init` alone also works interactively. It writes `factory.config.json`, copies the handbooks, templates, hooks and skills, commits them as `Adopt agentic-factory (ADR-0001)`, pushes, and prints remaining steps. Running it again (or `update`) never overwrites a file you changed: the new version lands in `.factory/new/` for you to merge. The Front agent then runs `start` and `doctor`.
 
 | # | Question | Why it matters | Default |
 |---|---|---|---|
@@ -27,6 +27,6 @@ After the answers, `init`:
 3. copies `skills/` into `.agents/skills/` and links `.claude/skills` to it
 4. sets `core.hooksPath=.githooks`
 5. writes the bundles `.factory/controller/` (`CONTROLLER.md` filled in, scripts, templates, user-level skills), `.factory/front-agent/` and `.factory/server/`, ignored by git and ready to copy to their hosts. Project-specific Controller rules (data boundaries, known flakes, decision pointers) go into `docs/controller-rules.md` in the project and are rendered into `CONTROLLER.md`. **Existing hooks** (`hooks` in the config, decided by `init`): a repo without own hooks gets the factory hooks in `.githooks/` (`factory`). A repo with own hooks (`pre-commit`, `commit-msg`, `pre-push`, `pre-merge-commit`, in `.githooks/` or in the directory `core.hooksPath` points to, including husky v9's `.husky/_` layout and lefthook) keeps each of them as `<hook>.own` **in that directory**; the factory hooks are written next to them and run the own hook first under `set -e`; `core.hooksPath` stays where the project put it, so a husky `prepare` script cannot disarm the gate (`merge`). Only `init --keep-own-hooks` leaves everything untouched and makes the project's hooks responsible for the gate (`own`). `init` says which, the rendered documents say which, `doctor` checks that each gate hook is present and calls the guardrails. The adoption commit and its push run with hooks disabled once, because the review gate they install would reject the commit that installs it. **Existing ADRs:** the adoption ADR takes the next free number and the commit cites it
-6. prints the human's checklist: server setup, logins (GitHub, agent CLIs, Tailscale), Orca pairing, loading the preview service, starting the Controller with its start order
+6. prints the remaining checklist; `start` installs skills, copies bundles, starts the load log and opens the Controller session
 
 `doctor` checks the same things later: hooks installed, config valid, server reachable, tools present, `status.md` fresh.

@@ -1,7 +1,7 @@
 // End-to-end smoke test: init in a fresh repo, hooks bite, controller scripts run. `npm test` runs it.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +16,51 @@ const git = (...a) => { const r = spawnSync("git", a, { cwd: tmp, encoding: "utf
 const gitTry = (...a) => spawnSync("git", a, { cwd: tmp, encoding: "utf8" });
 // FACTORY_SKIP_ORCA keeps the test from touching the developer's real Orca (no repo registration).
 const node = (...a) => execFileSync("node", a, { cwd: tmp, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } }).trim();
+
+test("agent entry questions, answers, status and start in an isolated home", async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "af-entry-"));
+  const project = path.join(base, "project"), entryHome = path.join(base, "home"), bin = path.join(base, "bin");
+  fs.mkdirSync(project); fs.mkdirSync(entryHome); fs.mkdirSync(bin);
+  for (const name of ["orca", "claude"]) { fs.writeFileSync(path.join(bin, name), "#!/bin/sh\nexit 0\n", { mode: 0o755 }); }
+  const env = { ...process.env, HOME: entryHome, PATH: `${bin}${path.delimiter}${process.env.PATH}`, FACTORY_SKIP_ORCA: "1" };
+  const run = (...args) => spawnSync("node", [CLI, ...args], { cwd: project, env, encoding: "utf8", timeout: 30000 });
+  const gitEntry = (...args) => { const r = spawnSync("git", args, { cwd: project, env, encoding: "utf8" }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+  try {
+    gitEntry("init", "-q", "-b", "main"); gitEntry("config", "user.name", "Test"); gitEntry("config", "user.email", "test@example.com");
+    fs.writeFileSync(path.join(project, "README.md"), "# Demo\n"); gitEntry("add", "README.md"); gitEntry("commit", "-qm", "initial");
+    // Keep stdin open: status must exit without waiting for EOF.
+    const status = await new Promise((resolve, reject) => {
+      const child = spawn("node", [CLI, "status", "--json"], { cwd: project, env });
+      let out = "", err = ""; child.stdout.on("data", (b) => { out += b; }); child.stderr.on("data", (b) => { err += b; });
+      const timer = setTimeout(() => { child.kill(); reject(new Error("status waited for stdin")); }, 5000);
+      child.on("error", reject); child.on("close", (code) => { clearTimeout(timer); resolve({ code, out, err }); });
+    });
+    assert.equal(status.code, 0, status.err); assert.equal(JSON.parse(status.out).phase, "onboarding");
+    let r = run("init", "--print-questions"); assert.equal(r.status, 0, r.stderr);
+    const questions = JSON.parse(r.stdout); assert.ok(questions.open.length);
+    const rules = questions.questions.find((q) => q.id === "rules.confirm"); assert.ok(rules); assert.match(rules.context, /no real data or secrets/); assert.match(rules.context, /workers never push to main/);
+    assert.equal(gitEntry("status", "--porcelain"), ""); assert.equal(gitEntry("remote"), "");
+    const answers = path.join(base, "answers.json"); fs.writeFileSync(answers, JSON.stringify({ "hosts.where": "both" }));
+    r = run("init", "--print-questions", "--answers", answers); assert.equal(r.status, 0, r.stderr);
+    assert.ok(JSON.parse(r.stdout).questions.some((q) => q.id === "hosts.remote.ssh"));
+    fs.writeFileSync(answers, JSON.stringify({ "agents.default": "invalid" })); r = run("init", "--answers", answers);
+    assert.notEqual(r.status, 0); assert.match(r.stderr, /agents\.default.*codex, claude, pi/);
+    assert.equal(gitEntry("remote"), "", "invalid answers must not create a remote");
+    fs.writeFileSync(answers, JSON.stringify({ "project.humanName": "Test Human", "agents.default": "claude", "skills.installNow": "no" }));
+    r = run("init", "--answers", answers); assert.equal(r.status, 0, r.stdout + r.stderr);
+    const config = JSON.parse(fs.readFileSync(path.join(project, "factory.config.json"), "utf8"));
+    assert.equal(config.project.humanName, "Test Human"); assert.equal(config.agents.default, "claude");
+    r = run("status", "--json"); assert.equal(r.status, 0, r.stderr); const state = JSON.parse(r.stdout);
+    assert.equal(state.phase, "start"); assert.equal(state.work.debtOpen, 0, "template example is not open debt");
+    r = run("start"); assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /Controller session:.*\n\s+cd .*claude/);
+    const front = fs.readFileSync(path.join(entryHome, "front-agent", config.project.name, "FRONT_AGENT.md"), "utf8");
+    assert.ok(front.includes(CLI)); assert.doesNotMatch(front, /\{\{.*?\}\}/);
+    assert.ok(fs.existsSync(path.join(entryHome, "controller", "CONTROLLER.md"))); assert.ok(fs.existsSync(path.join(entryHome, ".local/bin/gate")));
+  } finally {
+    spawnSync("pkill", ["-f", path.join(entryHome, "controller", "loadlog.sh")]);
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
 
 test("init in a fresh repo writes the factory files, a local remote and the pushed adoption commit", () => {
   git("init", "-q", "-b", "main"); git("config", "user.email", "t@example.com"); git("config", "user.name", "t");
