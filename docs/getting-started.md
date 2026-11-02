@@ -13,6 +13,7 @@ Start one agent in your project. It guides you through setup and the first featu
 ## 1. Get the factory
 
 ```bash
+# reading this on GitLab? use the project's clone URL from Code → Clone
 git clone https://github.com/bussard76/agentic-factory ~/agentic-factory
 ```
 

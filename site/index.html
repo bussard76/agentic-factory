@@ -210,11 +210,19 @@ Ponytail: 2 findings merged
     <h2>In zehn Minuten eingerichtet</h2>
     <div class="two">
       <div>
-        <p class="sub">Voraussetzungen: Orca (der Runner), eine Agenten-CLI (Codex, Claude Code oder Pi), Node 22 und git. Ein Befehl im Projekt-Repo führt durch das Onboarding: Rhythmus, Tickets, Agent und Modelle, Hosts, Kapazität, Befehle, Preview, Review-Regeln, Design-Werkzeug, feste Regeln. Danach liegen Handbücher, Hooks, Skills und die Bundles für Controller und Front-Agent im Repo.</p>
-        <pre>cd your-project
-npx agentic-factory init      # Onboarding, eine Frage nach der anderen
-npx agentic-factory doctor    # prüft Hooks, Werkzeuge, Hosts, Status
-npx agentic-factory update    # holt Verbesserungen der Fabrik nach</pre>
+        <p class="sub">Voraussetzungen: Orca (der Runner) läuft, eine angemeldete Agenten-CLI (Claude Code, Codex oder Pi), Node 22 und git. Kopiere die Befehle in ein Terminal. Danach führt dich der Front-Agent in Orca durch das Onboarding, schreibt Handbücher, Hooks und Skills ins Repo und startet die Fabrik.</p>
+        <pre># 1. Die Fabrik holen
+git clone https://github.com/bussard76/agentic-factory.git ~/agentic-factory
+
+# 2. Ins Projekt wechseln (neues Projekt: mkdir my-app &amp;&amp; cd my-app &amp;&amp; git init -b main &amp;&amp; git commit --allow-empty -m "Initial commit")
+cd ~/pfad/zu/deinem-projekt
+
+# 3. Projekt in Orca registrieren und den Front-Agenten in einem Orca-Terminal starten
+ORCA="${ORCA_CLI_COMMAND:-orca}"
+$ORCA repo add --path "$PWD"
+$ORCA agent launch --agent claude --worktree "path:$PWD" --surface terminal --focus \
+  --prompt "Read ~/agentic-factory/START.md and set up this project."</pre>
+        <p class="quiet" style="margin-top:12px">Statt <code>claude</code> geht <code>codex</code> oder <code>pi</code>. <b>Windows:</b> WSL 2 installieren (<code>wsl --install -d Ubuntu</code> in einer Admin-PowerShell), Orcas Terminal auf WSL laufen lassen, Node, git und die Agenten-CLI in WSL installieren, das Projekt unter <code>~/</code> ablegen; die Befehle bleiben gleich.</p>
         <p class="quiet" style="margin-top:12px">Die Schritt-für-Schritt-Anleitung bis zur ersten Wave: <a href="../docs/de/erste-schritte.md">Erste Schritte</a> · <a href="../docs/getting-started.md">Getting started</a>.</p>
       </div>
       <div class="rules">

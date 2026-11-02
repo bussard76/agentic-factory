@@ -38,7 +38,7 @@ A plain-terminal runner without Orca exists behind `init --experimental-terminal
 With Orca running, paste this into a terminal (macOS, Linux, or WSL on Windows):
 
 ```bash
-# 1. Get the factory
+# 1. Get the factory (reading this on GitLab? use the project's clone URL from Code → Clone)
 git clone https://github.com/bussard76/agentic-factory ~/agentic-factory
 
 # 2. Go to your project (a new one: mkdir my-app && cd my-app && git init -b main && git commit --allow-empty -m "Initial commit")

@@ -13,6 +13,7 @@ Starte einen Agenten in deinem Projekt. Er begleitet dich durch die Einrichtung 
 ## 1. Die Fabrik holen
 
 ```bash
+# auf GitLab? dann die Clone-URL des Projekts aus Code → Clone verwenden
 git clone https://github.com/bussard76/agentic-factory ~/agentic-factory
 ```
 

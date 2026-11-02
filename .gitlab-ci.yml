@@ -9,6 +9,8 @@ pages:
     - mkdir -p public
     - cp site/index.html public/index.html
     - sed -i "s#\.\./docs/#$CI_PROJECT_URL/-/blob/$CI_DEFAULT_BRANCH/docs/#g; s#\.\./README\.md#$CI_PROJECT_URL/-/blob/$CI_DEFAULT_BRANCH/README.md#g" public/index.html
+    # The clone command on the page points at this GitLab project, not at GitHub.
+    - sed -i "s#https://github\.com/bussard76/agentic-factory\.git#$CI_PROJECT_URL.git#g" public/index.html
   artifacts:
     paths:
       - public
