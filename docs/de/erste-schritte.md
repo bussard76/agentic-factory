@@ -8,6 +8,7 @@ Starte einen Agenten in deinem Projekt. Er begleitet dich durch die Einrichtung 
 - Node 22+ und Git mit deinem Namen und deiner E-Mail (`git config --global user.name` und `user.email`). Dein Projekt braucht ein Git-Repository; `git init` reicht.
 - Eine angemeldete Agenten-CLI: Claude Code, Codex oder Pi.
 - Optional: `gh` für GitHub-Issues, Figma oder Pencil für den Entwurf.
+- **Windows:** Die Skripte der Fabrik brauchen eine Unix-Shell. Installiere WSL 2 (`wsl --install -d Ubuntu` in einer Admin-PowerShell), lass Orcas Terminal auf dieser Distribution laufen, installiere Node 22, Git und die Agenten-CLI in WSL und lege das Projekt im WSL-Dateisystem ab (`~/…`, nicht `/mnt/c/…`). Alles Weitere ist dann gleich. Native Windows-Shells werden nicht unterstützt.
 
 ## 1. Die Fabrik holen
 
@@ -15,14 +16,19 @@ Starte einen Agenten in deinem Projekt. Er begleitet dich durch die Einrichtung 
 git clone https://github.com/bussard76/agentic-factory ~/agentic-factory
 ```
 
-## 2. Den Front-Agenten im Projekt starten
+## 2. Den Front-Agenten im Projekt starten, in Orca
 
 ```bash
-cd /pfad/zu/deinem-projekt
-claude "Read ~/agentic-factory/START.md and set up this project."
+cd ~/pfad/zu/deinem-projekt
+# stattdessen ein neues Projekt: mkdir my-app && cd my-app && git init -b main && git commit --allow-empty -m "Initial commit"
+
+ORCA="${ORCA_CLI_COMMAND:-orca}"   # unter Linux außerhalb von Orcas eigenen Terminals: ORCA=orca-ide
+$ORCA repo add --path "$PWD"
+$ORCA agent launch --agent claude --worktree "path:$PWD" --surface terminal --focus \
+  --prompt "Read ~/agentic-factory/START.md and set up this project."
 ```
 
-Statt `claude` kannst du `codex` oder `pi` verwenden. Der Front-Agent prüft die Voraussetzungen, stellt die [Onboarding-Fragen](../onboarding.md) einzeln, erstellt und pusht den Einführungs-Commit, startet die Fabrik und prüft sie. Er erklärt dir den Projektstand und den nächsten Schritt. Von da an sprichst du mit diesem Agenten; zu Beginn jeder Sitzung prüft er den Status und handelt entsprechend der aktuellen Phase.
+Der Tab des Agenten öffnet sich in Orca unter deinem Projekt; dort sprichst du mit ihm. Ein Projekt, das Orca schon kennt, erneut hinzuzufügen schadet nicht. Im Orca-Fenster geht dasselbe von Hand: Projekt hinzufügen, darin ein Terminal öffnen, `claude "Read ~/agentic-factory/START.md and set up this project."` starten. Statt `claude` kannst du `codex` oder `pi` verwenden. Der Front-Agent prüft die Voraussetzungen, stellt die [Onboarding-Fragen](../onboarding.md) einzeln, erstellt und pusht den Einführungs-Commit, startet die Fabrik und prüft sie. Er erklärt dir den Projektstand und den nächsten Schritt. Von da an sprichst du mit diesem Agenten; zu Beginn jeder Sitzung prüft er den Status und handelt entsprechend der aktuellen Phase.
 
 Beginne jede spätere Sitzung mit demselben Satz; der Agent liest dann `~/front-agent/<projekt>/FRONT_AGENT.md`.
 

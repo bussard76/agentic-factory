@@ -35,13 +35,23 @@ One human. One agent that talks to them. One unattended controller that runs man
 
 A plain-terminal runner without Orca exists behind `init --experimental-terminal-runner`. It is unsupported and not what the docs describe.
 
+With Orca running, paste this into a terminal (macOS, Linux, or WSL on Windows):
+
 ```bash
+# 1. Get the factory
 git clone https://github.com/bussard76/agentic-factory ~/agentic-factory
-cd /path/to/your-project
-claude "Read ~/agentic-factory/START.md and set up this project."
+
+# 2. Go to your project (a new one: mkdir my-app && cd my-app && git init -b main && git commit --allow-empty -m "Initial commit")
+cd ~/path/to/your-project
+
+# 3. Register the project with Orca and start the Front agent in an Orca terminal
+ORCA="${ORCA_CLI_COMMAND:-orca}"   # on Linux outside Orca's own terminals: ORCA=orca-ide
+$ORCA repo add --path "$PWD"
+$ORCA agent launch --agent claude --worktree "path:$PWD" --surface terminal --focus \
+  --prompt "Read ~/agentic-factory/START.md and set up this project."
 ```
 
-Use `codex` or `pi` instead if that is your logged-in CLI. The Front agent asks the [onboarding questions](docs/onboarding.md) in conversation, creates the adoption commit, starts the Controller and checks the setup. It then reports the project phase and guides the first feature. The [manual CLI path](docs/getting-started.md#appendix-what-the-agent-does-for-you-and-how-to-do-it-by-hand) remains available; updates preserve edited files in `.factory/new/` for merging.
+Use `--agent codex` or `--agent pi` if that is your logged-in CLI. The agent's tab opens in Orca; from then on you talk to it there. Adding a project that Orca already knows does no harm. **Windows:** the factory's scripts need a Unix shell, so run Orca's terminal on a WSL 2 distribution (`wsl --install -d Ubuntu` in an admin PowerShell), install Node 22, git and the agent CLI inside WSL, and keep the project in the WSL file system (`~/…`, not `/mnt/c/…`); the commands above stay the same. Native Windows shells are not supported. The Front agent asks the [onboarding questions](docs/onboarding.md) in conversation, creates the adoption commit, starts the Controller and checks the setup. It then reports the project phase and guides the first feature. The [manual CLI path](docs/getting-started.md#appendix-what-the-agent-does-for-you-and-how-to-do-it-by-hand) remains available; updates preserve edited files in `.factory/new/` for merging.
 
 ## Known limits (read before you trust the gates)
 
