@@ -210,7 +210,10 @@ Ponytail: 2 findings merged
     <h2>In zehn Minuten eingerichtet</h2>
     <div class="two">
       <div>
-        <p class="sub">Voraussetzungen: Orca (der Runner) läuft, eine angemeldete Agenten-CLI (Claude Code, Codex oder Pi), Node 22 und git. Kopiere die Befehle in ein Terminal. Danach führt dich der Front-Agent in Orca durch das Onboarding, schreibt Handbücher, Hooks und Skills ins Repo und startet die Fabrik.</p>
+        <p class="sub">Voraussetzungen: Orca (der Runner) läuft, eine angemeldete Agenten-CLI (Claude Code, Codex oder Pi), Node 22 und git. Danach führt dich der Front-Agent in Orca durch das Onboarding, schreibt Handbücher, Hooks und Skills ins Repo und startet die Fabrik.</p>
+        <p class="sub"><b>Der kurze Weg: ein Prompt.</b> Öffne dein Projekt in einem beliebigen Agenten (wenn möglich in Orca) und gib ihm diesen Satz. Er prüft die Voraussetzungen, nennt, was fehlt, und zieht bei Bedarf selbst in ein Orca-Terminal um.</p>
+        <pre style="white-space:pre-wrap">Set up the agentic factory for this project. If ~/agentic-factory does not exist, clone https://github.com/bussard76/agentic-factory.git into it; otherwise update it with git -C ~/agentic-factory pull --ff-only. Then read ~/agentic-factory/START.md and follow it: check the prerequisites, move into Orca if needed, and guide me through the onboarding.</pre>
+        <p class="sub" style="margin-top:18px"><b>Dasselbe von Hand.</b> Kopiere die Befehle in ein Terminal:</p>
         <pre># 1. Die Fabrik holen
 git clone https://github.com/bussard76/agentic-factory.git ~/agentic-factory
 

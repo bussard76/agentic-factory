@@ -10,6 +10,14 @@ Start one agent in your project. It guides you through setup and the first featu
 - Optional: `gh` for GitHub issues, Figma or Pencil for design.
 - **Windows:** the factory's scripts need a Unix shell. Install WSL 2 (`wsl --install -d Ubuntu` in an admin PowerShell), run Orca's terminal on that distribution, install Node 22, git and the agent CLI inside WSL, and keep the project in the WSL file system (`~/…`, not `/mnt/c/…`). Everything below is then the same. Native Windows shells are not supported.
 
+**The short way: one prompt** instead of sections 1 and 2. Open your project in any agent (in Orca if you can) and drop in:
+
+```text
+Set up the agentic factory for this project. If ~/agentic-factory does not exist, clone https://github.com/bussard76/agentic-factory.git into it; otherwise update it with git -C ~/agentic-factory pull --ff-only. Then read ~/agentic-factory/START.md and follow it: check the prerequisites, move into Orca if needed, and guide me through the onboarding.
+```
+
+The agent checks the prerequisites above and names what is missing; started outside Orca, it moves itself into an Orca terminal. On GitLab, put the project's clone URL into the prompt.
+
 ## 1. Get the factory
 
 ```bash

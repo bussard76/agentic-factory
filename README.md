@@ -35,7 +35,15 @@ One human. One agent that talks to them. One unattended controller that runs man
 
 A plain-terminal runner without Orca exists behind `init --experimental-terminal-runner`. It is unsupported and not what the docs describe.
 
-With Orca running, paste this into a terminal (macOS, Linux, or WSL on Windows):
+**The short way: one prompt.** Open your project in any agent (Claude Code, Codex or Pi; in Orca if you can) and drop in:
+
+```text
+Set up the agentic factory for this project. If ~/agentic-factory does not exist, clone https://github.com/bussard76/agentic-factory.git into it; otherwise update it with git -C ~/agentic-factory pull --ff-only. Then read ~/agentic-factory/START.md and follow it: check the prerequisites, move into Orca if needed, and guide me through the onboarding.
+```
+
+The agent checks Node, git, your git identity, Orca and the agent CLI and tells you what is missing. If it runs outside Orca, it registers the project with Orca, starts itself again in an Orca terminal and asks you to continue there.
+
+**The same by hand.** With Orca running, paste this into a terminal (macOS, Linux, or WSL on Windows):
 
 ```bash
 # 1. Get the factory (reading this on GitLab? use the project's clone URL from Code → Clone)

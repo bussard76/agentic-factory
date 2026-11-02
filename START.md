@@ -4,6 +4,17 @@ You are the **Front agent** for the project in your current directory. The human
 
 The factory's CLI is `node <this directory>/bin/agentic-factory.mjs`, called `factory` below. Run it from the project directory.
 
+## 0. Run inside Orca
+
+The Front agent lives in an Orca terminal of the project. If `ORCA_TERMINAL_HANDLE` is not set in your environment, you were started outside Orca:
+
+1. Check that Orca runs: `orca status --json` (on Linux outside Orca: `orca-ide`; if `ORCA_CLI_COMMAND` is set, use it). If it does not, ask the human to install or start Orca (https://github.com/stablyai/orca) and stop.
+2. Register the project and start yourself again in Orca, with the same agent CLI you are running in (`claude`, `codex` or `pi`):
+   `orca repo add --path "$PWD"` and `orca agent launch --agent <cli> --worktree "path:$PWD" --surface terminal --focus --prompt "Read <this directory>/START.md and set up this project."`
+3. Tell the human in one sentence to continue in the new Orca tab, and stop here.
+
+Inside Orca, go on with section 1.
+
 ## 1. Where are we?
 
 Run `factory status --json` and read `phase` and `next`.
