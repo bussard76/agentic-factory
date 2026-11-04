@@ -4,7 +4,7 @@
 // stay short, and falls on pressure or load timeouts. State per host in capacity-state.<host>.json; every change is a
 // `decision` event in the journal. Usage: node capacity.mjs [--on <host>] [--verbose] [--reset]
 import fs from "node:fs";
-import { ORCA, PROJECT, RUNNER, argHost, file, journal, onHost, orcaEnvArgsOn, readJson, trySh, writeJson } from "./lib.mjs";
+import { CONTROLLER_HOME, ORCA, PROJECT, RUNNER, argHost, file, journal, onHost, orcaEnvArgsOn, readJson, trySh, writeJson } from "./lib.mjs";
 
 const host = argHost(process.argv);
 const CAP = host.capacity;
@@ -84,7 +84,7 @@ const scale = cpu === null ? Math.max(0, 1 - load1 / threads) : Math.max(0, 1 - 
 const slots = { unit: Math.round(uMin + (uMax - uMin) * scale), e2e: Math.round(eMin + (eMax - eMin) * scale) };
 writeJson(`gate-slots.${host.name}.json`, slots);
 if (host.kind === "local") writeJson("gate-slots.json", slots);
-else onHost(host, `mkdir -p ~/controller && printf '%s' '${JSON.stringify(slots)}' > ~/controller/gate-slots.json`);
+else onHost(host, `mkdir -p ${CONTROLLER_HOME} && printf '%s' '${JSON.stringify(slots)}' > ${CONTROLLER_HOME}/gate-slots.json`);
 
 const verdict = { host: host.name, suite: suiteVerdict, readonly: roVerdict, caps: { suite: state.suiteMax, readonly: state.readonlyMax, calibration: CAL.mode }, gateUnitSlots: slots.unit, gateE2eSlots: slots.e2e, reason: [...reasons, ...notes].join("; ") || "capacity available",
   measured: { cpuAvg10: cpu, memAvg10: mem, ioAvg10: io, load1, threads, availGb: Number(availGb.toFixed(1)), suite, readonly, queue, foreign: Number(foreign.toFixed(1)), recentTimeouts, quota, history: state.history.slice(-5) } };

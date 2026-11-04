@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# gate <command…>: thin shim; the implementation is gate.mjs next to this file (or in ~/controller). Needs node only.
+# gate <command…>: thin shim; the implementation is gate.mjs next to this file (`start` installs both; or in ~/controller). Needs node only.
 here="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)"
 impl="$here/gate.mjs"; [ -f "$impl" ] || impl="$HOME/controller/gate.mjs"
 exec node "$impl" "$@"

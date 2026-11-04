@@ -4,7 +4,7 @@
 // the push gate reads the findings files from the pushed tree, so a wave without them is rejected.
 import fs from "node:fs";
 import { spawn } from "node:child_process";
-import { CMDS, MAIN, ORCA, RUNNER, argHost, file, integrationOn, journal, onHost, orcaEnvArgsOn, sh, worktreeRefOn } from "./lib.mjs";
+import { CMDS, CONTROLLER_HOME, MAIN, ORCA, RUNNER, argHost, file, integrationOn, journal, onHost, orcaEnvArgsOn, sh, worktreeRefOn } from "./lib.mjs";
 
 const host = argHost(process.argv);
 const args = process.argv.slice(2).filter((x, i, a) => x !== "--on" && a[i - 1] !== "--on");
@@ -31,7 +31,7 @@ if (RUNNER === "orca") {
   fs.writeFileSync(file("wave-handle.txt"), `${host.name} pid:${child.pid}\n`);
   console.log(`pid:${child.pid}`);
 } else {
-  onHost(host, `mkdir -p ~/controller/logs && cd ${q(integrationOn(host))} && (setsid bash -c ${q(cmd)} > ~/controller/logs/wave.log 2>&1 < /dev/null &)`);
+  onHost(host, `mkdir -p ${CONTROLLER_HOME}/logs && cd ${q(integrationOn(host))} && (setsid bash -c ${q(cmd)} > ${CONTROLLER_HOME}/logs/wave.log 2>&1 < /dev/null &)`);
   fs.writeFileSync(file("wave-handle.txt"), `${host.name} remote-log\n`);
   console.log("remote-log");
 }

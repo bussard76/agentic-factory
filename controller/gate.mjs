@@ -3,8 +3,10 @@
 // (no flock needed): tickets and slots are files under $TMPDIR/<project>-gate-<pool>/; a ticket is the queue
 // position, a slot is held by creating its file exclusively. Only the oldest live ticket may take a free slot, so
 // newer gates cannot overtake older ones. Stale tickets and slots (dead pid) are removed. Slot counts come from
-// ~/controller/gate-slots.json (written by capacity.mjs) or GATE_SLOTS / GATE_E2E_SLOTS, default 2 / 1.
-// Wait and run time go to the journal (type gate) when ~/controller/journal.mjs exists.
+// <controller dir>/gate-slots.json (written by capacity.mjs) or GATE_SLOTS / GATE_E2E_SLOTS, default 2 / 1.
+// Wait and run time go to the journal (type gate) when <controller dir>/journal.mjs exists.
+// One gate serves every project on a host: the project and its controller dir come from the factory.config.json
+// in the working directory or above it (FACTORY_CONFIG wins), else from ~/controller.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -13,10 +15,13 @@ import path from "node:path";
 const args = process.argv.slice(2);
 if (!args.length) { console.error("usage: gate <command…>"); process.exit(2); }
 const home = os.homedir();
-const cfgPath = path.join(home, "controller/factory.config.json");
-const project = process.env.FACTORY_PROJECT ?? (fs.existsSync(cfgPath) ? JSON.parse(fs.readFileSync(cfgPath, "utf8")).project?.name : null) ?? "factory";
+const findConfig = (from) => { for (let d = from; ; d = path.dirname(d)) { const p = path.join(d, "factory.config.json"); if (fs.existsSync(p)) return p; if (d === path.dirname(d)) return null; } };
+const cfgPath = process.env.FACTORY_CONFIG ?? findConfig(process.cwd()) ?? path.join(home, "controller/factory.config.json");
+const cfg = fs.existsSync(cfgPath) ? JSON.parse(fs.readFileSync(cfgPath, "utf8")) : {};
+const controllerDir = (cfg.hosts?.controller?.controllerDir ?? "~/controller").replace(/^~(?=\/|$)/, home);
+const project = process.env.FACTORY_PROJECT ?? cfg.project?.name ?? "factory";
 const pool = /e2e|playwright|cypress/.test(args.join(" ")) ? "e2e" : "unit";
-const slotsFile = path.join(home, "controller/gate-slots.json");
+const slotsFile = path.join(controllerDir, "gate-slots.json");
 const envSlots = pool === "e2e" ? process.env.GATE_E2E_SLOTS : process.env.GATE_SLOTS;
 const slots = Math.max(1, Number(envSlots ?? (fs.existsSync(slotsFile) ? JSON.parse(fs.readFileSync(slotsFile, "utf8"))[pool] : null) ?? (pool === "e2e" ? 1 : 2)) || 1);
 const dir = path.join(os.tmpdir(), `${project}-gate-${pool}`);
@@ -48,6 +53,6 @@ process.on("exit", release); process.on("SIGINT", () => { release(); process.exi
 const r = spawnSync(args[0], args.slice(1), { stdio: "inherit", shell: false });
 const t2 = Date.now();
 release();
-const journal = path.join(home, "controller/journal.mjs");
+const journal = path.join(controllerDir, "journal.mjs");
 if (fs.existsSync(journal)) spawnSync("node", [journal, "gate", process.env.GATE_TASK ?? "gate", `slot_pool=${pool}`, `wait_min=${Math.round((t1 - t0) / 60000)}`, `minutes=${Math.round((t2 - t1) / 60000)}`, `verdict=${r.status === 0 ? "pass" : "fail"}`], { stdio: "ignore" });
 process.exit(r.status ?? 1);

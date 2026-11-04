@@ -17,6 +17,39 @@ const gitTry = (...a) => spawnSync("git", a, { cwd: tmp, encoding: "utf8" });
 // FACTORY_SKIP_ORCA keeps the test from touching the developer's real Orca (no repo registration).
 const node = (...a) => execFileSync("node", a, { cwd: tmp, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } }).trim();
 
+test("two projects on one host: own controller dir everywhere, a foreign one is refused", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "af-two-"));
+  const twoHome = path.join(base, "home"), project = path.join(base, "second");
+  fs.mkdirSync(twoHome); fs.mkdirSync(project);
+  const env = { ...process.env, HOME: twoHome, FACTORY_SKIP_ORCA: "1" };
+  const run = (...a) => spawnSync("node", [CLI, ...a], { cwd: project, encoding: "utf8", env });
+  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: project });
+  spawnSync("git", ["config", "user.email", "t@example.invalid"], { cwd: project }); spawnSync("git", ["config", "user.name", "T"], { cwd: project });
+  fs.writeFileSync(path.join(project, "README.md"), "x\n"); spawnSync("git", ["add", "."], { cwd: project }); spawnSync("git", ["commit", "-qm", "init"], { cwd: project });
+  const answers = path.join(base, "answers.json");
+  fs.writeFileSync(answers, JSON.stringify({ "project.name": "second", "project.humanName": "Test Human", "agents.default": "claude", "skills.installNow": "no", "rules.confirm": "yes" }));
+  let r = run("init", "--answers", answers, "--experimental-terminal-runner"); assert.equal(r.status, 0, r.stdout + r.stderr);
+  // Another project already owns the default directory.
+  fs.mkdirSync(path.join(twoHome, "controller")); fs.writeFileSync(path.join(twoHome, "controller/factory.config.json"), JSON.stringify({ project: { name: "first" } }));
+  const config = JSON.parse(fs.readFileSync(path.join(project, "factory.config.json"), "utf8"));
+  r = run("start"); assert.notEqual(r.status, 0); assert.match(r.stdout, /belongs to the project first/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(twoHome, "controller/factory.config.json"), "utf8")).project.name, "first", "the other project's controller stays");
+  config.hosts.controller.controllerDir = "~/controller-second"; fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config, null, 2));
+  r = run("update"); assert.equal(r.status, 0, r.stdout + r.stderr);
+  r = run("start"); assert.equal(r.status, 0, r.stdout + r.stderr);
+  spawnSync("pkill", ["-f", path.join(twoHome, "controller-second", "loadlog.sh")]);
+  const ctl = path.join(twoHome, "controller-second");
+  assert.ok(fs.existsSync(path.join(ctl, "CONTROLLER.md")));
+  for (const f of ["CONTROLLER.md", "templates/mkspec.mjs", "wave.mjs", "runscript.mjs", "wavewait.mjs", "capacity.mjs"]) assert.doesNotMatch(fs.readFileSync(path.join(ctl, f), "utf8"), /~\/controller(?!-second)\b/, f);
+  assert.match(fs.readFileSync(path.join(ctl, "CONTROLLER.md"), "utf8"), /~\/controller-second\/status\.md/);
+  // The shared gate serves this project from inside its checkout: its slots and its pool, not the other project's.
+  fs.writeFileSync(path.join(ctl, "gate-slots.json"), JSON.stringify({ unit: 1, e2e: 1 }));
+  const gate = path.join(twoHome, ".local/bin/gate"); assert.ok(fs.existsSync(path.join(twoHome, ".local/bin/gate.mjs")));
+  const tmpDir = path.join(base, "tmp"); fs.mkdirSync(tmpDir);
+  r = spawnSync(gate, ["sh", "-c", "ls \"$TMPDIR\""], { cwd: project, encoding: "utf8", env: { ...env, TMPDIR: tmpDir } });
+  assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /second-gate-unit/); assert.doesNotMatch(r.stdout, /first-gate/);
+});
+
 test("agent entry questions, answers, status and start in an isolated home", async () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "af-entry-"));
   const project = path.join(base, "project"), entryHome = path.join(base, "home"), bin = path.join(base, "bin");
