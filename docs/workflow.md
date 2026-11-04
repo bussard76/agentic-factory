@@ -120,7 +120,7 @@ gitGraph
 
 Rules that make this safe:
 
-- **One worker, one worktree, one branch.** Several tickets run in parallel because their worktrees do not touch. The Controller never changes git state inside a running worker's worktree.
+- **One worker, one worktree, one branch.** Several tickets run in parallel because their worktrees do not touch. The Controller never changes git state inside a running worker's worktree. On the Controller's host a worker's worktree is a child of the Controller's workspace in Orca; on another host it stands alone.
 - **Push after every item.** A server restart loses nothing; the Controller restarts the worker in its worktree with a resume order.
 - **Review branches are never overwritten.** Round numbers are part of the name, so the history of a ticket is complete.
 - **Workers never push to `main`.** Only the wave does, and only with the review coverage the hook checks.
