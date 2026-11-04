@@ -34,13 +34,16 @@ let record;
 if (RUNNER === "orca") {
   const args = ["orchestration", "worker-start", "--task-title", name, "--spec", spec, "--agent", agent, "--model", model, "--repo", `id:${host.orcaRepoId}`, "--setup", "run", ...orcaEnvArgsOn(host), "--json"];
   if (agent === "codex") args.push("--effort", effort);
-  args.push(...(worktree === "new" ? ["--worktree", "new-top-level", "--name", dir] : ["--worktree", worktreeRefOn(host, dir)]));
+  // A worker on the Controller's own host becomes a child of the Controller's workspace. Orca refuses new-child across
+  // hosts, and it needs a Controller inside an Orca terminal. A child starts from origin/<main>, not the parent's branch.
+  const placement = !host.orcaEnvironment && process.env.ORCA_TERMINAL_HANDLE ? "new-child" : "new-top-level";
+  args.push(...(worktree === "new" ? ["--worktree", placement, "--name", dir, "--base-branch", `origin/${MAIN}`] : ["--worktree", worktreeRefOn(host, dir)]));
   const limits = host.capacity.worker ?? {};
   const env = { ...process.env, ...(limits.memoryMax ? { ORCA_TERMINAL_MEMORY_MAX: limits.memoryMax } : {}), ...(limits.processCeiling ? { ORCA_TERMINAL_PROCESS_CEILING: String(limits.processCeiling) } : {}) };
   const receipt = JSON.parse(sh(ORCA, args, { env }));
   if (!receipt.ok) throw new Error(JSON.stringify(receipt.error));
-  const dispatch = receipt.result?.dispatch?.id;
-  const handle = receipt.result?.worker?.agentTerminalHandle ?? (dispatch ? JSON.parse(sh(ORCA, ["orchestration", "worker-show", "--dispatch", dispatch, ...orcaEnvArgsOn(host), "--json"])).result?.worker?.agentTerminalHandle : undefined);
+  const dispatch = receipt.result?.dispatchId ?? receipt.result?.dispatch?.id;
+  const handle = receipt.result?.terminal ?? receipt.result?.worker?.agentTerminalHandle ?? (dispatch ? JSON.parse(sh(ORCA, ["orchestration", "worker-show", "--dispatch", dispatch, ...orcaEnvArgsOn(host), "--json"])).result?.worker?.agentTerminalHandle : undefined);  // Name the terminal and pane by task and role so the sidebar never shows an automatic session name.
   // Name the terminal and pane by task and role so the sidebar never shows an automatic session name.
   if (handle) for (const sub of ["rename", "set-pane-title"]) sh(ORCA, ["terminal", sub, "--terminal", handle, "--title", name, ...orcaEnvArgsOn(host), "--json"]);
   record = { name, host: host.name, agent, model, tier, dispatch, terminal: handle, worktree: `${workspacesOn(host)}${dir}`, readonly, started: new Date().toISOString() };
