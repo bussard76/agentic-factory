@@ -42,6 +42,7 @@ test("two projects on one host: own controller dir everywhere, a foreign one is 
   assert.ok(fs.existsSync(path.join(ctl, "CONTROLLER.md")));
   for (const f of ["CONTROLLER.md", "templates/mkspec.mjs", "wave.mjs", "runscript.mjs", "wavewait.mjs", "capacity.mjs"]) assert.doesNotMatch(fs.readFileSync(path.join(ctl, f), "utf8"), /~\/controller(?!-second)\b/, f);
   assert.match(fs.readFileSync(path.join(ctl, "CONTROLLER.md"), "utf8"), /~\/controller-second\/status\.md/);
+  for (const f of ["wave.mjs", "runscript.mjs", "integ-wave.sh"]) assert.doesNotMatch(fs.readFileSync(path.join(ctl, f), "utf8"), /\/tmp\/(wave|integ-wave)/, `${f}: a fixed /tmp file would mix two projects' waves`);
   // The shared gate serves this project from inside its checkout: its slots and its pool, not the other project's.
   fs.writeFileSync(path.join(ctl, "gate-slots.json"), JSON.stringify({ unit: 1, e2e: 1 }));
   const gate = path.join(twoHome, ".local/bin/gate"); assert.ok(fs.existsSync(path.join(twoHome, ".local/bin/gate.mjs")));

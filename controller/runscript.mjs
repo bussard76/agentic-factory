@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { CONTROLLER_HOME, ORCA, RUNNER, argHost, file, integrationOn, onHost, orcaEnvArgsOn, sh, worktreeRefOn } from "./lib.mjs";
+import { CONTROLLER_HOME, ORCA, PROJECT, RUNNER, argHost, file, integrationOn, onHost, orcaEnvArgsOn, sh, worktreeRefOn } from "./lib.mjs";
 
 const host = argHost(process.argv);
 const [script, title] = process.argv.slice(2).filter((x, i, a) => x !== "--on" && a[i - 1] !== "--on");
@@ -11,7 +11,7 @@ if (!script || !title) throw new Error('usage: node runscript.mjs <script-file> 
 const b64 = fs.readFileSync(script).toString("base64");
 const name = path.basename(script);
 const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
-const cmd = `echo ${b64} | base64 -d > /tmp/${name}; bash /tmp/${name} 2>&1 | tee /tmp/wave.out; echo WAVE-END`;
+const cmd = `echo ${b64} | base64 -d > /tmp/${PROJECT}-${name}; WAVE_LOG_DIR=/tmp/${PROJECT}-wave bash /tmp/${PROJECT}-${name} 2>&1 | tee /tmp/${PROJECT}-wave.out; echo WAVE-END`;
 if (RUNNER === "orca") {
   const out = sh(ORCA, ["terminal", "create", "--worktree", worktreeRefOn(host, "coordinator-integration"), "--title", `Coordinator ${title}`, "--command", cmd, ...orcaEnvArgsOn(host), "--json"]);
   const h = /"handle":\s*"([^"]+)"/.exec(out)?.[1];
