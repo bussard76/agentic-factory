@@ -573,11 +573,14 @@ const readConfig = () => (fs.existsSync("factory.config.json") ? JSON.parse(fs.r
 const expandHome = (p) => String(p ?? "").replace(/^~(?=\/|$)/, os.homedir());
 const sshArgsFor = (h) => [...(h.sshConfig ? ["-F", expandHome(h.sshConfig)] : []), "-o", "ConnectTimeout=5", h.ssh];
 const controllerTitle = (c) => `${c.project.name} · Controller`;
-const hasControllerTerminal = (title) => {
+const hasControllerTerminal = (c) => {
+  const title = controllerTitle(c);
+  const host = c.hosts.workers.find((h) => h.name === c.hosts.controller.host);
+  const where = host?.kind === "remote" && host.orcaEnvironment ? ["--environment", host.orcaEnvironment] : [];
   if (process.env.FACTORY_SKIP_ORCA === "1") return false;
-  try { const terminals = JSON.parse(sh(ORCA_BIN, ["terminal", "list", "--json"])).result?.terminals; return Array.isArray(terminals) && terminals.some((t) => t.title === title); } catch { return false; }
+  try { const terminals = JSON.parse(sh(ORCA_BIN, ["terminal", "list", ...where, "--json"])).result?.terminals; return Array.isArray(terminals) && terminals.some((t) => t.title === title); } catch { return false; }
 };
-const agentCommand = (agent, prompt) => `${agent} ${JSON.stringify(prompt)}`;
+const agentCommand = (agent, prompt, args) => `${agent}${args ? ` ${args}` : ""} ${JSON.stringify(prompt)}`;
 
 // Reads the Controller's status.md (local file or over ssh): age in minutes and the open "Needs <human>" items.
 function controllerStatus(c) {
@@ -616,7 +619,7 @@ function collectStatus() {
   if (!s.initialised) { s.phase = prerequisites.every((p) => p.ok) ? "onboarding" : "prerequisites"; s.next = s.phase === "onboarding" ? "run the onboarding as a conversation: init --print-questions, then init --answers <file>" : "fix the missing prerequisites (they need the human)"; return s; }
   const userSkill = (n) => [".claude/skills", ".agents/skills"].some((d) => fs.existsSync(path.join(os.homedir(), d, n, "SKILL.md")));
   const ctl = controllerStatus(c);
-  const ctlTerminal = hasControllerTerminal(controllerTitle(c));
+  const ctlTerminal = hasControllerTerminal(c);
   s.setup = {
     hooksArmed: (c.hooks?.mode ?? "factory") === "own" || sh("git", ["config", "core.hooksPath"]) === (c.hooks?.hooksPath ?? ".githooks"),
     userSkills: ["orchestration", "orca-cli"].every(userSkill),
@@ -693,7 +696,7 @@ async function start() {
   const ctl = c.hosts.workers.find((h) => h.name === c.hosts.controller.host) ?? { kind: "local", name: "local" };
   const dir = c.hosts.controller.controllerDir ?? "~/controller";
   const prompt = `Read ${dir}/CONTROLLER.md and act as the Controller for the project ${c.project.name}.`;
-  const session = `cd ${dir} && ${agentCommand(c.agents.default, prompt)}`;
+  const session = `cd ${dir} && ${agentCommand(c.agents.default, prompt, c.agents.controllerArgs)}`;
   const title = controllerTitle(c);
   let failed = 0;
   // A host can run one Controller per project, each in its own controllerDir. Never overwrite another project's.
@@ -718,7 +721,7 @@ async function start() {
     }
   }
   // The Controller's own agent session, in an Orca terminal so the Front agent can read it and send it text.
-  if (hasControllerTerminal(title)) say(`Controller session: already running (Orca terminal "${title}")`);
+  if (hasControllerTerminal(c)) say(`Controller session: already running (Orca terminal "${title}")`);
   else if (process.env.FACTORY_SKIP_ORCA === "1" || c.agents.runner !== "orca") say(`Controller session: start it in a terminal${ctl.kind === "local" ? "" : ` on ${ctl.name}`}:\n  ${session}`);
   else {
     const remoteHome = ctl.kind === "remote" ? sh("ssh", [...sshArgsFor(ctl), 'printf "%s\\n" "$HOME"']) : "";

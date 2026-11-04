@@ -34,9 +34,9 @@ test("two projects on one host: own controller dir everywhere, a foreign one is 
   const config = JSON.parse(fs.readFileSync(path.join(project, "factory.config.json"), "utf8"));
   r = run("start"); assert.notEqual(r.status, 0); assert.match(r.stdout, /belongs to the project first/);
   assert.equal(JSON.parse(fs.readFileSync(path.join(twoHome, "controller/factory.config.json"), "utf8")).project.name, "first", "the other project's controller stays");
-  config.hosts.controller.controllerDir = "~/controller-second"; fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config, null, 2));
+  config.hosts.controller.controllerDir = "~/controller-second"; config.agents.controllerArgs = "--test-flag"; fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config, null, 2));
   r = run("update"); assert.equal(r.status, 0, r.stdout + r.stderr);
-  r = run("start"); assert.equal(r.status, 0, r.stdout + r.stderr);
+  r = run("start"); assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /claude --test-flag "Read/, "the Controller session carries its configured arguments");
   spawnSync("pkill", ["-f", path.join(twoHome, "controller-second", "loadlog.sh")]);
   const ctl = path.join(twoHome, "controller-second");
   assert.ok(fs.existsSync(path.join(ctl, "CONTROLLER.md")));
