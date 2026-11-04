@@ -43,6 +43,15 @@ Set up the agentic factory for this project. If ~/agentic-factory does not exist
 
 The agent checks Node, git, your git identity, Orca and the agent CLI and tells you what is missing. If it runs outside Orca, it registers the project with Orca, starts itself again in an Orca terminal and asks you to continue there.
 
+**An existing project.** Use this prompt instead. Reading this on GitLab? Put the project's clone URL from Code → Clone into it.
+
+```text
+Set up the agentic factory for this project. If ~/agentic-factory does not exist, clone https://github.com/bussard76/agentic-factory.git into it; otherwise update it with git -C ~/agentic-factory pull --ff-only. Then read ~/agentic-factory/START.md and follow it: check the prerequisites, move into Orca if needed, and guide me through the onboarding.
+This is an existing project. Before onboarding, make sure the working tree is clean and tell me if it is not. After init, merge every file that init kept as user-owned with its new version in .factory/new/ (AGENTS.md first): keep the project's own rules, add the factory's rules, and ask me where the two contradict. Show me the merged AGENTS.md before you commit it, and reference the adoption ADR in the commit message. If the push to the main branch is rejected, put the adoption commit on a branch and tell me so I can open a merge request.
+```
+
+`init` never overwrites your files. It keeps them and puts its own version in `.factory/new/`. Your git hooks stay active and run first, and existing ADRs keep their numbers. The adoption commit goes directly to the main branch, so a protected branch rejects the push.
+
 **The same by hand.** With Orca running, paste this into a terminal (macOS, Linux, or WSL on Windows):
 
 ```bash
