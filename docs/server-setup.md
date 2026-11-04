@@ -26,7 +26,7 @@ Steps marked **[human]** need the human's credentials.
 
 - Pair Orca over the Tailscale address only; never expose it on the public interface.
 - `needrestart` restarting `orca.service` kills every worker. The exception in step 3 is not optional.
-- **Several projects on one host:** each project runs its own Controller. Set `hosts.controller.controllerDir` to a directory of its own (for example `~/controller-<project>`), then `agentic-factory update`. `start` refuses a directory that belongs to another project. The gate and the load log are shared; gate slots and capacity state are per project, and `capacity.mjs` counts the other project as foreign load.
+- **Several projects on one host:** each project runs its own Controller. Set `hosts.controller.controllerDir` to a directory of its own (for example `~/controller-<project>`), then `agentic-factory update`. `start` refuses a directory that belongs to another project. Wave scripts and step logs under `/tmp` carry the project's name. The gate and the load log are shared; gate slots and capacity state are per project, and `capacity.mjs` counts the other project as foreign load.
 - A second project on the same host that starts and stops Docker stacks disturbs browser tests with `ERR_NETWORK_CHANGED`. Count those as environment, rerun, and never touch the other project.
 - Keep the SSH config for the server in a file next to the scripts (`server/ssh_config.example`) so every Front-agent script can use `ssh -F`.
 - Work data never goes to the server. Demo data and invented secrets only.
