@@ -106,21 +106,21 @@ Reply: worker_done with verdict, branch and sha (--report-path docs/reviews/${T}
   audit() {
     const [since] = pos;
     return `You are the read-only Pipeline Auditor for the ${PROJECT} agentic factory on this host. Change nothing except your audit file.
-Inputs since ${since}: ~/controller/journal.ndjson (one JSON event per line), ~/load.log, ~/controller/status.md and inbox-done.md, the reviews and reports in the project repo changed since then (git log --since), docs/debt.md, docs/coordinator.md (the rules in force), and the previous audits in ~/controller/audits.
+Inputs since ${since}: {{CONTROLLER_DIR}}/journal.ndjson (one JSON event per line), ~/load.log, {{CONTROLLER_DIR}}/status.md and inbox-done.md, the reviews and reports in the project repo changed since then (git log --since), docs/debt.md, docs/coordinator.md (the rules in force), and the previous audits in {{CONTROLLER_DIR}}/audits.
 Questions: Where is time lost (gate waits, reruns, review rounds, stalls, early stops)? Which failure reasons cluster, by role, model and agent? Which rules or templates cause rework? Which risks grow (debt, flaky tests, load, quotas)? Did the improvements from the previous audit meet their success metrics? Does more parallelism raise throughput or only waiting (gate wait vs run minutes)?
-Output: ~/controller/audits/$(date +%F)-<n>.md with: data basis (counts), top 3 improvements and top 3 risks, each with a measured value, cause, concrete proposal, level (1 = docs/templates/scripts/tests, otherwise 'needs ${HUMAN}') and a checkable success metric, plus the verdict on previous improvements. Max 1 page. No real data, no secrets.
+Output: {{CONTROLLER_DIR}}/audits/$(date +%F)-<n>.md with: data basis (counts), top 3 improvements and top 3 risks, each with a measured value, cause, concrete proposal, level (1 = docs/templates/scripts/tests, otherwise 'needs ${HUMAN}') and a checkable success metric, plus the verdict on previous improvements. Max 1 page. No real data, no secrets.
 Reply: worker_done with the file path and the three improvements in one line each.`;
   },
   retro() {
     const [T, n, trigger, worktrees, sources] = pos;
-    return `You are the read-only Worker Retro for ${T} (retro ${n}) on this host. Change nothing except ~/controller/retros/${T}-${n}.md. No test suites, no gates, no git state changes, never print secrets.
+    return `You are the read-only Worker Retro for ${T} (retro ${n}) on this host. Change nothing except {{CONTROLLER_DIR}}/retros/${T}-${n}.md. No test suites, no gates, no git state changes, never print secrets.
 Trigger: ${trigger}.
 Steps:
 1. Follow .agents/skills/retro/SKILL.md (read writing-for-agents as it says). The question: what went well, what didn't, what would we do differently, as changes to the agents' ENVIRONMENT (templates, scripts, docs, checks, coding standards), not blame.
-2. Primary sources: the session logs of ${T}'s workers (Codex in ~/.codex/sessions/, Claude in ~/.claude/projects/; match by the worktree paths ${worktrees} and by time; read in bounded slices). Also: ${sources}; the journal entries for ${T}; the spec files ~/controller/specs/${T.toLowerCase()}-*.txt.
+2. Primary sources: the session logs of ${T}'s workers (Codex in ~/.codex/sessions/, Claude in ~/.claude/projects/; match by the worktree paths ${worktrees} and by time; read in bounded slices). Also: ${sources}; the journal entries for ${T}; the spec files {{CONTROLLER_DIR}}/specs/${T.toLowerCase()}-*.txt.
 3. Look for repeated failing commands, wrong branch or file, forbidden actions attempted, spec gaps that caused rework, findings a check could have caught earlier, slow tool use, missing information.
-4. Write ~/controller/retros/${T}-${n}.md: data basis, then 1–3 candidates ordered by severity. Each: category (navigation, automated checks, coding standards, AGENTS.md, tool economy, no-ops, information access), measured cost it removes, the concrete change (prefer an automated check over a new rule), level (1 = templates/controller scripts/docs/checks; otherwise 'needs ${HUMAN}'), and a checkable success metric. Max 1 page. No real data.
-Reply: worker_done with the file path and one line per candidate (--report-path ~/controller/retros/${T}-${n}.md).`;
+4. Write {{CONTROLLER_DIR}}/retros/${T}-${n}.md: data basis, then 1–3 candidates ordered by severity. Each: category (navigation, automated checks, coding standards, AGENTS.md, tool economy, no-ops, information access), measured cost it removes, the concrete change (prefer an automated check over a new rule), level (1 = templates/controller scripts/docs/checks; otherwise 'needs ${HUMAN}'), and a checkable success metric. Max 1 page. No real data.
+Reply: worker_done with the file path and one line per candidate (--report-path {{CONTROLLER_DIR}}/retros/${T}-${n}.md).`;
   },
 };
 if (!specs[role]) throw new Error(`unknown role ${role}; one of ${Object.keys(specs).join(", ")}`);

@@ -294,7 +294,7 @@ async function init() {
     adopted ? `Read docs/dev-workflow.md (the process) and AGENTS.md (the agents' rules). The adoption commit "Adopt agentic-factory (${vars.ADOPTION_ADR})" is on ${adopted}.${mode === "own" ? " Your own hooks stay in force; the factory hooks were not installed." : ` From now on protected files need an ADR reference in the commit message; try a commit without one to see the hook speak. A new or proposed ADR is committed by citing ${vars.ADOPTION_ADR} in the message; once accepted, cite the ADR itself.`}` : `Read docs/dev-workflow.md (the process) and AGENTS.md (the agents' rules). Commit the new files with a message that references the adoption ADR, e.g. \`git commit -m "Adopt agentic-factory (${vars.ADOPTION_ADR})"\`, and push to origin so workers and waves see them.`,
     remote && `Set up ${remote.name}: copy .factory/server/ there and follow docs/server-setup.md in the factory repo. Logins (gh, ${c.agents.default}, tailscale${c.agents.runner === "orca" ? ", Orca pairing" : ""}) are yours. Then put its Orca repo id into factory.config.json → hosts.workers[].orcaRepoId and run \`agentic-factory update\` to refresh the bundles.`,
     c.agents.runner === "orca" && !orcaRunning && `Orca: ${d.tools.orca ? `start it (\`${ORCA_BIN} open --json\`) and register the repo (\`${ORCA_BIN} repo add --path <repo> --json\`, id into hosts.workers[].orcaRepoId)` : "install it (https://github.com/stablyai/orca), then register the repo and put its id into hosts.workers[].orcaRepoId"}; the Orca skills load their guide from the binary (\`${ORCA_BIN} skills get orchestration\`).`,
-    `Start the machine: \`agentic-factory start\` installs the user-level skills${remote ? ` (here and on ${ctl.kind === "remote" ? ctl.name : "the Controller's host"})` : ""}, copies the Front agent bundle to ~/front-agent/${c.project.name} and the Controller bundle to ${ctl.kind === "local" ? "~/controller" : `${ctl.name}:~/controller`}, installs the gate, starts the load log and the Controller's session in an Orca terminal. The Front agent runs it for you; \`agentic-factory status\` shows the phase.`,
+    `Start the machine: \`agentic-factory start\` installs the user-level skills${remote ? ` (here and on ${ctl.kind === "remote" ? ctl.name : "the Controller's host"})` : ""}, copies the Front agent bundle to ~/front-agent/${c.project.name} and the Controller bundle to ${ctl.kind === "local" ? "" : `${ctl.name}:`}${c.hosts.controller.controllerDir ?? "~/controller"}, installs the gate, starts the load log and the Controller's session in an Orca terminal. The Front agent runs it for you; \`agentic-factory status\` shows the phase.`,
     c.hosts.frontAgent.preview.enabled && `Preview: clone the repo to ~/Development/${c.project.name}-preview, fill ${c.hosts.frontAgent.preview.envFile}, then load the launchd agent from .factory/front-agent/preview.plist.template (fill the paths) with \`launchctl bootstrap gui/$(id -u) <plist>\`.`,
     c.steering.mode === "github-issues" ? "Create the labels: ready-for-agent, in-progress, needs-human, debt:tests, debt:edge-case, debt:security, debt:load, debt:style (gh label create …)." : "Create your first ticket from docs/tasks/T00-template.md.",
     "Run `agentic-factory doctor` any time to check the setup.",
@@ -310,7 +310,7 @@ function templateVars(c) {
   const orca = c.agents.runner === "orca";
   return {
     // DATE is the adoption day, recorded once in factory.config.json: a later update must not rewrite recorded decisions.
-    PROJECT: c.project.name, HUMAN: c.project.humanName, MAIN: c.project.mainBranch, BRANCH_PREFIX: c.project.branchPrefix ?? "agents/", DATE: c.project.adoptedOn ?? (process.env.FACTORY_TODAY ?? new Date().toISOString().slice(0, 10)),
+    CONTROLLER_DIR: c.hosts?.controller?.controllerDir ?? "~/controller", PROJECT: c.project.name, HUMAN: c.project.humanName, MAIN: c.project.mainBranch, BRANCH_PREFIX: c.project.branchPrefix ?? "agents/", DATE: c.project.adoptedOn ?? (process.env.FACTORY_TODAY ?? new Date().toISOString().slice(0, 10)),
     ADOPTION_ADR: `ADR-${adoptionAdrNumber()}`,
     HOOKS_DIR: c.hooks?.dir ?? ".githooks",
     HOOKS_PATH: c.hooks?.hooksPath ?? ".githooks",
@@ -332,8 +332,8 @@ function templateVars(c) {
     STEERING_SCRIPT: c.steering.mode === "github-issues" ? "issues.mjs" : "tasks.mjs",
     PREVIEW_URL: c.hosts.frontAgent.preview.enabled ? `http://localhost:${c.hosts.frontAgent.preview.port}` : "n/a", PREVIEW_PORT: String(c.hosts.frontAgent.preview.port), PREVIEW_CMD: c.hosts.frontAgent.preview.command, PREVIEW_ENV_FILE: c.hosts.frontAgent.preview.envFile ?? "", INSTALL_CMD: c.commands.install ?? "",
     SSH_ALIAS: remote?.ssh ?? "local",
-    CONTROLLER_LOCATION: ctl.kind === "local" ? "on this machine (`~/controller`)" : `on the server \`${ctl.name}\` (ssh alias \`${ctl.ssh}\`, \`~/controller\`)`,
-    INBOX_CMD: ctl.kind === "local" ? "`cat >> ~/controller/inbox.md`" : `\`ssh ${ctl.ssh} 'cat >> ~/controller/inbox.md'\``,
+    CONTROLLER_LOCATION: ctl.kind === "local" ? `on this machine (\`${c.hosts.controller.controllerDir ?? "~/controller"}\`)` : `on the server \`${ctl.name}\` (ssh alias \`${ctl.ssh}\`, \`${c.hosts.controller.controllerDir ?? "~/controller"}\`)`,
+    INBOX_CMD: ctl.kind === "local" ? `\`cat >> ${c.hosts.controller.controllerDir ?? "~/controller"}/inbox.md\`` : `\`ssh ${ctl.ssh} 'cat >> ${c.hosts.controller.controllerDir ?? "~/controller"}/inbox.md'\``,
     PREVIEW_PLIST: `de.${c.project.name}.preview`, PREVIEW_LABEL: `de.${c.project.name}.preview`, PREVIEW_SCRIPT: `${os.homedir()}/front-agent/${c.project.name}/preview-update.sh`, HOME: os.homedir(),
     FACTORY_CLI: `node ${path.join(ROOT, "bin/agentic-factory.mjs").replace(os.homedir(), "~")}`,
     COMMIT_PATTERN: `mv .env ../.${c.project.name}.env; git add …; git commit …; mv ../.${c.project.name}.env .env`,
@@ -515,13 +515,13 @@ function doctor() {
     r.stdout?.trim() === "ok" ? ok(`ssh ${h.ssh}`) : bad(`ssh ${h.ssh} reachable`);
     if (r.stdout?.trim() === "ok" && h.name === c.hosts.controller.host) {
       const sk = spawnSync("ssh", [...sshArgs, "for s in orchestration orca-cli writing-for-agents retro; do [ -f ~/.claude/skills/$s/SKILL.md ] || [ -f ~/.agents/skills/$s/SKILL.md ] || echo $s; done"], { encoding: "utf8" }).stdout.trim();
-      sk ? bad(`${h.name}: user-level skills missing: ${sk.split("\n").join(", ")} (copy ~/controller/skills/* into ~/.claude/skills and ~/.agents/skills there)`) : ok(`${h.name}: user-level skills present`);
+      sk ? bad(`${h.name}: user-level skills missing: ${sk.split("\n").join(", ")} (copy ${c.hosts.controller.controllerDir ?? "~/controller"}/skills/* into ~/.claude/skills and ~/.agents/skills there)`) : ok(`${h.name}: user-level skills present`);
     }
     if (c.agents.runner === "orca" && !h.orcaRepoId) info(`${h.name}: orcaRepoId not set yet`);
   }
   const ctl = c.hosts.workers.find((h) => h.name === c.hosts.controller.host);
   if (ctl) {
-    const statusAge = ctl.kind === "local" ? (fs.existsSync(path.join(os.homedir(), "controller/status.md")) ? (Date.now() - fs.statSync(path.join(os.homedir(), "controller/status.md")).mtimeMs) / 60000 : null) : Number(sh("ssh", [...(ctl.sshConfig ? ["-F", ctl.sshConfig.replace(/^~/, os.homedir())] : []), ctl.ssh, "stat -c %Y ~/controller/status.md 2>/dev/null"]) ? (Date.now() / 1000 - Number(sh("ssh", [...(ctl.sshConfig ? ["-F", ctl.sshConfig.replace(/^~/, os.homedir())] : []), ctl.ssh, "stat -c %Y ~/controller/status.md"]))) / 60 : null);
+    const statusAge = ctl.kind === "local" ? (fs.existsSync(expandHome(`${c.hosts.controller.controllerDir ?? "~/controller"}/status.md`)) ? (Date.now() - fs.statSync(expandHome(`${c.hosts.controller.controllerDir ?? "~/controller"}/status.md`)).mtimeMs) / 60000 : null) : Number(sh("ssh", [...(ctl.sshConfig ? ["-F", ctl.sshConfig.replace(/^~/, os.homedir())] : []), ctl.ssh, `stat -c %Y ${c.hosts.controller.controllerDir ?? "~/controller"}/status.md 2>/dev/null`]) ? (Date.now() / 1000 - Number(sh("ssh", [...(ctl.sshConfig ? ["-F", ctl.sshConfig.replace(/^~/, os.homedir())] : []), ctl.ssh, "stat -c %Y ~/controller/status.md"]))) / 60 : null);
     statusAge === null ? info(`controller status.md not found on ${ctl.name} (controller not started yet)`) : statusAge > 25 ? bad(`controller status.md is ${Math.round(statusAge)} min old`) : ok(`controller status.md ${Math.round(statusAge)} min old`);
   }
   if (c.hosts.frontAgent.preview.enabled) { const r = spawnSync("curl", ["-s", "-m", "2", "-o", "/dev/null", "-w", "%{http_code}", `http://localhost:${c.hosts.frontAgent.preview.port}/`], { encoding: "utf8" }); /^[23]/.test(r.stdout) ? ok(`preview answers on ${c.hosts.frontAgent.preview.port}`) : info(`preview not running on ${c.hosts.frontAgent.preview.port}`); }
@@ -696,10 +696,14 @@ async function start() {
   const session = `cd ${dir} && ${agentCommand(c.agents.default, prompt)}`;
   const title = controllerTitle(c);
   let failed = 0;
+  // A host can run one Controller per project, each in its own controllerDir. Never overwrite another project's.
+  const present = ctl.kind === "local" ? (fs.existsSync(path.join(expandHome(dir), "factory.config.json")) ? fs.readFileSync(path.join(expandHome(dir), "factory.config.json"), "utf8") : "") : sh("ssh", [...sshArgsFor(ctl), `cat ${dir}/factory.config.json 2>/dev/null`]);
+  const owner = (() => { try { return JSON.parse(present).project?.name; } catch { return undefined; } })();
+  if (owner && owner !== c.project.name) { say(`Controller directory ${dir}${ctl.kind === "local" ? "" : ` on ${ctl.name}`} belongs to the project ${owner}. Set hosts.controller.controllerDir in factory.config.json to a directory of its own (for example ~/controller-${c.project.name}), run \`agentic-factory update\`, then start again. Nothing was copied.`); process.exit(1); }
   if (ctl.kind === "local") {
     const d = expandHome(dir);
     fs.mkdirSync(d, { recursive: true }); fs.cpSync(".factory/controller", d, { recursive: true, force: true }); say(`Controller bundle: ${dir}`);
-    const bin = path.join(os.homedir(), ".local/bin"); fs.mkdirSync(bin, { recursive: true }); fs.copyFileSync(path.join(d, "gate"), path.join(bin, "gate")); fs.chmodSync(path.join(bin, "gate"), 0o755); say("Gate: ~/.local/bin/gate");
+    const bin = path.join(os.homedir(), ".local/bin"); fs.mkdirSync(bin, { recursive: true }); fs.copyFileSync(path.join(d, "gate"), path.join(bin, "gate")); fs.chmodSync(path.join(bin, "gate"), 0o755); fs.copyFileSync(path.join(d, "gate.mjs"), path.join(bin, "gate.mjs")); say("Gate: ~/.local/bin/gate");
     const loadlog = path.join(d, "loadlog.sh");
     if (sh("ps", ["-ax", "-o", "command"]).split("\n").some((l) => l.includes(loadlog))) say("Load log: already running");
     else { spawn("bash", [loadlog], { cwd: d, detached: true, stdio: "ignore" }).unref(); say("Load log: started (~/load.log)"); }
@@ -709,7 +713,7 @@ async function start() {
     if (r.status !== 0) { failed++; say(`Controller bundle: copy to ${ctl.name} failed: ${(r.stderr || "").trim().slice(0, 200)}`); }
     else {
       say(`Controller bundle: ${ctl.name}:${remoteDir}`);
-      const s = spawnSync("ssh", [...sshArgsFor(ctl), `mkdir -p ~/.local/bin && install -m 755 ${remoteDir}/gate ~/.local/bin/gate && for s in ${remoteDir}/skills/*; do n=$(basename "$s"); for t in ~/.claude/skills ~/.agents/skills; do mkdir -p "$t"; [ -e "$t/$n" ] || cp -R "$s" "$t/"; done; done; pgrep -f "[b]ash loadlog.sh" >/dev/null || (cd ${remoteDir} && nohup bash loadlog.sh >/dev/null 2>&1 &); echo ok`], { encoding: "utf8" });
+      const s = spawnSync("ssh", [...sshArgsFor(ctl), `mkdir -p ~/.local/bin && install -m 755 ${remoteDir}/gate ~/.local/bin/gate && install -m 644 ${remoteDir}/gate.mjs ~/.local/bin/gate.mjs && for s in ${remoteDir}/skills/*; do n=$(basename "$s"); for t in ~/.claude/skills ~/.agents/skills; do mkdir -p "$t"; [ -e "$t/$n" ] || cp -R "$s" "$t/"; done; done; pgrep -f "[b]ash loadlog.sh" >/dev/null || (cd ${remoteDir} && nohup bash loadlog.sh >/dev/null 2>&1 &); echo ok`], { encoding: "utf8" });
       s.stdout?.trim().endsWith("ok") ? say(`Gate, user-level skills and load log on ${ctl.name}: ok`) : (failed++, say(`Gate, skills or load log on ${ctl.name} failed: ${(s.stderr || "").trim().slice(0, 200)}`));
     }
   }

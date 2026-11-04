@@ -61,7 +61,8 @@ export function onHost(h, command, opts = {}) {
 const ctl = config.hosts?.controller ?? {};
 const ctlHost = workerHosts.find((h) => h.name === controllerHostName) ?? workerHosts[0];
 export const PROJECT_DIR = projectDirOn({ ...ctlHost, kind: "local", projectDir: ctl.projectDir ?? ctlHost.projectDir, projectsDir: ctl.projectsDir ?? ctlHost.projectsDir });
-export const CONTROLLER_DIR = expand(ctl.controllerDir ?? "~/controller");
+export const CONTROLLER_HOME = ctl.controllerDir ?? "~/controller"; // as configured: a leading ~ is expanded by the shell of the host it is used on
+export const CONTROLLER_DIR = expand(CONTROLLER_HOME);
 
 // --- orca --------------------------------------------------------------------------------------
 export function hasBin(name) { return spawnSync("sh", ["-c", `command -v ${name}`], { stdio: "ignore" }).status === 0; }
