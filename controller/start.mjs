@@ -39,8 +39,8 @@ if (RUNNER === "orca") {
   const env = { ...process.env, ...(limits.memoryMax ? { ORCA_TERMINAL_MEMORY_MAX: limits.memoryMax } : {}), ...(limits.processCeiling ? { ORCA_TERMINAL_PROCESS_CEILING: String(limits.processCeiling) } : {}) };
   const receipt = JSON.parse(sh(ORCA, args, { env }));
   if (!receipt.ok) throw new Error(JSON.stringify(receipt.error));
-  const dispatch = receipt.result?.dispatch?.id;
-  const handle = receipt.result?.worker?.agentTerminalHandle ?? (dispatch ? JSON.parse(sh(ORCA, ["orchestration", "worker-show", "--dispatch", dispatch, ...orcaEnvArgsOn(host), "--json"])).result?.worker?.agentTerminalHandle : undefined);
+  const dispatch = receipt.result?.dispatchId ?? receipt.result?.dispatch?.id;
+  const handle = receipt.result?.terminal ?? receipt.result?.worker?.agentTerminalHandle ?? (dispatch ? JSON.parse(sh(ORCA, ["orchestration", "worker-show", "--dispatch", dispatch, ...orcaEnvArgsOn(host), "--json"])).result?.worker?.agentTerminalHandle : undefined);  // Name the terminal and pane by task and role so the sidebar never shows an automatic session name.
   // Name the terminal and pane by task and role so the sidebar never shows an automatic session name.
   if (handle) for (const sub of ["rename", "set-pane-title"]) sh(ORCA, ["terminal", sub, "--terminal", handle, "--title", name, ...orcaEnvArgsOn(host), "--json"]);
   record = { name, host: host.name, agent, model, tier, dispatch, terminal: handle, worktree: `${workspacesOn(host)}${dir}`, readonly, started: new Date().toISOString() };
