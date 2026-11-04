@@ -34,7 +34,10 @@ let record;
 if (RUNNER === "orca") {
   const args = ["orchestration", "worker-start", "--task-title", name, "--spec", spec, "--agent", agent, "--model", model, "--repo", `id:${host.orcaRepoId}`, "--setup", "run", ...orcaEnvArgsOn(host), "--json"];
   if (agent === "codex") args.push("--effort", effort);
-  args.push(...(worktree === "new" ? ["--worktree", "new-top-level", "--name", dir] : ["--worktree", worktreeRefOn(host, dir)]));
+  // A worker on the Controller's own host becomes a child of the Controller's workspace. Orca refuses new-child across
+  // hosts, and it needs a Controller inside an Orca terminal. A child starts from origin/<main>, not the parent's branch.
+  const placement = !host.orcaEnvironment && process.env.ORCA_TERMINAL_HANDLE ? "new-child" : "new-top-level";
+  args.push(...(worktree === "new" ? ["--worktree", placement, "--name", dir, "--base-branch", `origin/${MAIN}`] : ["--worktree", worktreeRefOn(host, dir)]));
   const limits = host.capacity.worker ?? {};
   const env = { ...process.env, ...(limits.memoryMax ? { ORCA_TERMINAL_MEMORY_MAX: limits.memoryMax } : {}), ...(limits.processCeiling ? { ORCA_TERMINAL_PROCESS_CEILING: String(limits.processCeiling) } : {}) };
   const receipt = JSON.parse(sh(ORCA, args, { env }));
