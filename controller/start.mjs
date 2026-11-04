@@ -44,9 +44,15 @@ if (RUNNER === "orca") {
   if (!receipt.ok) throw new Error(JSON.stringify(receipt.error));
   const dispatch = receipt.result?.dispatchId ?? receipt.result?.dispatch?.id;
   const handle = receipt.result?.terminal ?? receipt.result?.worker?.agentTerminalHandle ?? (dispatch ? JSON.parse(sh(ORCA, ["orchestration", "worker-show", "--dispatch", dispatch, ...orcaEnvArgsOn(host), "--json"])).result?.worker?.agentTerminalHandle : undefined);  // Name the terminal and pane by task and role so the sidebar never shows an automatic session name.
-  // Name the terminal and pane by task and role so the sidebar never shows an automatic session name.
-  if (handle) for (const sub of ["rename", "set-pane-title"]) sh(ORCA, ["terminal", sub, "--terminal", handle, "--title", name, ...orcaEnvArgsOn(host), "--json"]);
   record = { name, host: host.name, agent, model, tier, dispatch, terminal: handle, worktree: `${workspacesOn(host)}${dir}`, readonly, started: new Date().toISOString() };
+  // The worker runs now: record it first, because a failed title must not lose it or invite a second start.
+  workers[key] = record;
+  writeJson("workers.json", workers);
+  // Name the terminal and pane by task and role so the sidebar never shows an automatic session name.
+  if (handle) for (const sub of ["rename", "set-pane-title"]) {
+    try { sh(ORCA, ["terminal", sub, "--terminal", handle, "--title", name, ...orcaEnvArgsOn(host), "--json"]); }
+    catch (e) { console.error(`Worker started, but ${sub} failed: ${e.message}`); }
+  }
 } else {
   // Plain terminal runner: a git worktree plus an agent process whose first prompt is the spec. Local or over ssh.
   const wt = `${workspacesOn(host)}${dir}`;
