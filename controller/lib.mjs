@@ -32,11 +32,13 @@ export const FALLBACK = config.agents?.fallback ?? {};
 // A host's kind is relative to where these scripts run: the Controller runs on hosts.controller.host, so that host is
 // local for the Controller even when the Front agent (on the human's machine) reaches it over ssh.
 const controllerHostName = config.hosts?.controller?.host ?? "local";
-const workerHosts = (config.hosts?.workers?.length ? config.hosts.workers : [{ name: "local", kind: "local" }]).map((h) => ({
+// Seen from a Controller on a remote host, a "local" worker in the config is the human's machine, which it cannot reach.
+const controllerIsRemote = (config.hosts?.workers ?? []).some((h) => h.name === controllerHostName && h.kind === "remote");
+const workerHosts = (config.hosts?.workers?.length ? config.hosts.workers : [{ name: "local", kind: "local" }]).filter((h) => !(controllerIsRemote && h.kind === "local")).map((h) => ({
   name: h.name, kind: h.name === controllerHostName ? "local" : h.kind ?? (h.ssh ? "remote" : "local"), ssh: h.ssh, sshConfig: h.sshConfig,
   projectDir: h.projectDir,   // explicit checkout path on that host; default <projectsDir>/<project name>
   projectsDir: h.projectsDir ?? "~/projects", workspacesDir: h.workspacesDir ?? "~/orca/workspaces",
-  orcaEnvironment: h.orcaEnvironment ?? "", orcaRepoId: h.orcaRepoId ?? "",
+  orcaEnvironment: h.name === controllerHostName ? "" : h.orcaEnvironment ?? "", orcaRepoId: h.orcaRepoId ?? "",
   capacity: { ...(config.capacity ?? {}), ...(h.capacity ?? {}), gate: { ...(config.capacity?.gate ?? {}), ...(h.capacity?.gate ?? {}) } },
 }));
 export const HOSTS = workerHosts;

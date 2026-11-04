@@ -17,6 +17,21 @@ const gitTry = (...a) => spawnSync("git", a, { cwd: tmp, encoding: "utf8" });
 // FACTORY_SKIP_ORCA keeps the test from touching the developer's real Orca (no repo registration).
 const node = (...a) => execFileSync("node", a, { cwd: tmp, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } }).trim();
 
+test("a Controller on a remote host treats that host as local and leaves out the human's machine", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-remote-ctl-"));
+  const cfg = path.join(dir, "factory.config.json");
+  fs.writeFileSync(cfg, JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "server" }, workers: [
+    { name: "local", kind: "local", projectDir: "~/Development/p", projectsDir: "~/Development" },
+    { name: "server", kind: "remote", ssh: "dev@server", projectsDir: "~/projects", orcaEnvironment: "Server" },
+  ] } }));
+  const probe = path.join(dir, "probe.mjs");
+  fs.writeFileSync(probe, `import { hostNamed, orcaEnvArgsOn } from ${JSON.stringify(path.join(ROOT, "controller/lib.mjs"))};
+const h = hostNamed("server"); console.log(JSON.stringify({ kind: h.kind, env: orcaEnvArgsOn(h), fallback: hostNamed().name }));`);
+  const r = spawnSync("node", [probe], { encoding: "utf8", env: { ...process.env, FACTORY_CONFIG: cfg } });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout), { kind: "local", env: [], fallback: "server" });
+});
+
 test("two projects on one host: own controller dir everywhere, a foreign one is refused", () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "af-two-"));
   const twoHome = path.join(base, "home"), project = path.join(base, "second");
