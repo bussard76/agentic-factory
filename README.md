@@ -112,7 +112,7 @@ site/           the single-page intro
 
 ## A start, not an end state
 
-Version 0.2.1, first extracted on 2026-10-31 from a project that has run this way since 2026-10-27. It is meant as a **starting point**:
+Version 0.1.1, first extracted on 2026-10-31 from a project that has run this way since 2026-10-27. It is meant as a **starting point**:
 
 - every project gets its own copy through `init` and changes it freely; `update` brings newer factory versions in without overwriting local changes (new versions land in `.factory/new/` for you to merge)
 - what proves itself in a project flows back into the factory as a pull request
