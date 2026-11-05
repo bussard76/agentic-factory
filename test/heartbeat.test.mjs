@@ -54,6 +54,7 @@ test("old messages wake nobody; a new worker message wakes the Controller once",
   assert.match(out, /worker done: T1 · Worker Developer/);
   assert.match(out, /woke term_c \(1 worker message/);
   assert.equal(h.sent().length, 1);
+  h.write("workers.json", "{}"); // A running worker would wake it at each tenth minute, which is not what this test is about.
   assert.doesNotMatch(h.beat(), /worker message/);
   assert.equal(h.sent().length, 1);
   h.done();
@@ -135,7 +136,7 @@ test("the cron script adds one line, keeps the rest of the crontab, and keeps an
   const tab = path.join(dir, "tab");
   fs.writeFileSync(tab, "0 3 * * * other job\n");
   const fake = path.join(dir, "crontab");
-  fs.writeFileSync(fake, `#!/bin/sh\nif [ "$1" = "-l" ]; then cat "${tab}"; else cat > "${tab}"; fi\n`);
+  fs.writeFileSync(fake, `#!/bin/sh\nif [ "$1" = "-l" ]; then cat "${tab}"; else cat > "${tab}.new" && mv "${tab}.new" "${tab}"; fi\n`);
   fs.chmodSync(fake, 0o755);
   const run = (d) => spawnSync("sh", ["-c", heartbeatCronScript(d, "p")], { encoding: "utf8", env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, HOME: "/home/x" } }).stdout.trim();
   assert.equal(run("~/controller"), "added");

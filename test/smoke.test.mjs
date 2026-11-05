@@ -133,11 +133,11 @@ test("agent entry questions, answers, status and start in an isolated home", asy
     const calls = path.join(base, "calls");
     fs.writeFileSync(fakeOrca, `#!/bin/sh\nif [ "$1" = terminal ] && [ "$2" = create ]; then printf '%s\\n' "$@" > '${calls}.orca'; printf '%s\\n' '{"ok":true}'; else printf '%s\\n' '{"result":{"terminals":[]}}'; fi\n`, { mode: 0o755 });
     fs.writeFileSync(path.join(bin, "rsync"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    fs.writeFileSync(path.join(bin, "ssh"), `#!/bin/sh\ncase "$*" in *'printf '*) printf '/remote/home\\n';; *) printf '%s\\n' "$*" > '${calls}.ssh'; printf 'ok\\n';; esac\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "ssh"), `#!/bin/sh\ncase "$*" in *'printf '*) printf '/remote/home\\n';; *) printf '%s\\n' "$*" >> '${calls}.ssh'; printf 'ok\\n';; esac\n`, { mode: 0o755 });
     config.hosts.workers = [{ name: "remote", kind: "remote", ssh: "fake", projectsDir: "~/projects", orcaEnvironment: "saved-server" }]; config.hosts.controller.host = "remote";
     fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
     r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
-    assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(fs.readFileSync(`${calls}.ssh`, "utf8"), /pgrep -f "\[b\]ash loadlog\.sh"/);
+    assert.equal(r.status, 0, r.stdout + r.stderr); const sshCalls = fs.readFileSync(`${calls}.ssh`, "utf8"); assert.match(sshCalls, /pgrep -f "\[b\]ash loadlog\.sh"/); assert.match(sshCalls, /node heartbeat\.mjs/);
     const orcaArgs = fs.readFileSync(`${calls}.orca`, "utf8"); assert.match(orcaArgs, /saved-server/); assert.match(orcaArgs, /path:\/remote\/home\/projects\/project/);
     config.hosts.workers[0].orcaEnvironment = ""; fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
     r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
