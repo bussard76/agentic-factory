@@ -152,7 +152,7 @@ bin/            the CLI: init (onboarding), update, doctor
 docs/           the process, for people (EN) and docs/de (DE)
 templates/      files that init copies into a project (handbooks, hooks, guardrails, task and ADR templates)
 controller/     the Controller handbook and its scripts (start, wait, stall watch, wave, cleanup, capacity, gate, journal, spec templates)
-front-agent/    the Front agent handbook and its scripts (status watch, relay, preview updater)
+front-agent/    the Front agent handbook and its scripts (scheduled status watch, relay, preview updater)
 server/         scripts that set up a Linux build server with Docker, Node, the agent CLIs and Orca
 skills/         vendored skills with pinned sources and licenses (ponytail, engineering skills, retro, wayfinder, prototype)
 scripts/        repository tools (skills-check: compare vendored skills with upstream)

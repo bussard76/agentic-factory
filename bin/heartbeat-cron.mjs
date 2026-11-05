@@ -10,3 +10,15 @@ export function heartbeatCronScript(dir, project) {
     `{ crontab -l 2>/dev/null; echo '${comment}'; echo "$line"; } | crontab - && echo added`,
   ].join("\n");
 }
+
+// The same for the Front agent's status watch, every 5 minutes on the human's machine.
+export function statusWatchCronScript(dir, project) {
+  const d = dir.replace(/^~(?=\/|$)/, "$HOME");
+  const comment = `# agentic-factory status watch: ${project}`.replace(/'/g, "");
+  return [
+    `d="${d}"`,
+    `line="*/5 * * * * cd \\"$d\\" && PATH=\\"$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin\\" node statuswatch.mjs >> statuswatch.log 2>&1"`,
+    `if crontab -l 2>/dev/null | grep -qF "cd \\"$d\\" && PATH"; then echo exists; exit 0; fi`,
+    `{ crontab -l 2>/dev/null; echo '${comment}'; echo "$line"; } | crontab - && echo added`,
+  ].join("\n");
+}

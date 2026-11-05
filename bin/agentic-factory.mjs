@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
-import { heartbeatCronScript } from "./heartbeat-cron.mjs";
+import { heartbeatCronScript, statusWatchCronScript } from "./heartbeat-cron.mjs";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
@@ -679,6 +679,8 @@ function doctor() {
   const c = JSON.parse(fs.readFileSync("factory.config.json", "utf8")); ok(`factory.config.json (project ${c.project.name}, factory ${c.factoryVersion})`);
   if (minimal(c)) doctorStandard(ok, bad, info);
   else doctorTracked(c, ok, bad, info);
+  // Under WSL the cron service does not always run, and then the schedule is there but nothing happens.
+  if (watchRequired(c)) statusWatchRuns(c) ? ok("status watch running") : info(`status watch not running: without it, finished work and open questions do not reach the Front agent. Run start${/microsoft/i.test(os.release()) ? "; under WSL also check the cron service (sudo service cron start)" : ""}`);
   for (const t of [c.agents.default, c.agents.fallback?.agent].filter(Boolean)) has(t) ? ok(`${t} CLI`) : info(`${t} CLI not on this machine`);
   if (c.agents.runner === "orca") has("orca") || has("orca-ide") ? ok("orca CLI") : bad("orca CLI (runner is orca)");
   // User-level skills: the Controller and Front agent sessions run outside the repo and need these on their host.
@@ -842,6 +844,7 @@ function collectStatus() {
     hooksArmed: minimal(c) ? !checkHooks() : (c.hooks?.mode ?? "factory") === "own" || sh("git", ["config", "core.hooksPath"]) === (c.hooks?.hooksPath ?? ".githooks"),
     userSkills: ["orchestration", "orca-cli"].every(userSkill),
     frontAgentBundle: fs.existsSync(path.join(os.homedir(), "front-agent", c.project.name, "FRONT_AGENT.md")),
+    statusWatch: statusWatchRuns(c),
     controller: { host: ctl.host, statusAgeMin: ctl.ageMin, terminal: ctlTerminal, running: ctlTerminal || (ctl.ageMin !== null && ctl.ageMin <= 25) },
   };
   // The work: design exports, tickets by status, domain and architecture documents, open debt, open questions.
@@ -865,9 +868,9 @@ function collectStatus() {
   const debtOpen = fs.existsSync("docs/debt.md") ? fs.readFileSync("docs/debt.md", "utf8").split("\n").filter((l) => /\|\s*open\s*\|/.test(l) && !/<[a-z][^>]*>/.test(l)).length : 0;
   s.work = { designedFeatures: features, tickets, adrs, architecture: fs.existsSync("ARCHITECTURE.md"), glossary: ["GLOSSARY.md", "CONTEXT.md", "docs/glossary.md"].some((f) => fs.existsSync(f)), debtOpen, needsHuman: ctl.needs };
   // The phase is a hint for the Front agent's next question, derived from what is in the repo; the human decides.
-  const setupMissing = !s.setup.hooksArmed || !s.setup.userSkills || !s.setup.frontAgentBundle || !s.setup.controller.running;
+  const setupMissing = !s.setup.hooksArmed || !s.setup.userSkills || !s.setup.frontAgentBundle || !s.setup.controller.running || (watchRequired(c) && !s.setup.statusWatch);
   if (!prerequisites.every((p) => p.ok)) [s.phase, s.next] = ["prerequisites", "fix the missing prerequisites (they need the human)"];
-  else if (setupMissing) [s.phase, s.next] = ["start", "run `start`: user-level skills, the Front agent bundle and the Controller"];
+  else if (setupMissing) [s.phase, s.next] = ["start", `run \`start\`: user-level skills, the Front agent bundle${watchRequired(c) && !s.setup.statusWatch ? ", the status watch" : ""} and the Controller`];
   else if (ctl.needs.length) [s.phase, s.next] = ["decisions", "the Controller waits for the human: ask the open questions one at a time"];
   else if (!features.length && !tickets.total) [s.phase, s.next] = ["outside-in: surface", "sketch the surface of the first feature with the human (design tool or a clickable fake with the prototype skill), export it to design/<feature>/"];
   else if (drafts || (features.length > tickets.total && !active)) [s.phase, s.next] = ["outside-in: data and logic", "for the designed features: list data in and out on the fake, agree the logic in words and a diagram (grilling), then write the tickets as ready"];
@@ -925,6 +928,23 @@ function nameFrontAgent(c) {
 
 // Sets everything up that the Front agent needs to hand over to the Controller: user-level skills, the bundles,
 // the gate, the load log and the Controller's own agent session in an Orca terminal. Idempotent.
+// The status watch runs on a schedule, outside any session: it needs no agent to start it and works with whichever agent is
+// in front. A failed schedule is a failed start, because otherwise nobody learns of finished work or open questions.
+const watchRequired = (c) => c.agents.runner === "orca" && process.env.FACTORY_SKIP_ORCA !== "1" && c.hosts.frontAgent?.statusWatch !== false;
+const statusWatchRuns = (c) => { try { return Date.now() - fs.statSync(path.join(os.homedir(), "front-agent", c.project.name, "statuswatch.alive")).mtimeMs < 11 * 60_000; } catch { return false; } };
+function armStatusWatch(c, frontAgentDir) {
+  // Cron has none of this session's environment. Under WSL, Orca's command comes from ORCA_CLI_COMMAND, so it is recorded here.
+  fs.writeFileSync(path.join(frontAgentDir, "front-agent.json"), JSON.stringify({ projectDir: cwd, handle: process.env.ORCA_TERMINAL_HANDLE ?? null, orcaCommand: ORCA_BIN }, null, 2) + "\n");
+  if (!watchRequired(c)) return false;
+  const r = spawnSync("sh", ["-c", statusWatchCronScript(frontAgentDir, c.project.name)], { encoding: "utf8" });
+  if (r.status !== 0) { say(`Status watch: could not schedule it (${(r.stderr || r.error?.message || "").trim().slice(0, 200)}). Without it, finished work and open questions do not reach the Front agent.`); return true; }
+  // At once, not in up to 5 minutes. Detached, because it can wait for the Controller and for an idle terminal.
+  const log = fs.openSync(path.join(frontAgentDir, "statuswatch.log"), "a");
+  spawn("node", ["statuswatch.mjs"], { cwd: frontAgentDir, detached: true, stdio: ["ignore", log, log] }).unref();
+  say("Status watch: scheduled, every 5 minutes");
+  return false;
+}
+
 async function start() {
   const c = readConfig();
   if (!c || !isAdopted()) { say("Not initialised: run init first (the Front agent does this as a conversation)."); process.exit(1); }
@@ -932,12 +952,13 @@ async function start() {
   say("\nUser-level skills:"); installSkills();
   const fa = path.join(os.homedir(), "front-agent", c.project.name);
   fs.mkdirSync(fa, { recursive: true }); fs.cpSync(".factory/front-agent", fa, { recursive: true, force: true }); say(`\nFront agent bundle: ${fa.replace(os.homedir(), "~")}`);
+  const watchFailed = armStatusWatch(c, fa);
   const ctl = c.hosts.workers.find((h) => h.name === c.hosts.controller.host) ?? { kind: "local", name: "local" };
   const dir = c.hosts.controller.controllerDir ?? "~/controller";
   const prompt = `Read ${dir}/CONTROLLER.md and act as the Controller for the project ${c.project.name}.`;
   const session = `cd ${dir} && ${agentCommand(c.agents.default, prompt, c.agents.controllerArgs)}`;
   const title = controllerTitle(c);
-  let failed = 0;
+  let failed = watchFailed ? 1 : 0;
   if (minimal(c)) {
     say("\nStandard:"); if (!installStandard()) failed++;
     failed += installStandardOnRemotes(c);
