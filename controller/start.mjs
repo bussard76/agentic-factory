@@ -53,6 +53,9 @@ if (RUNNER === "orca") {
     try { sh(ORCA, ["terminal", sub, "--terminal", handle, "--title", name, ...orcaEnvArgsOn(host), "--json"]); }
     catch (e) { console.error(`Worker started, but ${sub} failed: ${e.message}`); }
   }
+  // The sidebar entry gets the same name in the same step.
+  try { sh("node", [file("names.mjs"), "--on", host.name]); }
+  catch (e) { console.error(`Worker started, but naming its entry failed: ${e.message}`); }
 } else {
   // Plain terminal runner: a git worktree plus an agent process whose first prompt is the spec. Local or over ssh.
   const wt = `${workspacesOn(host)}${dir}`;

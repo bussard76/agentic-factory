@@ -684,6 +684,16 @@ function status() {
   for (const h of s.hints ?? []) say(`Hint:  ${h}`);
 }
 
+// Names the Front agent's own terminal and, if its name is still automatic, its sidebar entry (docs/orca.md, "Naming").
+function nameFrontAgent(c) {
+  const handle = process.env.ORCA_TERMINAL_HANDLE;
+  if (!handle || process.env.FACTORY_SKIP_ORCA === "1" || c.agents.runner !== "orca") return;
+  const name = `${c.project.name} · Front Agent`;
+  for (const sub of ["rename", "set-pane-title"]) spawnSync(ORCA_BIN, ["terminal", sub, "--terminal", handle, "--title", name, "--json"], { encoding: "utf8" });
+  const shown = spawnSync(ORCA_BIN, ["worktree", "show", "--worktree", `path:${cwd}`, "--json"], { encoding: "utf8" });
+  if (/"displayNameMode":\s*"automatic"/.test(shown.stdout ?? "")) spawnSync(ORCA_BIN, ["worktree", "set", "--worktree", `path:${cwd}`, "--display-name", name, "--json"], { encoding: "utf8" });
+}
+
 // Sets everything up that the Front agent needs to hand over to the Controller: user-level skills, the bundles,
 // the gate, the load log and the Controller's own agent session in an Orca terminal. Idempotent.
 async function start() {
@@ -734,6 +744,7 @@ async function start() {
     else { failed++; say(`Controller session: Orca could not create the terminal (${(r.stderr || r.stdout || "").trim().slice(0, 200)}). Start it by hand:\n  ${session}`); }
     }
   }
+  nameFrontAgent(c);
   say(failed ? `\n${failed} step(s) failed; fix them and run start again.` : "\nStarted. `status` shows the phase and the next step.");
   process.exit(failed ? 1 : 0);
 }

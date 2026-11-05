@@ -13,7 +13,7 @@ const name = path.basename(script);
 const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
 const cmd = `echo ${b64} | base64 -d > /tmp/${PROJECT}-${name}; WAVE_LOG_DIR=/tmp/${PROJECT}-wave bash /tmp/${PROJECT}-${name} 2>&1 | tee /tmp/${PROJECT}-wave.out; echo WAVE-END`;
 if (RUNNER === "orca") {
-  const out = sh(ORCA, ["terminal", "create", "--worktree", worktreeRefOn(host, "coordinator-integration"), "--title", `Coordinator ${title}`, "--command", cmd, ...orcaEnvArgsOn(host), "--json"]);
+  const out = sh(ORCA, ["terminal", "create", "--worktree", worktreeRefOn(host, "coordinator-integration"), "--title", `${PROJECT} · Integration · ${title}`, "--command", cmd, ...orcaEnvArgsOn(host), "--json"]);
   const h = /"handle":\s*"([^"]+)"/.exec(out)?.[1];
   fs.writeFileSync(file("wave-handle.txt"), `${host.name} ${h}\n`);
   console.log(h);

@@ -21,7 +21,7 @@ Five kinds of participants. The human talks to exactly one of them.
 | **Auditor** | reads the journal, load log, reviews and debt and writes the top 3 improvements and risks, each with a measured value | default |
 | **Retro** | reads one hard worker session and proposes 1–3 traceable changes to the agents' environment | default |
 
-Workers are named by task and role, for example `T54 Meeting · Worker Tester`, never by an automatic session name. A worker can be Codex, Claude Code or Pi; the specs, rules and reply format are the same.
+Workers are named by task and role, for example `T22-S5 · Worker Developer`, never by an automatic session name ([naming rules](orca.md#naming)). A worker can be Codex, Claude Code or Pi; the specs, rules and reply format are the same.
 
 ## Who decides what
 

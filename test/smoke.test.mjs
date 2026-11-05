@@ -564,3 +564,38 @@ test("gate runs commands in slots and survives without flock", () => {
   const r = spawnSync("node", [path.join(ROOT, "controller/gate.mjs"), "sh", "-c", "exit 3"], { env: { ...process.env, HOME: home, FACTORY_PROJECT: "smoke" } });
   assert.equal(r.status, 3);
 });
+
+test("names.mjs corrects only automatic names, by role, and leaves an unknown entry alone", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-names-"));
+  for (const f of ["names.mjs", "lib.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
+  fs.writeFileSync(path.join(dir, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "server" }, workers: [{ name: "server", kind: "remote", ssh: "s", orcaEnvironment: "Server", orcaRepoId: "r" }] } }));
+  fs.writeFileSync(path.join(dir, "workers.json"), JSON.stringify({ t1: { name: "T1 · Worker Developer", host: "server", worktree: "~/w/p/t1" } }));
+  const worktrees = [
+    { id: "r::/p", path: "/p", displayName: "main", displayNameMode: "automatic", isMainWorktree: true },
+    { id: "r::/w/p/t1", path: "/w/p/t1", displayName: "t1", displayNameMode: "fixed" },
+    { id: "r::/w/p/coordinator-integration", path: "/w/p/coordinator-integration", displayName: "integration", displayNameMode: "automatic" },
+    { id: "r::/w/p/mine", path: "/w/p/mine", displayName: "Set by the human", displayNameMode: "manual" },
+    { id: "r::/w/p/other", path: "/w/p/other", displayName: "other", displayNameMode: "automatic" },
+  ];
+  const log = path.join(dir, "calls.log");
+  const fake = path.join(dir, "fake-orca.mjs");
+  fs.writeFileSync(fake, `#!/usr/bin/env node
+import fs from "node:fs";
+const a = process.argv.slice(2);
+if (a[1] === "set") fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(a) + "\\n");
+console.log(JSON.stringify({ ok: true, result: { worktrees: ${JSON.stringify(worktrees)} } }));`);
+  fs.chmodSync(fake, 0o755);
+  const run = (...args) => spawnSync("node", [path.join(dir, "names.mjs"), ...args], { encoding: "utf8", env: { ...process.env, FACTORY_CONFIG: path.join(dir, "factory.config.json"), ORCA_CLI_COMMAND: fake } });
+  const dry = run("--dry");
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.match(dry.stdout, /3 entries named; no known role, left as is: server:other/);
+  assert.equal(fs.existsSync(log), false, "--dry changes nothing");
+  assert.equal(run().status, 0);
+  const sets = fs.readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const nameOf = (id) => { const a = sets.find((c) => c.includes(`id:${id}`)); return a[a.indexOf("--display-name") + 1]; };
+  assert.equal(nameOf("r::/p"), "p · Controller");
+  assert.equal(nameOf("r::/w/p/t1"), "T1 · Worker Developer");
+  assert.equal(nameOf("r::/w/p/coordinator-integration"), "p · Integration");
+  assert.equal(sets.length, 3, "the human's name and the unknown entry stay");
+  fs.rmSync(dir, { recursive: true, force: true });
+});

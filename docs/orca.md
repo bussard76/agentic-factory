@@ -22,9 +22,46 @@
 
 The Controller itself runs **on the server**, in an Orca terminal, so it survives the client being closed and talks to workers locally. The Front agent on the human's machine only reads `status.md` over SSH and writes `inbox.md`.
 
+## Naming
+
+Every sidebar entry (worktree display name) and every terminal is named after its role or task, on every level. Automatic names such as `main`, a branch name, `Setup` or `user@host: path` must not remain.
+
+| Level | Sidebar entry | Terminal | Example |
+|---|---|---|---|
+| Front agent | `<project> · Front Agent` | same | `my-app · Front Agent` |
+| Controller | `<project> · Controller` | same | `my-app · Controller` |
+| Worker | `<Task> · Worker <Role>` | same | `T22-S5 · Worker Developer` |
+| Integration worktree | `<project> · Integration` | `<project> · Integration · Shell` | `my-app · Integration` |
+
+**Other terminals in an entry:** `<entry name> · <Purpose>`, for example `T22-S5 · Worker Developer · Setup` or `my-app · Controller · Shell`.
+
+**Parts of a name**
+- `<project>` is the project name from `factory.config.json`.
+- `<Task>` is the ticket and slice or round, for example `T22-S5`, `T22-R6` or `Audit 2026-11-04`.
+- `<Role>` is `Developer`, `Tester`, `Architect` or `Auditor`.
+- The separator is ` · ` (space, middle dot, space).
+
+**Rules**
+- Whoever creates an entry or terminal names it in the same step.
+- Naming is enforced by tooling, not left to an agent's memory. An automatic name is corrected; a name set by the human is never overwritten.
+- A worker's terminal keeps its name even if the agent retitles it.
+- The name changes only the display. The branch and path stay the same, and tools select entries by path or handle, never by display name.
+- On a shared host, only name entries of your own project.
+
+**What the tooling does**
+- `controller/names.mjs` runs after every worker start and every `cleanup.mjs` cycle. It names this project's entries whose name is automatic or just the folder name: the checkout on the Controller's host, the integration worktree and the worktrees in `workers.json`.
+- `agentic-factory start` names the Front agent's terminal and entry, and the Controller's terminal.
+- A Controller on the human's machine shares the Front agent's checkout, so that one entry is `<project> · Front Agent`, and the Controller keeps its own terminal name.
+- `start.mjs`, `wave.mjs` and `runscript.mjs` name their terminals when they create them.
+
+**Limits of the tooling**
+- An entry with no known role, such as the checkout on a worker-only host, is reported by `names.mjs` and left as it is.
+- Terminals are named when they are created. Orca does not mark a terminal's name as automatic, so a terminal created by hand keeps its name until someone renames it.
+- A human who names an entry exactly like its folder gets it corrected, because that looks like Orca's own name.
+
 ## How the Controller uses Orca
 
-- **Start a worker:** `controller/start.mjs` wraps `orca orchestration worker-start --task-title "<Task> · Worker <Role>" --spec <text> --worktree new-child --name <dir> --base-branch origin/<main> --agent codex|claude|pi --model … --repo id:<repo-id> --setup run`, then renames the terminal and pane to the task title so the sidebar never shows an automatic session name. A worker is a child of the Controller's workspace, so Orca's own data holds the tree (`parentWorktreeId`, `childWorktreeIds`). A worker on another host than the Controller starts with `new-top-level`, because Orca refuses `new-child` across hosts.
+- **Start a worker:** `controller/start.mjs` wraps `orca orchestration worker-start --task-title "<Task> · Worker <Role>" --spec <text> --worktree new-child --name <dir> --base-branch origin/<main> --agent codex|claude|pi --model … --repo id:<repo-id> --setup run`, then names the terminal, pane and sidebar entry by task and role (see [Naming](#naming)). A worker is a child of the Controller's workspace, so Orca's own data holds the tree (`parentWorktreeId`, `childWorktreeIds`). A worker on another host than the Controller starts with `new-top-level`, because Orca refuses `new-child` across hosts.
 - **Wait for events:** `wait.mjs` runs `orca orchestration check --wait --types worker_done,escalation,question` and acknowledges each delivery with `--ack`.
 - **Nudge a stalled worker:** `orca terminal send --terminal <handle> --text "…" --enter`. A reply to an escalation alone does not wake an idle worker; always send the text into its terminal too.
 - **Read a terminal:** `orca terminal read --terminal <handle> --screen --json`; `stallwatch.mjs` classifies the screen as working, idle, at capacity or gone.

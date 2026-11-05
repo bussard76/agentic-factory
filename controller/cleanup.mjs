@@ -5,7 +5,7 @@
 // --dry changes nothing: no fetch, no journal, no removals, no releases.
 // Usage: node cleanup.mjs [--on <host>|--all] [--dry] [--pushed] [--prune-remote]
 import fs from "node:fs";
-import { BRANCH_PREFIX, HOSTS, MAIN, ORCA, RUNNER, argHost, journal, onHost, orcaEnvArgsOn, projectDirOn, readJson, trySh, workspacesOn, worktreeRefOn, writeJson } from "./lib.mjs";
+import { BRANCH_PREFIX, HOSTS, file, sh, MAIN, ORCA, RUNNER, argHost, journal, onHost, orcaEnvArgsOn, projectDirOn, readJson, trySh, workspacesOn, worktreeRefOn, writeJson } from "./lib.mjs";
 
 const dry = process.argv.includes("--dry"), allowPushed = process.argv.includes("--pushed");
 const hosts = process.argv.includes("--all") ? HOSTS : [argHost(process.argv)];
@@ -80,4 +80,6 @@ if (!dry) {
   journal("cleanup", "controller", { note: `removed ${removed}, kept ${kept}, pruned ${pruned}, released ${released}${failedReleases.length ? `, release failed ${failedReleases.join(" ")}` : ""}` });
 }
 console.log(`cleanup${dry ? " (dry)" : ""}: removed ${removed} worktrees, kept ${kept}, pruned ${pruned} remote branches, released ${released} dispatches${failedReleases.length ? `; release FAILED for ${failedReleases.join(", ")}` : ""}`);
+// Every cycle also corrects automatic names: a failure here must not hide what cleanup did.
+if (!dry && RUNNER === "orca") for (const host of hosts) try { process.stdout.write(sh("node", [file("names.mjs"), "--on", host.name])); } catch (e) { console.error(`naming entries on ${host.name} failed: ${e.message}`); }
 function alive(pid) { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } }

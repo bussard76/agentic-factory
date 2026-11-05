@@ -69,7 +69,7 @@ Close finished workers' terminals, release or abandon their dispatches, remove w
 
 ## Starting workers
 
-- Name every worker `<Task> · Worker <Role>`. Never keep an automatic session name.
+- Name every worker `<Task> · Worker <Role>`, and every sidebar entry and terminal after its role or task. Never keep an automatic name. `start.mjs` and `names.mjs` do this; other terminals in an entry are `<entry name> · <Purpose>`. On a shared host, name only your own project's entries.
 - Generate every spec from the template (`templates/mkspec.mjs <role> …`) with parameters. Never derive a spec by editing another task's spec.
 - Specs have numbered steps, "done when", abort criteria, a self-review against the spec, and the reply format (`worker_done` with branch, head SHA and check results, or one concrete escalation with progress pushed).
 - Workers can be Codex, Claude Code or Pi; the specs and rules are the same.

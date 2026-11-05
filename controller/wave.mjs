@@ -19,7 +19,7 @@ const exportLine = Object.entries(envs).map(([k, v]) => `export ${k}=${k === "GA
 const cmd = `clear; T=$(nproc 2>/dev/null || sysctl -n hw.ncpu); while [ "$(cut -d. -f1 /proc/loadavg 2>/dev/null || echo 0)" -ge "$T" ]; do sleep 15; done; ${exportLine}; echo ${b64} | base64 -d > /tmp/${PROJECT}-integ-wave.sh; WAVE_LOG_DIR=/tmp/${PROJECT}-wave bash /tmp/${PROJECT}-integ-wave.sh ${q(title)} ${q(summary)} ${branches.join(" ")} 2>&1 | tee /tmp/${PROJECT}-wave.out; echo WAVE-END`;
 journal("wave", title, { host: host.name, note: branches.join(" ") });
 if (RUNNER === "orca") {
-  const j = JSON.parse(sh(ORCA, ["terminal", "create", "--worktree", worktreeRefOn(host, "coordinator-integration"), "--title", `Coordinator ${title.slice(0, 40)}`, "--command", cmd, ...orcaEnvArgsOn(host), "--json"]));
+  const j = JSON.parse(sh(ORCA, ["terminal", "create", "--worktree", worktreeRefOn(host, "coordinator-integration"), "--title", `${PROJECT} · Integration · ${title.slice(0, 40)}`, "--command", cmd, ...orcaEnvArgsOn(host), "--json"]));
   const h = j.result?.terminal?.handle ?? j.result?.handle;
   fs.writeFileSync(file("wave-handle.txt"), `${host.name} ${h}\n`);
   console.log(h);

@@ -39,7 +39,7 @@ flowchart LR
 | **Architekt** | Worker | Prüft Specs vor dem Bau und die Umsetzung danach gegen die Architektur | Code ändern; Stufe 3 entscheiden |
 | **Auditor / Retro** | Worker, nur lesend | Wertet aus, wo die Fabrik Zeit verliert oder Fehler macht, und schlägt Verbesserungen vor | Etwas ändern |
 
-Worker tragen Namen nach Aufgabe und Rolle, zum Beispiel „T54 Meeting · Worker Tester“.
+Worker tragen Namen nach Aufgabe und Rolle, zum Beispiel „T22-S5 · Worker Developer“. Alle Namensregeln stehen in [Orca](../orca.md#naming).
 
 ## Von außen nach innen
 
