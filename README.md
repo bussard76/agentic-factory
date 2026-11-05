@@ -93,7 +93,7 @@ git status                                       # what update changed
 
 An older project has not chosen yet whether a Worker Architect keeps an `ARCHITECTURE.md`. `status` then asks, and you set `architecture.mode` to `architect` or `off` in `factory.config.json` and run `update` again.
 
-Run this in each project. To stay on a release instead of `main`, use `git -C ~/agentic-factory checkout <tag>`, for example `v0.1.4`. `pull --ff-only` then no longer works until you switch back with `git -C ~/agentic-factory switch main`.
+Run this in each project. To stay on a release instead of `main`, use `git -C ~/agentic-factory checkout <tag>`, for example `v0.1.5`. `pull --ff-only` then no longer works until you switch back with `git -C ~/agentic-factory switch main`.
 
 ## Keep the standard out of a project's history (preview)
 
@@ -161,7 +161,7 @@ site/           the single-page intro
 
 ## A start, not an end state
 
-Version 0.1.4, first extracted on 2026-10-31 from a project that has run this way since 2026-10-27. It is meant as a **starting point**:
+Version 0.1.5, first extracted on 2026-10-31 from a project that has run this way since 2026-10-27. It is meant as a **starting point**:
 
 - every project gets its own copy through `init` and changes it freely; `update` brings newer factory versions in without overwriting local changes (new versions land in `.factory/new/` for you to merge)
 - what proves itself in a project and helps other projects too flows back into the factory as a pull request, reviewed under [CONTRIBUTING.md](CONTRIBUTING.md)

@@ -24,4 +24,11 @@ This applies on every remote, before anything is accepted, whoever or whatever w
 ## Before merging
 
 - **No project or personal names, real URLs or paths,** in code, docs, commit messages or the request's text. This repository is public. Rewrite the text first; its old version can stay visible in the remote's history.
-- **Push `main` to every remote afterwards.** There is no mirroring, so a merge on one remote does not reach the other.
+
+## After every change to `main`
+
+Every new state of `main` is released, so a project can always stay on a tagged version that has all fixes.
+
+1. **Set the version** in `package.json`, `factory.config.example.json` and `README.md`.
+2. **Tag it and push `main` and the tag to every remote.** There is no mirroring, so a merge on one remote does not reach the other.
+3. **Publish the release on every remote,** with what changed, how to update and what has not run for real.
