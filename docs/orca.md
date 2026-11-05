@@ -59,7 +59,17 @@ Every sidebar entry (worktree display name) and every terminal is named after it
 - Terminals are named when they are created. Orca does not mark a terminal's name as automatic, so a terminal created by hand keeps its name until someone renames it.
 - A human who names an entry exactly like its folder gets it corrected, because that looks like Orca's own name.
 
-## How the Controller uses Orca
+## Heartbeat
+
+`controller/heartbeat.mjs` wakes the Controller from outside, so noticing finished work does not depend on the Controller itself. `agentic-factory start` adds one cron line per Controller directory on the Controller's host and leaves the rest of the crontab alone. Set `hosts.controller.heartbeat` to `false` to opt out.
+
+- **Every minute:** a new worker message, a finished wave or an inbox entry wakes the Controller. At each tenth minute it also checks workers and ready tickets, and an unreadable source counts as work.
+- **Busy Controller:** a timeout on "idle" counts as busy. The signal stays pending until a wake succeeded, and every attempt goes to `heartbeat.log`. After 5 minutes an inbox entry reaches the running session as a one-line pointer, once.
+- **Waiting for the human:** if `status.md` lists anything under "Needs <human>" and nothing else is pending, it does not wake the Controller. Otherwise an idle Controller is woken about hourly.
+- **Without a model:** it writes what the Controller is doing into the comment and status of the project's sidebar entry, and marks a finished worker's entry at once.
+
+It only sends text into the terminal titled `<project> · Controller`. It never starts or restarts a Controller. Without that terminal it says so in the sidebar and in the log.
+
 
 - **Start a worker:** `controller/start.mjs` wraps `orca orchestration worker-start --task-title "<Task> · Worker <Role>" --spec <text> --worktree new-child --name <dir> --base-branch origin/<main> --agent codex|claude|pi --model … --repo id:<repo-id> --setup run`, then names the terminal, pane and sidebar entry by task and role (see [Naming](#naming)). A worker is a child of the Controller's workspace, so Orca's own data holds the tree (`parentWorktreeId`, `childWorktreeIds`). A worker on another host than the Controller starts with `new-top-level`, because Orca refuses `new-child` across hosts.
 - **Wait for events:** `wait.mjs` runs `orca orchestration check --wait --types worker_done,escalation,question` and acknowledges each delivery with `--ack`.

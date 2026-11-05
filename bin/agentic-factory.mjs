@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
+import { heartbeatCronScript } from "./heartbeat-cron.mjs";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
@@ -684,6 +685,16 @@ function status() {
   for (const h of s.hints ?? []) say(`Hint:  ${h}`);
 }
 
+// The heartbeat wakes the Controller from outside (controller/heartbeat.mjs). hosts.controller.heartbeat = false opts out.
+function armHeartbeat(c, ctl, dir) {
+  if (process.env.FACTORY_SKIP_ORCA === "1" || c.agents.runner !== "orca" || c.hosts.controller.heartbeat === false) return;
+  const script = heartbeatCronScript(dir, c.project.name);
+  const r = ctl.kind === "local" ? spawnSync("sh", ["-c", script], { encoding: "utf8" }) : spawnSync("ssh", [...sshArgsFor(ctl), script], { encoding: "utf8" });
+  const out = (r.stdout ?? "").trim();
+  if (out === "added" || out === "exists") say(`Heartbeat: ${out === "added" ? "cron line added" : "already in cron"}${ctl.kind === "local" ? "" : ` on ${ctl.name}`}`);
+  else say(`Heartbeat: could not add the cron line (${(r.stderr || "").trim().slice(0, 200)}). Without it nothing wakes the Controller from outside. Run this on the Controller's host:\n${script}`);
+}
+
 // Names the Front agent's own terminal and, if its name is still automatic, its sidebar entry (docs/orca.md, "Naming").
 function nameFrontAgent(c) {
   const handle = process.env.ORCA_TERMINAL_HANDLE;
@@ -730,6 +741,7 @@ async function start() {
       s.stdout?.trim().endsWith("ok") ? say(`Gate, user-level skills and load log on ${ctl.name}: ok`) : (failed++, say(`Gate, skills or load log on ${ctl.name} failed: ${(s.stderr || "").trim().slice(0, 200)}`));
     }
   }
+  armHeartbeat(c, ctl, dir);
   // The Controller's own agent session, in an Orca terminal so the Front agent can read it and send it text.
   if (hasControllerTerminal(c)) say(`Controller session: already running (Orca terminal "${title}")`);
   else if (process.env.FACTORY_SKIP_ORCA === "1" || c.agents.runner !== "orca") say(`Controller session: start it in a terminal${ctl.kind === "local" ? "" : ` on ${ctl.name}`}:\n  ${session}`);
