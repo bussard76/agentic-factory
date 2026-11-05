@@ -116,6 +116,7 @@ controller/     the Controller handbook and its scripts (start, wait, stall watc
 front-agent/    the Front agent handbook and its scripts (status watch, relay, preview updater)
 server/         scripts that set up a Linux build server with Docker, Node, the agent CLIs and Orca
 skills/         vendored skills with pinned sources and licenses (ponytail, engineering skills, retro, wayfinder, prototype)
+scripts/        repository tools (skills-check: compare vendored skills with upstream)
 site/           the single-page intro
 ```
 

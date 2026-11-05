@@ -1,0 +1,177 @@
+{
+  "sources": {
+    "mattpocock": {
+      "url": "https://github.com/mattpocock/skills.git",
+      "license": {
+        "path": "LICENSE",
+        "blob": "f1dd2c09108dde1a5f56097cee8461b3ea834499",
+        "local": "MATTPOCOCK-LICENSE"
+      },
+      "roots": [
+        "skills"
+      ],
+      "seen": [
+        "skills/engineering/ask-matt",
+        "skills/engineering/implement",
+        "skills/engineering/implement-spec",
+        "skills/engineering/improve-codebase-architecture",
+        "skills/engineering/pr",
+        "skills/engineering/research",
+        "skills/engineering/triage",
+        "skills/engineering/wizard",
+        "skills/in-progress/chief-of-staff",
+        "skills/in-progress/claude-handoff",
+        "skills/in-progress/loop-me",
+        "skills/in-progress/setup-ts-deep-modules",
+        "skills/in-progress/software-factory",
+        "skills/in-progress/writing-beats",
+        "skills/in-progress/writing-fragments",
+        "skills/in-progress/writing-shape",
+        "skills/misc/git-guardrails-claude-code",
+        "skills/misc/migrate-to-shoehorn",
+        "skills/misc/scaffold-exercises",
+        "skills/misc/setup-pre-commit",
+        "skills/productivity/grill-me",
+        "skills/productivity/teach",
+        "skills/productivity/to-questionnaire",
+        "skills/productivity/wait-what"
+      ]
+    },
+    "ponytail": {
+      "url": "https://github.com/DietrichGebert/ponytail.git",
+      "license": {
+        "path": "LICENSE",
+        "blob": "715d483338cea4365f0d91a27799cf61226d6bcf",
+        "local": "PONYTAIL-LICENSE"
+      },
+      "roots": [
+        "skills"
+      ],
+      "seen": [
+        "skills/ponytail-help"
+      ]
+    }
+  },
+  "skills": {
+    "code-review": {
+      "source": "mattpocock",
+      "path": "skills/engineering/code-review",
+      "commit": "3da8c01116264675eeefbd6e9d59c734de9095cc",
+      "tree": "fee7bb5fdddc069d58cbea09b2c36b5a859eac05"
+    },
+    "codebase-design": {
+      "source": "mattpocock",
+      "path": "skills/engineering/codebase-design",
+      "commit": "d80fa0f4ebe0c5714af0adf8670336065233ecc6",
+      "tree": "07ba1cd60efc12d0d3a083005c1d9651cf15e39a"
+    },
+    "diagnosing-bugs": {
+      "source": "mattpocock",
+      "path": "skills/engineering/diagnosing-bugs",
+      "commit": "f3fc5632f401156837ee3872f14fe33ccf1024ea",
+      "tree": "5fdd6cc53385395441910b026c72d71768e993d4"
+    },
+    "domain-modeling": {
+      "source": "mattpocock",
+      "path": "skills/engineering/domain-modeling",
+      "commit": "d80fa0f4ebe0c5714af0adf8670336065233ecc6",
+      "tree": "ea30ee454ba264543dbe40737973b1a5afb9f0e6"
+    },
+    "grill-with-docs": {
+      "source": "mattpocock",
+      "path": "skills/engineering/grill-with-docs",
+      "commit": "447ca70872026d5b79d6073a546dac082117fed7",
+      "tree": "eedaf2562c83155115e9c649fa3ecaac2e10e81d"
+    },
+    "grilling": {
+      "source": "mattpocock",
+      "path": "skills/productivity/grilling",
+      "commit": "95249b0b49782349740fd9b8c6ce32b4e59e497a",
+      "tree": "28aceb4c9567b985cb47f7db88cf23c9f33af8b8"
+    },
+    "handoff": {
+      "source": "mattpocock",
+      "path": "skills/productivity/handoff",
+      "commit": "0f5e033ebc47b142f5ffa56a582ede6d9d9bada3",
+      "tree": "ce24892bd2d4b9e7fd5ac9b95c03175e18bef388"
+    },
+    "prototype": {
+      "source": "mattpocock",
+      "path": "skills/engineering/prototype",
+      "commit": "321658273cb1d20b76026717d027d505790106d4",
+      "tree": "e41d92e171f074a2b6887d8f6faca4a15c83d1ca"
+    },
+    "retro": {
+      "source": "mattpocock",
+      "path": "skills/engineering/retro",
+      "commit": "a7d038f6bf7f01b516408e95e2fb56e0b338fa6f",
+      "tree": "335c1862a43da9d629abafdb79ca0c0de118be08"
+    },
+    "setup-matt-pocock-skills": {
+      "source": "mattpocock",
+      "path": "skills/engineering/setup-matt-pocock-skills",
+      "commit": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "tree": "b644b684781fd5baae57f6be000a180a4d4448d7"
+    },
+    "tdd": {
+      "source": "mattpocock",
+      "path": "skills/engineering/tdd",
+      "commit": "3f599139104dfceabc7754eeb91319802f85e042",
+      "tree": "667dbdd00c09d0e2189e082986e6a4d61a67c2a6"
+    },
+    "to-spec": {
+      "source": "mattpocock",
+      "path": "skills/engineering/to-spec",
+      "commit": "5c89081d4bbeb3d039a42093653f90bb698d780e",
+      "tree": "136b9651747cfccbfbb7c50a6b0dfb757e7547d2"
+    },
+    "to-tickets": {
+      "source": "mattpocock",
+      "path": "skills/engineering/to-tickets",
+      "commit": "9e2abf8611a345efbf779aacb171cff015bcdeb6",
+      "tree": "2dee20ad722a31c04ededf9f2d83842473573045"
+    },
+    "wayfinder": {
+      "source": "mattpocock",
+      "path": "skills/engineering/wayfinder",
+      "commit": "7739eaed7f8f3915437a8def198a6d0d7206dbc7",
+      "tree": "25da74eadc3e388b2f2a2cc716f3d44b2fb9dfe0"
+    },
+    "writing-for-agents": {
+      "source": "mattpocock",
+      "path": "skills/productivity/writing-for-agents",
+      "commit": "321658273cb1d20b76026717d027d505790106d4",
+      "tree": "ad2925850efb8973a72d2e666f7a975f9a2d4a9b"
+    },
+    "ponytail": {
+      "source": "ponytail",
+      "path": "skills/ponytail",
+      "commit": "df9e89941d50419fd5bcf1de41e28097f1db49b2",
+      "tree": "e8d3fa76e7ff9223a784dbd4bcfc9ff46b3fa55d"
+    },
+    "ponytail-review": {
+      "source": "ponytail",
+      "path": "skills/ponytail-review",
+      "commit": "2a1fe842d078cf66ec7f3e6096a8ca4279c2cad7",
+      "tree": "8ad8430c42a6f8cd18758dddb70cfee399725de6"
+    },
+    "ponytail-audit": {
+      "source": "ponytail",
+      "path": "skills/ponytail-audit",
+      "commit": "2a1fe842d078cf66ec7f3e6096a8ca4279c2cad7",
+      "tree": "0c1468092a2b011b7acd369becea098f0c17f1c0"
+    },
+    "ponytail-debt": {
+      "source": "ponytail",
+      "path": "skills/ponytail-debt",
+      "commit": "84740e3d344b69b4a133201fa519eb37a62a2b2a",
+      "tree": "16c3b7953629510afa8f061f0fefa61a104e3020"
+    },
+    "ponytail-gain": {
+      "source": "ponytail",
+      "path": "skills/ponytail-gain",
+      "commit": "84740e3d344b69b4a133201fa519eb37a62a2b2a",
+      "tree": "c41e9e90173ddc6844c0bc44a89ba739534e06b0"
+    }
+  }
+}

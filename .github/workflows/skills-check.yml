@@ -1,0 +1,45 @@
+# Weekly comparison of the vendored skills with upstream. It only proposes: a human or a Tester reviews and merges.
+name: Skills check
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Compare with upstream
+        run: node scripts/skills-check.mjs --apply --report "$RUNNER_TEMP/report.md"
+
+      - name: Propose the update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            if grep -qE '^## (License changed|Gone upstream|Changed upstream, not applied|Vendored skill differs)' "$RUNNER_TEMP/report.md"; then
+              gh issue create --title "Skills check needs a look ($(date +%F))" --body-file "$RUNNER_TEMP/report.md"
+            fi
+            echo "Nothing to propose."
+            exit 0
+          fi
+          branch="skills/update-$(date +%F)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add skills
+          git commit -m "Update vendored skills from upstream"
+          git push origin "$branch"
+          # Without the repository setting that lets Actions create pull requests, an issue carries the same report.
+          gh pr create --base "$GITHUB_REF_NAME" --head "$branch" --title "Update vendored skills ($(date +%F))" --body-file "$RUNNER_TEMP/report.md" \
+            || gh issue create --title "Skills update ready on $branch" --body-file "$RUNNER_TEMP/report.md"
