@@ -41,3 +41,51 @@ Lessons from real projects, with where each one now lives. The handbooks carry t
 | 13 | **Prove a mechanism through a real event.** A successful deployment or syntax check proves nothing about the signal path. Report a path as unproven until a real event has passed through it. | Applied: `CONTROLLER.md` |
 | 14 | **Validate a script under its real file extension.** `node --check` rejects a `.new` suffix, so the deployment silently did not happen. | Applied: `CONTROLLER.md` |
 | 16 | **A monitor stays silent if any pipe stage buffers.** A `cut` after `grep --line-buffered` withheld every event for 30 minutes. Silence from a watcher is not evidence: compare it with the source once after arming it. | Applied: `CONTROLLER.md` |
+
+## Building a feature in parallel (2026-11-05)
+
+From a project's feature with six slices, built in parallel on a shared host. **Proposed** means no rule or tool carries it yet. **Evidence** says how far it was checked.
+
+### Review and acceptance
+
+| # | Learning | Evidence | Status |
+|---|---|---|---|
+| 17 | **Green reviews do not mean it looks right.** Two UI slices passed Tester and conformance, yet the human's first look at the demo failed: of ten holdings, one drew a calculated line, 25 of 30 rows showed `N/A`, and the layout differed from the signed-off screens. Reviews check the spec, not the overall impression. Before showing a demo, the Front agent opens it, compares it with the signed-off screens and states what it does not show yet. | Browser run of the demo | Proposed |
+| 18 | **Demo data must show the normal case.** The fixtures covered the special states, so most holdings showed one. Keep special states on a few items; most must look like real use, with enough data points. | Browser run of the demo | Proposed |
+| 19 | **Review rounds need proportion at spec level too.** Expansion state in a local one-user app took several spec rounds on rare edge cases. The 2-round rule covers builds. Apply it to specs too: an edge case that affects no blocking category becomes debt, not another round. | Review files | Proposed |
+| 20 | **Agent assumptions must not be recorded as human decisions.** A cap of 7 and 6 workers and a binary-file exception appeared under "Decided by" although agents had chosen them. A later Tester then held the system to the invented cap. "Decided by" needs a quoted statement with a date; anything else is an assumption until confirmed. | Review file, project docs | Proposed |
+
+### Parallel work
+
+| # | Learning | Evidence | Status |
+|---|---|---|---|
+| 21 | **Fix internal interfaces before parallel slices start.** A consumer slice was built and merged against an assumed interface that the producer slice did not supply. Passing its input as specified gave `missing_evidence`, and isolated tests could not show it. A parallel plan names each shared seam with exact fields, plus one test through the real producer and consumer. | Spec review | Proposed |
+| 22 | **State order in the task spec.** Slices started before their shared base existed, although a message said to wait for it. Dependencies belong in the spec, not only in a message. Whether this caused rework was not measured. | Journal, status | Proposed |
+
+### Waves and hooks
+
+| # | Learning | Evidence | Status |
+|---|---|---|---|
+| 23 | **Check the review gate before running the gates.** A wave passed verify and e2e and was only then rejected at push, because a manual merge commit had no review. That check takes seconds, so it can run first. | Wave terminal output | Proposed |
+| 24 | **The update flow does not mention the review gate.** A documents-only bundle update still needs a passing review before a wave accepts it; here it took two rounds. Say so in the README, or define a lighter path for documents-only updates. | Review files | Proposed |
+
+### Status
+
+| # | Learning | Evidence | Status |
+|---|---|---|---|
+| 25 | **The status file goes stale during long cycles.** An answered question stayed under "Needs" and in the sidebar for minutes, because `status.md` is written at the end of a cycle. Update it as soon as an answer is read. | Heartbeat log, status | Proposed |
+
+### Environment
+
+| # | Learning | Evidence | Status |
+|---|---|---|---|
+| 26 | **Worker setup dirties the lockfile.** Worktrees showed the same `package-lock.json` change of 30 deleted lines after setup. Cleanup then treats the worktree as having uncommitted work and keeps it, so entries pile up. The trigger is not established; `npm ci` in setup, or ignoring this exact change in cleanup, are candidates. | `git status`, cleanup journal | Proposed |
+| 27 | **State the Controller directory in specs.** On a host with several Controllers, a Tester checked another project's `~/controller` instead of `~/controller-scalable` and reported a false finding. `mkspec` could name the directory. | Review file | Proposed |
+| 28 | **Review worktrees pile up in `/tmp`.** Testers leave worktrees such as `/tmp/t22-process-review` that no cleanup covers. | `git worktree list` | Proposed |
+| 29 | **`start.mjs` in existing worktrees.** A Controller reported that a start in an existing worktree passed setup options Orca rejects, so it called Orca directly. `set-pane-title` also keeps failing, earlier with `terminal_handle_stale`. Neither blocks a start. Reported only; the cause was not checked. | Controller status | Proposed |
+
+### Preview
+
+| # | Learning | Evidence | Status |
+|---|---|---|---|
+| 30 | **The review preview belongs on the human's machine.** A Controller ran its demo on the server, reachable only through a tunnel, while the human prefers a current state running locally. The Front agent offers one from a separate worktree after each wave, and says which commits it contains and what is not reviewed yet. | Human statement | Proposed |
