@@ -34,3 +34,7 @@ What this task deliberately does not do, and where that goes instead.
 ## Notes for the Developer
 
 Binding instructions from the Architect's spec review, shared decisions, known flakes to ignore, debt items to name instead of fixing.
+
+## Ready check
+
+Before this ticket becomes `ready`: its requirements and evidence do not conflict with the project's rules or with the Controller's hard rules, for example a required screenshot in git where binaries are forbidden. A conflict found here costs minutes; found at the wave, it can block everything behind it.

@@ -87,7 +87,7 @@ Every ticket, whether a GitHub issue or a task file, becomes exactly one branch 
 
 | Step | Who | Where | What happens |
 |---|---|---|---|
-| 1. Ticket is `ready` | Front agent | issue `#12` or `docs/tasks/T12-<slug>.md` | goal, outside-in evidence, level, acceptance; a line in `inbox.md` |
+| 1. Ticket is `ready` | Front agent | issue `#12` or `docs/tasks/T12-<slug>.md` | goal, outside-in evidence, level, acceptance; checked for conflicts with the project's rules; a line in `inbox.md` |
 | 2. Spec review | Architect (read-only) | branch `agents/t12-specreview` from `main` | commits only `docs/reviews/T12-architecture-spec.md`; `Verdict: pass` |
 | 3. Build | Developer | **new worktree** `<workspaces>/<project>/t12/` on **new branch** `agents/t12` from `origin/main` | checklist of every acceptance item in the report; one item at a time: failing test, implementation, commit, **push after each item**; targeted checks only; self-review against the spec; merge `origin/main` at the end; report `docs/reports/T12-….md`; `worker_done` with branch and SHA |
 | 4. Review round 1 | Tester (fresh context, read-only) | temporary branch from the reviewed SHA with `origin/main` merged in; findings on `agents/t12-review-1` | runs the full gates itself through `gate`; checks the flows; commits only `docs/reviews/T12-review-1.md` with `Reviewed commit: <SHA>` and `Verdict` |

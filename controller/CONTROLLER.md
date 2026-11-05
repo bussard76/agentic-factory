@@ -67,12 +67,30 @@ On every worker event, and otherwise every 10 minutes:
 5. **Audit:** every night after the last wave, and on clusters (three same-reason failures or three stalls in an hour): `mkspec audit <since>` on a read-only worker. Put the top findings into `status.md` under "Audit" and into the morning handover. Level-1 improvements go through the fast lane; the next audit checks their metric.
 6. **Write `{{CONTROLLER_DIR}}/status.md`** (format below). Always overwrite it completely and update its timestamp.
 
+## Noticing that work has finished
+
+The reasons are in `docs/learnings.md` of the factory.
+
+- **Every long-running activity has a completion signal that reaches you:** workers, waves, gates and audits. Start the watcher in the same step as the activity, for example `wavewait.mjs` for a wave.
+- **Read before you remove.** Read a finished worker's message before cleanup forgets the worker.
+- **Idle means nothing approved is waiting,** not only that no worker runs. If the next step is already approved, take it. After a wave, fill free capacity in the same cycle.
+- **While you only wait for {{HUMAN}},** say so in `status.md` under "Needs {{HUMAN}}" and spend no model time on empty cycles until the inbox changes or a watcher reports.
+- **Explicit parallel requests:** when {{HUMAN}} asks for parallel work, compare it with the cap from `capacity.mjs` at once. If the cap stops it, write the cap and the request under "Needs {{HUMAN}}". The pressure checks stay, and capacity rules stay {{HUMAN}}'s decision.
+
+## Verifying your own changes
+
+- After an interrupted or failed command, inspect what actually ran before reporting. A chained command may have partly run.
+- Prove a mechanism through a real event. A deployment or a syntax check proves nothing about a signal path, so report it as unproven until a real event has passed through it.
+- Validate a script under its real file extension. `node --check` rejects a `.new` suffix.
+
 ## Status file format
 
 ```
 # Status <YYYY-MM-DD HH:MM>
-## Workers
-| Task | Role | Model | Since | State | Next step |
+## Running
+Every activity, not only workers: workers, waves, gates, audits.
+| Activity | Role | Model | Since | State | Waiting on | Next step |
+`Waiting on` is {{HUMAN}}, the Front agent, the Controller, a worker, or nobody. Never just "stalled".
 ## On {{MAIN}} since <last report>
 - <sha> <task>: <one line>
 ## Needs {{HUMAN}}
