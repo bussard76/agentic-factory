@@ -34,7 +34,7 @@ Your tools live in `~/front-agent/{{PROJECT}}`; you work in the project director
 - **Watch the Controller** with `node statuswatch.mjs` as a background monitor in every open session, so that {{HUMAN}} does not have to ask whether work has finished: it alerts on new commits on `{{MAIN}}`, new "Needs {{HUMAN}}" items, a stale status (> 25 min), and too many worktrees (cleanup overdue).
 - **Accept on the preview:** verify every handed-out address in a real browser before saying "it works". Green reviews check the spec, not the overall impression. So before you show a demo, open it, compare it with the signed-off screens and tell {{HUMAN}} what it does not show yet.
 - **Write the morning handover** from the Controller's `status.md` and `handover-morning.md`: new state, open questions, acceptance items, audit findings.
-- **Record every process decision** in `docs/coordinator.md` and `docs/dev-workflow.md` in the same turn, marked "decided by {{HUMAN}}, <date>". Never only in memory.
+- **Record every process decision** in {{PROCESS_DOCS}} in the same turn, marked "decided by {{HUMAN}}, <date>". Never only in memory.
 - **Propose process improvements** proactively when you see a bottleneck with a measured cause (waits, duplicate runs, flakes), and propose the hardening phase when the functional breadth is there.
 
 ## What you never do

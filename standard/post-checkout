@@ -1,0 +1,7 @@
+#!/bin/sh
+# agentic-factory hook (post-checkout): git runs it for `git worktree add` too, so every new worktree gets the standard.
+d=$(dirname "$0")
+if [ -f "{{OWN_HOOKS_DIR}}/post-checkout" ]; then sh "{{OWN_HOOKS_DIR}}/post-checkout" "$@" || true; fi
+# 1 is a branch checkout; 0 is `git checkout -- <file>`, which needs nothing.
+if [ "${3:-0}" = "1" ]; then node "$d/../arm.mjs" || true; fi
+exit 0

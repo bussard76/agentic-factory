@@ -28,7 +28,7 @@ const stagedPaths = () => git("diff", "--cached", "--name-only", "--no-renames",
 // reviewers' standards: they change only through a reviewed task (fast lane with a Tester), like code.
 // docs/coordinator.md and docs/dev-workflow.md stay exempt: the human's process decisions are recorded there at once.
 const REVIEWED_DOCS = /^(docs\/review-protocol\.md|docs\/architect-protocol\.md|CODING_STANDARDS\.md)$/;
-const isDocsOnly = (paths) => paths.length > 0 && paths.every((p) => !REVIEWED_DOCS.test(p) && ((p.startsWith("docs/") && !p.startsWith("docs/adr/")) || (/^[^/]+\.md$/.test(p) && !/^(AGENTS|ARCHITECTURE)\.md$/.test(p))));
+const isDocsOnly = (paths) => paths.length > 0 && paths.every((p) => !REVIEWED_DOCS.test(p) && ((p.startsWith("docs/") && !p.startsWith("docs/adr/")) || (/^[^/]+\.md$/.test(p) && !/^(AGENTS|AGENTS\.factory|ARCHITECTURE)\.md$/.test(p))));
 
 // --- test-count --------------------------------------------------------------------------------
 const TEST_FILE = /\.(test|spec)\.[cm]?[jt]sx?$|_test\.(py|go)$|Test\.(java|kt)$/;
@@ -97,7 +97,7 @@ function staticChecks() {
 // here: a new dependency is a level-2 change that the Architect's spec review decides (AGENTS.md "Change levels").
 // The hooks directory is protected wherever it lives (.githooks, or the project's own directory in merge mode).
 const HOOKS_DIR = (config.hooks?.dir ?? ".githooks").replace(/\/$/, "");
-const PROTECTED = new RegExp(`^(?:ARCHITECTURE\\.md$|AGENTS\\.md$|docs/adr/|\\.githooks/|${HOOKS_DIR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/|tools/factory-guardrails\\.mjs$)`);
+const PROTECTED = new RegExp(`^(?:ARCHITECTURE\\.md$|AGENTS\\.md$|AGENTS\\.factory\\.md$|docs/adr/|\\.githooks/|${HOOKS_DIR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/|tools/factory-guardrails\\.mjs$)`);
 function protectedFiles(messagePath) {
   const changed = stagedPaths();
   const hits = changed.filter((p) => PROTECTED.test(p));

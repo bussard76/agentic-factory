@@ -162,6 +162,6 @@ fs.mkdirSync(file("specs"), { recursive: true });
 const key = `${(pos[0] ?? role).toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${role}${pos[1] && /^\d+$/.test(pos[1]) ? pos[1] : ""}`;
 const out = file(`specs/${key}.txt`);
 // On a host with several projects, a default Controller directory may belong to another one. A checkout outside the worktrees is never cleaned up.
-const HOST_NOTES = `\n\nThis project's Controller directory on its host is {{CONTROLLER_DIR}}. Never read another project's. Work in your own worktree. If you need another checkout, remove it before you reply.`;
+const HOST_NOTES = `\n\nThis project's Controller directory on its host is {{CONTROLLER_DIR}}. Never read another project's. Work in your own worktree. If you need another checkout, remove it before you reply.{{SPEC_STANDARD_NOTE}}`;
 fs.writeFileSync(out, text + HOST_NOTES + "\n");
 console.log(out);

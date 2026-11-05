@@ -14,7 +14,7 @@ Read these first and re-read them whenever you are unsure. They win over this fi
 
 - `{{PROJECT_DIR}}/docs/coordinator.md`: process rules, test stages, capacity, models, the escalation ladder, the decision history. Run `git pull` there before you read it.
 - `{{PROJECT_DIR}}/docs/dev-workflow.md`: the same workflow explained for people.
-- `{{PROJECT_DIR}}/docs/review-protocol.md` and `docs/architect-protocol.md`.
+- `{{PROJECT_DIR}}/docs/review-protocol.md` and `docs/architect-protocol.md`.{{PROCESS_READ}}
 - The tickets: {{TICKETS_LINE}}
 - `{{CONTROLLER_DIR}}/handover.md`: what was in flight and queued when you took over.
 - `{{CONTROLLER_DIR}}/factory.config.json`: paths, commands, capacity thresholds, models. Every script reads it.
@@ -26,7 +26,7 @@ Read these first and re-read them whenever you are unsure. They win over this fi
 - **Docker gates** run only when {{HUMAN}} declares a release.
 - **Decisions you must not take:** level-3 architecture, new ADRs, product decisions not already recorded, costs, capacity rules, anything that changes {{HUMAN}}'s way of working. Write such a decision as a question into `status.md` under "Needs {{HUMAN}}" and continue with other work.
 - **Capacity:** run `node capacity.mjs` before every start and follow its verdict. Every full gate goes through `~/.local/bin/gate`.
-- **Docs:** every process change you make or apply goes into `docs/coordinator.md` and `docs/dev-workflow.md` in the same commit, marked "decided by {{HUMAN}}, <date>" where it is {{HUMAN}}'s decision.
+- **Docs:** every process change you make or apply goes into {{PROCESS_DOCS}} in the same commit, marked "decided by {{HUMAN}}, <date>" where it is {{HUMAN}}'s decision.
 
 ## Workers
 

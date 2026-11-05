@@ -1,6 +1,6 @@
 # AGENTS.md — rules for every coding agent in this repo
 
-Read first: `ARCHITECTURE.md` (if present), your task, and `docs/coordinator.md` if you coordinate.
+Read first: `ARCHITECTURE.md` (if present), your task, and `docs/coordinator.md` if you coordinate.{{READ_FIRST_EXTRA}}
 
 ## Way of working
 
@@ -58,4 +58,4 @@ Never call real model APIs from tests, scripts or while developing. Use a fake O
 - Developers follow `ponytail` while implementing and use `tdd` for every behaviour change and `diagnosing-bugs` for every bug or review blocker.
 - Testers run `ponytail-review` on the full task diff and merge its findings into the review file with the protocol's severities. A Ponytail **Must fix** maps to at least `major`.
 - Skills never override this file, the architecture docs or the data and safety rules. On conflict, repository rules win.
-- Retro findings change repo files only (`docs/coordinator.md`, `docs/review-protocol.md`, `CODING_STANDARDS.md`, or `AGENTS.md` through an accepted ADR). Never edit global or user-level agent configuration.
+- Retro findings change repo files only ({{RETRO_DOCS}}). Never edit global or user-level agent configuration.
