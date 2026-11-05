@@ -39,7 +39,7 @@ const specs = {
     const [T, ref, branch] = pos; const level = opt("--level", "1"); const rv = split(opt("--review")); const extra = opt("--extra", "");
     return `You are the Developer for ${T} (level ${level}) on this host, in a fresh worktree on branch ${branch}.
 Steps:
-1. git fetch origin; create ${branch} from origin/${MAIN}${rv.branch ? ` and merge origin/${rv.branch} (the passing architecture spec review ${rv.file}; its binding instructions are part of the spec)` : ""}. Read AGENTS.md, docs/coordinator.md (worker rules), ${taskWhere(ref)}${rv.file ? ` and ${rv.file}` : ""}.
+1. git fetch origin; create ${branch} from origin/${MAIN}${rv.branch ? ` and merge origin/${rv.branch} (the passing architecture spec review ${rv.file}; its binding instructions are part of the spec)` : ""}. Read {{AGENTS_READ}}, docs/coordinator.md (worker rules), ${taskWhere(ref)}${rv.file ? ` and ${rv.file}` : ""}.
 2. First write a checklist of every Result and Observable acceptance item into the report draft ${reportFor(ref)}; work through it item by item and push after each item. Do not stop while items remain.
 3. Implement every item test-first through public entry points, in small commits. Follow the 'ponytail' and 'tdd' skills. Stay level ${level}: ${level === "2" ? "only the exports, dependencies or routes the task names; nothing beyond" : "no new public export, dependency, route, store or data flow"}. If you need more: stop and escalate.
 4. ${DEV_CHECKS} ${FLAKES}
@@ -54,7 +54,7 @@ ${REPLY_DEV}`;
     const [T, n, ref, branch, rvs] = pos; const rv = split(rvs); const level = opt("--level", "1"); const extra = opt("--extra", "");
     return `You are the Developer for ${T}, REWORK ${n}, in this existing worktree on branch ${branch}.
 Steps:
-1. git fetch origin. Confirm you are on ${branch} at origin/${branch}. Read ${rv.file} (git show origin/${rv.branch}:${rv.file}), ${taskWhere(ref)}, AGENTS.md and the worker rules in docs/coordinator.md.
+1. git fetch origin. Confirm you are on ${branch} at origin/${branch}. Read ${rv.file} (git show origin/${rv.branch}:${rv.file}), ${taskWhere(ref)}, {{AGENTS_READ}} and the worker rules in docs/coordinator.md.
 2. Fix the functional findings exactly as the review states (debt candidates are not part of the rework), each test-first: write the review's proving test through the public entry point, see it fail, then fix. Small commits, push after each finding.${extra ? " " + extra : ""}
 3. Stay level ${level}. If a fix needs more: stop and escalate instead of deciding.
 4. ${DEV_CHECKS} ${FLAKES}
@@ -92,7 +92,7 @@ Reply: worker_done with verdict and --report-path docs/reviews/${T}-review-final
     const [T, ref, branch] = pos;
     return `You are the Worker Architect for the pre-build architecture spec review of ${T} under docs/architect-protocol.md.
 Steps:
-1. git fetch origin; create branch ${BRANCH_PREFIX}${T.toLowerCase()}-specreview from origin/${branch}. Read ${taskWhere(ref)}, AGENTS.md, ARCHITECTURE.md (if present) and the connected code.
+1. git fetch origin; create branch ${BRANCH_PREFIX}${T.toLowerCase()}-specreview from origin/${branch}. Read ${taskWhere(ref)}, {{AGENTS_READ}}, ARCHITECTURE.md (if present) and the connected code.
 2. Confirm or raise the level. Are the interfaces exact and buildable, the seams, bounds, states (empty, ambiguous, error), privacy and ownership sufficient? Does the outside-in evidence (design/<feature>/, interfaces, logic diagram) match the spec? If this task runs in parallel with others, is each shared interface fixed with exact fields, is there one test through the real producer and consumer, and does the task state what it depends on? An edge case that causes no real functional defect is a debt candidate, not a reason for change-spec.
 3. Write docs/reviews/${T}-architecture-spec.md with findings and 'Verdict: pass|change-spec|level-3'. Precision-only gaps may be binding instructions for the Developer with a pass; anything design-relevant is change-spec; anything needing ${HUMAN}'s decision is level-3 with options and a recommendation.
 4. Commit only that file, never --no-verify, push only your branch.
@@ -114,7 +114,7 @@ Reply: worker_done with verdict, branch and sha (--report-path docs/reviews/${T}
     const template = fs.readFileSync(file("templates/ARCHITECTURE.md"), "utf8");
     return `You are the Worker Architect creating the architecture baseline under docs/architect-protocol.md, section "Baseline".
 Steps:
-1. git fetch origin; create branch ${BRANCH_PREFIX}architecture-baseline from origin/${MAIN}. Read AGENTS.md, docs/architect-protocol.md, docs/adr/ and the code. Use the codebase-design skill's vocabulary.
+1. git fetch origin; create branch ${BRANCH_PREFIX}architecture-baseline from origin/${MAIN}. Read {{AGENTS_READ}}, docs/architect-protocol.md, docs/adr/ and the code. Use the codebase-design skill's vocabulary.
 2. If ARCHITECTURE.md exists, do not replace it. Write docs/reviews/architecture-baseline.md listing where it differs from the code, with file evidence, and record the drift in docs/debt.md.
 3. Otherwise write ARCHITECTURE.md from the template below, with the full SHA you read in its first line. Describe what the code does, with file evidence. Do not invent intent. A point without an approved requirement or ADR goes under "Open". Decide nothing.
 4. Commit only those files, citing {{ADOPTION_ADR}} in the message, never --no-verify. Push only your branch.
@@ -162,6 +162,6 @@ fs.mkdirSync(file("specs"), { recursive: true });
 const key = `${(pos[0] ?? role).toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${role}${pos[1] && /^\d+$/.test(pos[1]) ? pos[1] : ""}`;
 const out = file(`specs/${key}.txt`);
 // On a host with several projects, a default Controller directory may belong to another one. A checkout outside the worktrees is never cleaned up.
-const HOST_NOTES = `\n\nThis project's Controller directory on its host is {{CONTROLLER_DIR}}. Never read another project's. Work in your own worktree. If you need another checkout, remove it before you reply.`;
+const HOST_NOTES = `\n\nThis project's Controller directory on its host is {{CONTROLLER_DIR}}. Never read another project's. Work in your own worktree. If you need another checkout, remove it before you reply.{{SPEC_STANDARD_NOTE}}`;
 fs.writeFileSync(out, text + HOST_NOTES + "\n");
 console.log(out);

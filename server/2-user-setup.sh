@@ -46,7 +46,8 @@ for r in "${REPOS[@]}"; do
   [ -d "$HOME/projects/$r/.git" ] || git clone "https://github.com/$OWNER/$r.git" "$HOME/projects/$r"
   ( cd "$HOME/projects/$r"
     # The hooks are per clone: arm them here, this checkout is where the waves push from.
-    [ -f .githooks/pre-commit ] && git config core.hooksPath .githooks
+    # A project with the untracked standard is armed by `agentic-factory start`; a hooks path here would bypass its hooks.
+    if grep -Eq '"footprint"[[:space:]]*:[[:space:]]*"minimal"' factory.config.json 2>/dev/null; then echo "$r: run agentic-factory start to arm this clone"; else [ -f .githooks/pre-commit ] && git config core.hooksPath .githooks; fi
     [ -f pnpm-lock.yaml ] && pnpm install --frozen-lockfile || true
     [ -f package-lock.json ] && npm ci || true
     # Playwright browsers where the project uses them

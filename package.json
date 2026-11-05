@@ -6,7 +6,7 @@
   "type": "module",
   "engines": { "node": ">=22" },
   "bin": { "agentic-factory": "bin/agentic-factory.mjs" },
-  "files": ["bin", "controller", "front-agent", "server", "skills", "templates", "docs", "site", "factory.config.example.json"],
+  "files": ["bin", "controller", "front-agent", "server", "skills", "standard", "templates", "docs", "site", "factory.config.example.json"],
   "scripts": {
     "check": "node bin/agentic-factory.mjs selfcheck",
     "test": "node --test test/*.test.mjs"

@@ -95,6 +95,20 @@ An older project has not chosen yet whether a Worker Architect keeps an `ARCHITE
 
 Run this in each project. To stay on a release instead of `main`, use `git -C ~/agentic-factory checkout <tag>`, for example `v0.1.5`. `pull --ff-only` then no longer works until you switch back with `git -C ~/agentic-factory switch main`.
 
+## Keep the standard out of a project's history (preview)
+
+`init --untracked-standard` checks in only what is the project's own, so people who work on the code another way carry none of the stack. Whoever does not arm a clone sees neither handbooks nor hooks.
+
+| | Where it lives |
+|---|---|
+| Handbooks, factory rules (`AGENTS.factory.md`), hooks, guardrails, skills | `.git/factory` of each clone, never in the history. Each worktree gets links through a `post-checkout` hook, listed in `.git/info/exclude`. The project's `.gitignore` stays untouched |
+| `factory.config.json`, ADRs, `ARCHITECTURE.md`, the project's own `AGENTS.md` and hooks | In the repository |
+| Tickets, reviews, debt | Still in the repository, until the private companion repository exists |
+
+**A deviation is a tracked file at the same path, and it wins.** `agentic-factory deviate docs/review-protocol.md` turns a link into the project's own file. Later factory versions no longer update it, and `doctor` lists it. A skill that deviates stays excluded as a path. Stage a new file in it with `git add -f`, because `git status` does not show it; `doctor` lists such files. For a changed file, a plain `git add <file>` stages it but exits with an error, so use `git add -f` there too. A process decision goes into `docs/process-decisions.md`.
+
+The hooks live in the clone's `.git/hooks`, and a hook that was already there runs first as `<hook>.own`. A fresh clone needs `agentic-factory start` once, and a wave refuses to run from a clone that has not had it. Not supported yet: husky, a `core.hooksPath` set outside the clone (global config, include) and `--keep-own-hooks`. `init` refuses them, and if one appears later, `arm.mjs`, `status`, `doctor` and every wave report it instead of running without the gate. Existing projects stay as they are; moving them follows with a reviewed `update`. See `F43` to `F45` in [debt.md](debt.md) for what is open.
+
 ## Known limits (read before you trust the gates)
 
 - The git guardrails are **local hooks**. They stop honest mistakes; they are not a security boundary. Protect `main` on the server side too (branch protection, a CI check). See [`debt.md`](debt.md).

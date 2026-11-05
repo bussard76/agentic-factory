@@ -21,11 +21,11 @@ Architecture impact: level 3 — introduces the review gate, protected files, th
 
 ## Decision
 
-Option A. The rules live in `AGENTS.md`, `docs/coordinator.md`, `docs/review-protocol.md` and `docs/architect-protocol.md`; the process for people in `docs/dev-workflow.md`. Protected files (`AGENTS.md`, `ARCHITECTURE.md`, `docs/adr/**`, `{{HOOKS_DIR}}/**`, `tools/factory-guardrails.mjs`) change only when the commit message references an accepted ADR that carries a `Decided by:` line. New dependencies are a level-2 change decided in the Architect's spec review, not hook-protected.
+Option A. The rules live in {{RULES_FILE}}, `docs/coordinator.md`, `docs/review-protocol.md` and `docs/architect-protocol.md`; the process for people in `docs/dev-workflow.md`. Protected files (`AGENTS.md`, `ARCHITECTURE.md`, `docs/adr/**`, `{{HOOKS_DIR}}/**`, `tools/factory-guardrails.mjs`) change only when the commit message references an accepted ADR that carries a `Decided by:` line. New dependencies are a level-2 change decided in the Architect's spec review, not hook-protected.
 
 ## Consequences
 
 - Hooks: {{HOOK_ENFORCEMENT}}
 - The first commit that adds the factory files references this ADR (`{{ADOPTION_ADR}}`). A new or proposed ADR is committed by citing this ADR in the message; once it is accepted, later changes cite it directly.
-- Every later process decision is recorded in `docs/coordinator.md` and `docs/dev-workflow.md` the moment it is made.
+- Every later process decision is recorded in {{PROCESS_DOCS}} the moment it is made.
 - Capacity, model tiers and review rounds start from the configured values and are calibrated from measurements.

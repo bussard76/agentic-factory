@@ -2,11 +2,11 @@
 
 These rules bind whichever agent coordinates work in this repo: the Front agent on {{HUMAN}}'s machine and the Controller on the server. Workers follow `AGENTS.md`. {{HUMAN}} owns every decision that is not delegated here.
 
-`docs/dev-workflow.md` explains this workflow to people. Whenever a rule here, in `AGENTS.md`, `docs/review-protocol.md` or `docs/architect-protocol.md` changes, update it in the same change.
+`docs/dev-workflow.md` explains this workflow to people. {{WORKFLOW_SYNC}}
 
 **Only {{HUMAN}} decides for {{HUMAN}}:** "Decided by {{HUMAN}}" needs {{HUMAN}}'s quoted statement with a date. Anything an agent chose is written as `Assumption:` until {{HUMAN}} confirms it, and no reviewer holds work to an assumption as if it were a decision. The sections marked "decided by" below were confirmed at adoption.
 
-**Process decisions go into the docs immediately:** whenever {{HUMAN}} and a coordinator decide something about the way of working, the coordinator updates this handbook and `docs/dev-workflow.md` in the same turn, marked "decided by {{HUMAN}}, <date>". An agent's private memory is never the only record.
+**Process decisions go into the docs immediately:** whenever {{HUMAN}} and a coordinator decide something about the way of working, the coordinator updates {{COORDINATOR_UPDATES}} in the same turn, marked "decided by {{HUMAN}}, <date>". An agent's private memory is never the only record.
 
 ## Roles
 

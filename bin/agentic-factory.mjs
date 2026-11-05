@@ -105,14 +105,32 @@ function detect() {
 
 // --- init ------------------------------------------------------------------------------------------
 async function init() {
+  if (flag("--untracked-standard")) {
+    if (flag("--keep-own-hooks")) { say("--untracked-standard cannot be combined with --keep-own-hooks yet: new worktrees get the standard through a factory hook. Without --keep-own-hooks your hooks stay where they are and run first."); process.exit(1); }
+    // husky's prepare script sets core.hooksPath on every install, which would switch the review gate off for the whole clone.
+    const prepare = fs.existsSync("package.json") ? JSON.parse(fs.readFileSync("package.json", "utf8")).scripts?.prepare ?? "" : "";
+    const foreign = sh("git", ["config", "--show-origin", "--get-all", "core.hooksPath"]).split("\n").filter((l) => l && !/^file:\.git\/config(\t|$)/.test(l));
+    const hooksDir = path.join(sh("git", ["rev-parse", "--git-common-dir"]) || ".git", "hooks");
+    if (fs.lstatSync(hooksDir, { throwIfNoEntry: false })?.isSymbolicLink()) { say(`--untracked-standard: ${hooksDir} is a link, so the factory's hooks would be written into whatever it points at, possibly tracked files. Nothing was changed.`); process.exit(1); }
+    // Excluded and not tracked, such a file would vanish from git status, and a later merge would overwrite it without a word.
+    const tracked = sh("git", ["ls-files"]).split("\n");
+    const lstat = (p) => { try { return fs.lstatSync(p); } catch { return null; } };
+    if (lstat("docs") && !(fs.existsSync("docs") && fs.statSync("docs").isDirectory())) { say("--untracked-standard: `docs` is not a directory here, and the factory needs a directory of that name for ADRs and reviews. Nothing was changed."); process.exit(1); }
+    // A parent that is a link (a tracked .claude/skills) or a file (a tracked file named docs) leaves nothing to hide.
+    const inTheWay = standardPaths().filter((p) => { const stat = lstat(p); return stat && !stat.isSymbolicLink() && !lstat(path.dirname(p))?.isSymbolicLink() && !tracked.some((t) => t === p || t.startsWith(`${p}/`)); });
+    if (inTheWay.length) { say(`--untracked-standard: these untracked files sit where the factory's standard goes: ${inTheWay.join(", ")}. Commit them, then they count as this project's deviation, or move them. Nothing was changed.`); process.exit(1); }
+    if (foreign.length) { say(`--untracked-standard: a core.hooksPath is set outside this clone's config (${foreign[0].split("\t")[0]}), so git would not run the factory's hooks and there would be no review gate. Remove it first. Nothing was changed.`); process.exit(1); }
+    if (fs.existsSync(".husky") || /husky/.test(prepare) || hooksSetup().layout === "husky") { say("--untracked-standard does not support husky yet: every install would switch the factory's hooks off for this clone (F44 in the factory's debt.md). Nothing was changed."); process.exit(1); }
+    if (isAdopted() && !minimal(readConfig())) { say("--untracked-standard: this project already tracks the standard, and switching an existing project is not built yet. Nothing was changed."); process.exit(1); }
+  }
   validateAnswers();
   say(`agentic-factory ${PKG.version}: onboarding for ${cwd}`);
   const emit = (o) => { console.log(JSON.stringify(o, null, 2)); process.exit(0); };
   if (spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { stdio: "ignore" }).status !== 0) { if (printQuestions) emit({ blocker: "not a git repository: run `git init` first", questions: [] }); say("Not a git repository. Run `git init` first."); process.exit(1); }
   const d = detect();
   // A re-run on an initialised project is an update: keep the project's recorded answers, refresh the files, commit nothing.
-  if (printQuestions && fs.existsSync(".factory/manifest.json") && fs.existsSync("factory.config.json")) emit({ initialised: true, questions: [], next: "already initialised: run `status`, and `start` if the Controller is not running" });
-  if (fs.existsSync(".factory/manifest.json") && fs.existsSync("factory.config.json")) {
+  if (printQuestions && isAdopted()) emit({ initialised: true, questions: [], next: "already initialised: run `status`, and `start` if the Controller is not running" });
+  if (isAdopted()) {
     say("Already initialised (factory.config.json and .factory/manifest.json exist). Refreshing from the recorded answers; change answers by editing factory.config.json. Nothing is committed.");
     await initNonInteractiveRefresh();
     rl?.close();
@@ -127,9 +145,9 @@ async function init() {
     // Keyed by name plus a hash of the absolute path, so two projects with the same directory name never share a remote.
     fs.mkdirSync(path.dirname(bare), { recursive: true });
     const existed = fs.existsSync(bare);
-    if (!existed) spawnSync("git", ["init", "-q", "--bare", bare]);
-    spawnSync("git", ["remote", "add", "origin", bare]);
     const branch = sh("git", ["branch", "--show-current"]) || "main";
+    if (!existed) spawnSync("git", ["init", "-q", "--bare", "-b", branch, bare]);
+    spawnSync("git", ["remote", "add", "origin", bare]);
     // An empty repository (git init, no commit yet) has nothing to push; the adoption commit pushes with -u later. An
     // existing bare must then be empty too, or it is a leftover of another attempt with a different history.
     const foreign = () => { spawnSync("git", ["remote", "remove", "origin"]); say(`The existing local bare remote ${bare} holds a different history. Remove it (rm -rf "${bare}") or add your own remote (git remote add origin <url>), then run init again. origin was not kept.`); process.exit(1); };
@@ -142,6 +160,7 @@ async function init() {
   const c = JSON.parse(fs.readFileSync(path.join(ROOT, "factory.config.example.json"), "utf8"));
   delete c.$comment;
   c.factoryVersion = PKG.version;
+  if (flag("--untracked-standard")) c.footprint = "minimal";
   c.project.adoptedOn = process.env.FACTORY_TODAY ?? new Date().toISOString().slice(0, 10);
   c.project.name = await askText("project.name", "1. Project name (used for branches, worktrees, locks, the preview)?", d.name);
   c.project.repo = await askText("project.repo", "   Repository?", d.repo || `github.com/<owner>/${c.project.name}`);
@@ -235,7 +254,7 @@ async function init() {
   }
   // The hook mode is decided before rendering: the documents say which hooks enforce the gate.
   const setup = hooksSetup(), mode = hookMode(setup);
-  c.hooks = { mode, dir: setup.dir, hooksPath: setup.hooksPath, layout: setup.layout };
+  c.hooks = { mode, dir: setup.dir, hooksPath: minimal(c) ? STANDARD_HOOKS : setup.hooksPath, layout: setup.layout };
   const vars = templateVars(c);
   const write = (rel, content, mode) => {
     const target = path.join(cwd, rel);
@@ -251,16 +270,22 @@ async function init() {
   };
   say("\nWriting:");
   if (mode === "own") say(`  HOOKS: --keep-own-hooks: the project's hooks in ${setup.dir} stay as they are; the factory hooks are NOT installed. They must enforce the commit checks and the review gate on main themselves (hooks.mode = "own"). core.hooksPath is ${sh("git", ["config", "--local", "core.hooksPath"]) || "NOT set in this repository: the own hooks are not armed"}.`);
-  if (mode === "merge") {
+  if (mode === "merge" && minimal(c)) say(`  HOOKS: this repo has its own hooks in ${setup.dir}; they stay there unchanged and run first, called by the factory hook of the same name.`);
+  if (mode === "merge" && !minimal(c)) {
     say(`  HOOKS: this repo has its own hooks in ${setup.dir} (${ownHookFiles(setup).join(", ")}${setup.layout === "husky" ? "; husky layout, core.hooksPath stays " + setup.hooksPath : ""}); each becomes <hook>.own and runs first inside the factory hook of the same name (hooks.mode = "merge").`);
     for (const own of keepOwnHooks(setup)) { manifest.files[own] = hash(fs.readFileSync(own, "utf8")); say(`  keep   ${own} (the project's own hook)`); }
   }
   write("factory.config.json", JSON.stringify(c, null, 2) + "\n");
-  for (const rel of walk(path.join(ROOT, "templates"))) if (!skipTemplate(rel, mode)) write(templateTarget(rel, setup.dir), render(fs.readFileSync(path.join(ROOT, "templates", rel), "utf8"), vars), /\.githooks\/|tools\//.test(rel) ? 0o755 : undefined);
-  write("docs/dev-workflow.md", absolutizeDocLinks(render(fs.readFileSync(path.join(ROOT, "docs", c.project.language === "de" ? "de/workflow.md" : "workflow.md"), "utf8"), vars), c.project.language));
-  for (const rel of walk(path.join(ROOT, "skills"))) write(path.join(".agents/skills", rel), fs.readFileSync(path.join(ROOT, "skills", rel), "utf8"));
-  if (!fs.existsSync(".claude")) fs.mkdirSync(".claude");
-  if (!fs.existsSync(".claude/skills")) fs.symlinkSync("../.agents/skills", ".claude/skills");
+  if (minimal(c)) {
+    for (const rel of walk(path.join(ROOT, "templates"))) if (trackedInMinimal(rel)) write(templateTarget(rel, setup.dir), render(fs.readFileSync(path.join(ROOT, "templates", rel), "utf8"), vars));
+    renderStandard(c, vars);
+  } else {
+    for (const rel of walk(path.join(ROOT, "templates"))) if (!skipTemplate(rel, mode)) write(templateTarget(rel, setup.dir), render(fs.readFileSync(path.join(ROOT, "templates", rel), "utf8"), vars), /\.githooks\/|tools\//.test(rel) ? 0o755 : undefined);
+    write("docs/dev-workflow.md", absolutizeDocLinks(render(fs.readFileSync(path.join(ROOT, "docs", c.project.language === "de" ? "de/workflow.md" : "workflow.md"), "utf8"), vars), c.project.language));
+    for (const rel of walk(path.join(ROOT, "skills"))) write(path.join(".agents/skills", rel), fs.readFileSync(path.join(ROOT, "skills", rel), "utf8"));
+    if (!fs.existsSync(".claude")) fs.mkdirSync(".claude");
+    if (!fs.existsSync(".claude/skills")) fs.symlinkSync("../.agents/skills", ".claude/skills");
+  }
   // Bundles for the Controller host and the Front agent (copied by the human or by `doctor --install`).
   for (const rel of walk(path.join(ROOT, "controller"))) write(path.join(".factory/controller", rel), render(fs.readFileSync(path.join(ROOT, "controller", rel), "utf8"), vars), /gate$|\.sh$/.test(rel) ? 0o755 : undefined);
   write(".factory/controller/factory.config.json", JSON.stringify(c, null, 2) + "\n");
@@ -272,7 +297,7 @@ async function init() {
   fs.mkdirSync(".factory", { recursive: true });
   fs.writeFileSync(".factory/manifest.json", JSON.stringify(manifest, null, 2) + "\n");
   for (const dir of ["docs/reviews", "docs/reports", "docs/handoffs"]) { fs.mkdirSync(dir, { recursive: true }); if (!fs.existsSync(path.join(dir, ".gitkeep"))) fs.writeFileSync(path.join(dir, ".gitkeep"), ""); }
-  appendGitignore(IGNORES(fs.existsSync("package.json")));
+  if (!minimal(c)) appendGitignore(IGNORES(fs.existsSync("package.json")));
   // The adoption commit: only the files init wrote, committed with the ADR reference and pushed BEFORE the hooks are
   // armed, so origin/<main> carries AGENTS.md, the handbooks and the hooks for the first workers and the first wave.
   // A re-run on an initialised project is an update: no adoption commit (the hooks are armed; it could not be pushed).
@@ -280,20 +305,22 @@ async function init() {
   // commands.install derive from it and a worktree without it cannot install.
   const untrackedPkg = fs.existsSync("package.json") && spawnSync("git", ["ls-files", "--error-unmatch", "package.json"], { stdio: "ignore" }).status !== 0;
   if (!hadManifest && untrackedPkg) say("  add    package.json (untracked; the install command and the lockfile depend on it)");
-  const adopted = hadManifest ? "" : commitAdoption([...Object.keys(manifest.files), ...(lockfile ? [lockfile] : []), ...(untrackedPkg ? ["package.json"] : [])], c.project.mainBranch, vars.ADOPTION_ADR);
+  const adopted = hadManifest ? "" : commitAdoption([...Object.keys(manifest.files), ...(lockfile ? [lockfile] : []), ...(untrackedPkg ? ["package.json"] : [])], c.project.mainBranch, vars.ADOPTION_ADR, minimal(c));
+  // After the commit: from here on the standard is excluded, and the hooks are armed.
+  if (minimal(c)) installStandard();
   if (hadManifest) say("  already initialised: files refreshed, nothing committed (commit the changes yourself, or use `agentic-factory update`)");
   const untracked = sh("git", ["status", "--porcelain", "--untracked-files=all"]).split("\n").filter((l) => l.startsWith("??")).map((l) => l.slice(3));
   if (!hadManifest && untracked.length) say(`  NOTE: still untracked, not on origin: ${untracked.slice(0, 8).join(", ")}${untracked.length > 8 ? ` (+${untracked.length - 8})` : ""}. Commit your project files before the first task.`);
   // Arm the hooks where they live: .githooks for the factory layout, the project's own directory (e.g. husky) in merge
   // mode, nothing in own mode.
-  if (mode !== "own") sh("git", ["config", "core.hooksPath", c.hooks.hooksPath]);
+  if (mode !== "own" && !minimal(c)) sh("git", ["config", "core.hooksPath", c.hooks.hooksPath]);
   if (installNow) { say("\nUser-level skills:"); installSkills(); }
 
   // --- the human's checklist -----------------------------------------------------------------
   const remote = c.hosts.workers.find((h) => h.kind === "remote");
   const ctl = c.hosts.workers.find((h) => h.name === c.hosts.controller.host);
   const steps = [
-    adopted ? `Read docs/dev-workflow.md (the process) and AGENTS.md (the agents' rules). The adoption commit "Adopt agentic-factory (${vars.ADOPTION_ADR})" is on ${adopted}.${mode === "own" ? " Your own hooks stay in force; the factory hooks were not installed." : ` From now on protected files need an ADR reference in the commit message; try a commit without one to see the hook speak. A new or proposed ADR is committed by citing ${vars.ADOPTION_ADR} in the message; once accepted, cite the ADR itself.`}` : `Read docs/dev-workflow.md (the process) and AGENTS.md (the agents' rules). Commit the new files with a message that references the adoption ADR, e.g. \`git commit -m "Adopt agentic-factory (${vars.ADOPTION_ADR})"\`, and push to origin so workers and waves see them.`,
+    adopted ? `Read docs/dev-workflow.md (the process) and ${minimal(c) ? "AGENTS.factory.md" : "AGENTS.md"} (the agents' rules). The adoption commit "Adopt agentic-factory (${vars.ADOPTION_ADR})" is on ${adopted}.${mode === "own" ? " Your own hooks stay in force; the factory hooks were not installed." : ` From now on protected files need an ADR reference in the commit message; try a commit without one to see the hook speak. A new or proposed ADR is committed by citing ${vars.ADOPTION_ADR} in the message; once accepted, cite the ADR itself.`}` : `Read docs/dev-workflow.md (the process) and ${minimal(c) ? "AGENTS.factory.md" : "AGENTS.md"} (the agents' rules). Commit the new files with a message that references the adoption ADR, e.g. \`git commit -m "Adopt agentic-factory (${vars.ADOPTION_ADR})"\`, and push to origin so workers and waves see them.`,
     remote && `Set up ${remote.name}: copy .factory/server/ there and follow docs/server-setup.md in the factory repo. Logins (gh, ${c.agents.default}, tailscale${c.agents.runner === "orca" ? ", Orca pairing" : ""}) are yours. Then put its Orca repo id into factory.config.json → hosts.workers[].orcaRepoId and run \`agentic-factory update\` to refresh the bundles.`,
     c.agents.runner === "orca" && !orcaRunning && `Orca: ${d.tools.orca ? `start it (\`${ORCA_BIN} open --json\`) and register the repo (\`${ORCA_BIN} repo add --path <repo> --json\`, id into hosts.workers[].orcaRepoId)` : "install it (https://github.com/stablyai/orca), then register the repo and put its id into hosts.workers[].orcaRepoId"}; the Orca skills load their guide from the binary (\`${ORCA_BIN} skills get orchestration\`).`,
     `Start the machine: \`agentic-factory start\` installs the user-level skills${remote ? ` (here and on ${ctl.kind === "remote" ? ctl.name : "the Controller's host"})` : ""}, copies the Front agent bundle to ~/front-agent/${c.project.name} and the Controller bundle to ${ctl.kind === "local" ? "" : `${ctl.name}:`}${c.hosts.controller.controllerDir ?? "~/controller"}, installs the gate, starts the load log and the Controller's session in an Orca terminal. The Front agent runs it for you; \`agentic-factory status\` shows the phase.`,
@@ -317,7 +344,17 @@ function templateVars(c) {
     ...architectureVars(c),
     HOOKS_DIR: c.hooks?.dir ?? ".githooks",
     HOOKS_PATH: c.hooks?.hooksPath ?? ".githooks",
-    HOOK_ENFORCEMENT: (c.hooks?.mode ?? "factory") === "own"
+    PROCESS_DOCS: minimal(c) ? "`docs/process-decisions.md` (the project's own record; create it with the first decision, the handbooks are generated)" : "`docs/coordinator.md` and `docs/dev-workflow.md`",
+    PROCESS_READ: minimal(c) ? " Also `docs/process-decisions.md` if it exists: this project's own decisions, which win over the generated handbooks." : "",
+    READ_FIRST_EXTRA: minimal(c) ? " The project's own decisions are in `docs/process-decisions.md`, its own rules in `AGENTS.md`, if they exist. They win over this file." : "",
+    RETRO_DOCS: minimal(c) ? "`docs/process-decisions.md`, a tracked deviation from a generated file (`agentic-factory deviate <path>`), `CODING_STANDARDS.md` once it deviates, or the project's `AGENTS.md` through an accepted ADR" : "`docs/coordinator.md`, `docs/review-protocol.md`, `CODING_STANDARDS.md`, or `AGENTS.md` through an accepted ADR",
+    AGENTS_READ: minimal(c) ? "AGENTS.factory.md, the project's AGENTS.md if it has one" : "AGENTS.md",
+    COORDINATOR_UPDATES: minimal(c) ? "`docs/process-decisions.md`" : "this handbook and `docs/dev-workflow.md`",
+    WORKFLOW_SYNC: minimal(c) ? "The handbooks are generated: a decision for this project goes into `docs/process-decisions.md`, a changed rule into a deviation (`agentic-factory deviate <path>`)." : "Whenever a rule here, in `AGENTS.md`, `docs/review-protocol.md` or `docs/architect-protocol.md` changes, update it in the same change.",
+    RULES_FILE: minimal(c) ? "`AGENTS.factory.md`" : "`AGENTS.md`",
+    AGENTS_FACTORY_PROTECTED: minimal(c) ? ", `AGENTS.factory.md`" : "",
+    SPEC_STANDARD_NOTE: minimal(c) ? " Binding: AGENTS.factory.md (the factory's rules) and the project's AGENTS.md if it has one. Files generated by the factory are read-only links outside the project's history: read them, never edit them, never force-add them." : "",
+    HOOK_ENFORCEMENT: minimal(c) ? `Enforced by the factory hooks installed in this clone (\`.git/hooks\`, by \`agentic-factory start\`)${(c.hooks?.mode ?? "factory") === "merge" ? `; the project's own hooks in \`${c.hooks.dir}\` run first` : ""}. \`pre-push\` checks every update of \`${c.project.mainBranch}\`.` : (c.hooks?.mode ?? "factory") === "own"
       ? `**hooks.mode = own:** this project keeps its own hooks in \`${c.hooks?.dir ?? c.hooks?.ownDir ?? ".githooks"}\`; they, not the factory's, must enforce the commit checks and the review gate on \`${c.project.mainBranch}\`. The factory does not verify them. The project's own \`pre-push\` must implement the rule below for every update of \`${c.project.mainBranch}\`.`
       : `Enforced by the factory hooks in \`${c.hooks?.dir ?? ".githooks"}/\` (\`tools/factory-guardrails.mjs\`)${(c.hooks?.mode ?? "factory") === "merge" ? "; the project's own hooks run first as `<hook>.own` next to them" : ""}. With the hooks armed (\`core.hooksPath=${c.hooks?.hooksPath ?? ".githooks"}\`), \`pre-push\` checks every update of \`${c.project.mainBranch}\`.`,
     VERIFY: c.commands.verify || "the verify command", E2E: c.commands.e2e || "the browser suite", RELEASE: (c.commands.release ?? []).join(" && ") || "the release gates",
@@ -343,6 +380,124 @@ function templateVars(c) {
     // Project-specific Controller rules live in the project (docs/controller-rules.md) and are rendered into CONTROLLER.md.
     PROJECT_RULES: fs.existsSync("docs/controller-rules.md") ? fs.readFileSync("docs/controller-rules.md", "utf8").trim() : "_None yet. Put project-specific hard rules, data boundaries, known flakes and decision pointers into `docs/controller-rules.md`; `agentic-factory update` renders them here._",
   };
+}
+// The untracked standard: footprint "minimal" in factory.config.json. Everything a project has not changed lives in the
+// clone's .git/factory, never in its history, and reaches each worktree as a link (standard/arm.mjs). A file the project
+// tracks at the same path is its deviation and wins, so what is checked in is exactly what is individual.
+const minimal = (c) => c?.footprint === "minimal";
+const STANDARD_HOOKS = ".git/hooks";
+// A project's own record of the work. Tickets, reviews and debt move out with the companion repo, not here.
+const trackedInMinimal = (rel) => rel === "docs/debt.md" || /^docs\/adr\/0001-/.test(rel);
+const HANDBOOK = /^(docs\/(coordinator|review-protocol|architect-protocol|dev-workflow)\.md|AGENTS\.factory\.md|CODING_STANDARDS\.md)$/;
+const PASSED_THROUGH_HOOKS = ["applypatch-msg", "pre-applypatch", "post-applypatch", "prepare-commit-msg", "post-commit", "pre-rebase", "post-merge", "post-rewrite", "pre-auto-gc", "post-index-change", "reference-transaction", "sendemail-validate"];
+const GENERATED_HEADER = /^> Generated by agentic-factory[^\n]*\n\n/;
+// Every path the standard links into a worktree.
+const standardPaths = () => [
+  ...walk(path.join(ROOT, "templates")).filter((rel) => !trackedInMinimal(rel) && !/^\.githooks\//.test(rel) && rel !== "tools/factory-guardrails.mjs").map((rel) => (rel === "AGENTS.md" ? "AGENTS.factory.md" : rel)),
+  "docs/dev-workflow.md",
+  ...walkDirs(path.join(ROOT, "skills")).flatMap((s) => [`.agents/skills/${s}`, `.claude/skills/${s}`]),
+];
+function renderStandard(c, vars) {
+  const out = path.join(cwd, ".factory/standard");
+  fs.rmSync(out, { recursive: true, force: true });
+  const put = (rel, content, mode) => { const p = path.join(out, rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, content); fs.chmodSync(p, mode); };
+  const links = [];
+  const generated = (target, content) => { put(`files/${target}`, (HANDBOOK.test(target) ? `> Generated by agentic-factory ${PKG.version}. Read-only, not in this project's history. Project decisions go into \`docs/process-decisions.md\`. To change this file for this project only: \`agentic-factory deviate ${target}\`.\n\n` : "") + (target === "AGENTS.factory.md" ? content : content.replaceAll("`AGENTS.md`", "`AGENTS.factory.md` and the project's `AGENTS.md`, if it has one")), 0o444); links.push({ path: target, target: `files/${target}` }); };
+  // A hooks directory that is git's own would make each hook call itself. /dev/null/<hook> never exists.
+  const own = /^\.git(\/|$)/.test(c.hooks.dir) || path.resolve(cwd, c.hooks.dir) === path.join(gitCommonDir(), "hooks") ? "/dev/null" : c.hooks.dir;
+  // The factory's hook also calls the project's tracked one where it is, and finds the guardrails next to itself.
+  const hook = (text) => text.replace(/^if \[ -x "\$d\/([a-z-]+)\.own" \]; then "\$d\/[a-z-]+\.own"(.*)$/gm, (line, h, rest) => `${line}\nif [ -x "${own}/${h}" ]; then "${own}/${h}"${rest}`).replaceAll("node tools/factory-guardrails.mjs", 'node "$d/factory-guardrails.mjs"');
+  // Git only runs what is in the hooks directory, so every other hook a project may have needs a way through.
+  for (const h of [...PASSED_THROUGH_HOOKS, ...(fs.existsSync(path.join(own, "push-to-checkout")) ? ["push-to-checkout"] : [])]) put(`hooks/${h}`, `#!/bin/sh
+${HOOK_MARKER} (${h}): runs the project's own, if any. Both get the same stdin.
+d=$(dirname "$0")
+a="$d/${h}.own"; b="${own}/${h}"
+if [ -x "$a" ] && [ -x "$b" ]; then in=$(mktemp); trap 'rm -f "$in"' EXIT; cat > "$in"; "$a" "$@" < "$in" || exit $?; "$b" "$@" < "$in" || exit $?; exit 0; fi
+if [ -x "$a" ]; then exec "$a" "$@"; fi
+if [ -x "$b" ]; then exec "$b" "$@"; fi
+exit 0
+`, 0o755);
+  for (const rel of walk(path.join(ROOT, "templates"))) {
+    if (trackedInMinimal(rel)) continue;
+    const text = render(fs.readFileSync(path.join(ROOT, "templates", rel), "utf8"), vars);
+    if (/^\.githooks\//.test(rel)) put(`hooks/${path.basename(rel)}`, hook(text), 0o755);
+    else if (rel === "tools/factory-guardrails.mjs") put("hooks/factory-guardrails.mjs", text, 0o644);
+    else generated(rel === "AGENTS.md" ? "AGENTS.factory.md" : rel, text);
+  }
+  generated("docs/dev-workflow.md", absolutizeDocLinks(render(fs.readFileSync(path.join(ROOT, "docs", c.project.language === "de" ? "de/workflow.md" : "workflow.md"), "utf8"), vars), c.project.language));
+  put("hooks/post-checkout", fs.readFileSync(path.join(ROOT, "standard/post-checkout"), "utf8").replaceAll("{{OWN_HOOKS_DIR}}", own), 0o755);
+  put("arm.mjs", fs.readFileSync(path.join(ROOT, "standard/arm.mjs"), "utf8"), 0o644);
+  for (const s of walkDirs(path.join(ROOT, "skills"))) {
+    fs.cpSync(path.join(ROOT, "skills", s), path.join(out, "skills", s), { recursive: true });
+    links.push({ path: `.agents/skills/${s}`, target: `skills/${s}` }, { path: `.claude/skills/${s}`, target: `../../.agents/skills/${s}`, relative: true });
+  }
+  put("standard.json", JSON.stringify({ factoryVersion: PKG.version, ignores: ["/.factory/", "/.build/", "/.scratch/", ".env", ".env.*", "!.env.example", ...(fs.existsSync("package.json") ? ["node_modules/"] : [])], links }, null, 2) + "\n", 0o644);
+}
+function installStandardOnRemotes(c) {
+  let failed = 0;
+  for (const h of c.hosts.workers.filter((h) => h.kind === "remote")) { const problem = installStandardOn(h, c); if (problem) { failed++; say(`  ${h.name}: ${problem}. Its clone keeps the older standard until this works.`); } else say(`  ${h.name}: standard installed, hooks armed`); }
+  return failed;
+}
+// What git would really run, checked by the same code the wave relies on.
+const checkHooks = () => { const arm = path.join(gitCommonDir(), "factory/arm.mjs"); if (!fs.existsSync(arm)) return "the factory's standard is not installed in this clone"; const r = spawnSync("node", [arm, "--check"], { encoding: "utf8" }); return r.status === 0 ? "" : (r.stderr || "the check failed").trim().split("\n").pop(); };
+const gitCommonDir = () => fs.realpathSync(sh("git", ["rev-parse", "--git-common-dir"]));
+function installStandard() {
+  const dest = path.join(gitCommonDir(), "factory"), next = `${dest}.new.${process.pid}`, old = `${dest}.old.${process.pid}`;
+  try {
+    fs.cpSync(path.join(cwd, ".factory/standard"), next, { recursive: true });
+    if (fs.existsSync(dest)) fs.renameSync(dest, old);
+    fs.renameSync(next, dest);
+    fs.rmSync(old, { recursive: true, force: true });
+  } catch (error) {
+    fs.rmSync(next, { recursive: true, force: true });
+    if (!fs.existsSync(dest) && fs.existsSync(old)) fs.renameSync(old, dest);
+    say(`Standard: could not replace it (${error.code ?? error.message}). Is another update or start running here? Run this again.`);
+    process.exitCode = 1;
+    return false;
+  }
+  const r = spawnSync("node", [path.join(dest, "arm.mjs"), "--all"], { encoding: "utf8" });
+  if (r.status !== 0) { say(`Standard: ${(r.stderr || "arming failed").trim().split("\n").pop()}`); process.exitCode = 1; return false; }
+  if (r.stderr.trim()) say(r.stderr.trim());
+  say("  standard installed in .git/factory, hooks armed, linked into every worktree of this clone");
+  return true;
+}
+// Another host's clone: same files, armed there. Git hooks there run under the same login shell the workers use.
+function installStandardOn(h, c) {
+  const dir = h.projectDir ?? `${h.projectsDir}/${c.project.name}`;
+  const clone = spawnSync("ssh", [...sshArgsFor(h), `test -d ${dir}/.git`], { encoding: "utf8", timeout: 60000 });
+  if (clone.status !== 0) return `no clone at ${dir}, or the host cannot be reached`;
+  const copy = spawnSync("rsync", ["-a", "--delete", "-e", `ssh ${sshArgsFor(h).slice(0, -1).map((a) => JSON.stringify(a)).join(" ")}`, ".factory/standard/", `${h.ssh}:${dir}/.git/factory/`], { encoding: "utf8" });
+  if (copy.status !== 0) return `copy failed: ${(copy.stderr || "").trim().slice(0, 200)}`;
+  const arm = spawnSync("ssh", [...sshArgsFor(h), `bash -lc 'cd ${dir} && node .git/factory/arm.mjs --all'`], { encoding: "utf8" });
+  return arm.status === 0 ? "" : `${(arm.stderr || "arming failed").trim().split("\n").pop().slice(0, 200)}`;
+}
+// Makes a generated file the project's own: a real file at the same path, staged. From then on it wins over the standard.
+function deviate() {
+  const top = sh("git", ["rev-parse", "--show-toplevel"]);
+  if (top) process.chdir(top);
+  const c = readConfig(), rel = args[1];
+  if (!minimal(c)) { say("deviate needs footprint \"minimal\" in factory.config.json: in this project the standard is tracked, so just edit the file."); process.exit(1); }
+  const manifest = path.join(gitCommonDir(), "factory/standard.json");
+  if (!fs.existsSync(manifest)) { say("The factory's standard is not installed in this clone. Run `agentic-factory start` first."); process.exit(1); }
+  const standard = JSON.parse(fs.readFileSync(manifest, "utf8"));
+  if (!standard.links.some((l) => l.path === rel)) { say(`${rel ?? "(no path)"} is not part of the standard. Usage: agentic-factory deviate <path>, for example docs/review-protocol.md`); process.exit(1); }
+  const p = path.join(sh("git", ["rev-parse", "--show-toplevel"]), rel);
+  if (!fs.existsSync(p)) { say(`${rel} is missing in this worktree. Run \`agentic-factory start\` first.`); process.exit(1); }
+  if (!fs.lstatSync(p).isSymbolicLink()) {
+    if (sh("git", ["ls-files", "--", rel])) { say(`${rel} already deviates.`); return; }
+    // A real file that git does not track: excluded, so nothing shows it, and a merge could overwrite it.
+    const forced = spawnSync("git", ["add", "-f", "--", p], { encoding: "utf8" });
+    if (forced.status !== 0) { say(`git add failed: ${(forced.stderr || "").trim().slice(0, 200)}`); process.exit(1); }
+    say(`${rel} was untracked and is now staged as this project's own. Commit it.`);
+    return;
+  }
+  const real = fs.realpathSync(p);
+  fs.unlinkSync(p);
+  fs.cpSync(real, p, { recursive: true });
+  if (fs.statSync(p).isFile()) { fs.chmodSync(p, 0o644); fs.writeFileSync(p, fs.readFileSync(p, "utf8").replace(GENERATED_HEADER, "")); }
+  const added = spawnSync("git", ["add", "-f", "--", p], { encoding: "utf8" });
+  if (added.status !== 0) { say(`git add failed: ${(added.stderr || "").trim().slice(0, 200)}`); process.exit(1); }
+  say(`${rel} is now this project's own and staged. Change it and commit. Later factory versions no longer update it; \`doctor\` lists it.`);
 }
 const render = (text, vars) => text.replace(/\{\{([A-Z0-9_]+)\}\}/g, (m, k) => (k in vars ? vars[k] : m));
 // Templates that an existing project may already have in its own form: the adoption ADR is skipped when the project
@@ -427,8 +582,8 @@ function keepOwnHooks(setup) {
 // The workflow guide copied into a project links to sibling docs that are not copied; point those links at the factory repo.
 const FACTORY_DOCS_URL = "https://github.com/bussard76/agentic-factory/blob/main/docs";
 const absolutizeDocLinks = (text, lang) => text.replace(/\]\((\.\.\/)?([a-z-]+\.md)(#[^)]*)?\)/g, (m, up, f, hash) => `](${FACTORY_DOCS_URL}/${up || lang === "en" ? "" : "de/"}${f}${hash ?? ""})`);
-function commitAdoption(files, branch, adr = "ADR-0001") {
-  const r = spawnSync("git", ["add", "--", ".gitignore", ".factory/manifest.json", ".claude", "docs/reviews/.gitkeep", "docs/reports/.gitkeep", "docs/handoffs/.gitkeep", ...files.filter((f) => !f.startsWith(".factory/") && fs.existsSync(f))], { encoding: "utf8" });
+function commitAdoption(files, branch, adr = "ADR-0001", untrackedStandard = false) {
+  const r = spawnSync("git", ["add", "--", ...(untrackedStandard ? [] : [".gitignore", ".factory/manifest.json", ".claude"]), "docs/reviews/.gitkeep", "docs/reports/.gitkeep", "docs/handoffs/.gitkeep", ...files.filter((f) => !f.startsWith(".factory/") && fs.existsSync(f))], { encoding: "utf8" });
   if (r.status !== 0) { say(`  adoption commit not made: git add failed: ${(r.stderr || "").trim().slice(0, 200)}`); return ""; }
   if (spawnSync("git", ["diff", "--cached", "--quiet"]).status === 0) return "";
   // Hooks may already be armed (a repo with its own hooks, or core.hooksPath set earlier): this one commit and push
@@ -482,7 +637,7 @@ async function initNonInteractiveRefresh() {
     fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, content); if (mode) fs.chmodSync(target, mode); manifest.files[rel] = hash(content); written++; say(`  update ${rel}`);
   };
   const mode = c.hooks.mode, hdir = c.hooks.dir;
-  if (mode === "merge") {
+  if (mode === "merge" && !minimal(c)) {
     // A project merged by an older factory still has the appended lines in pre-commit: split the own part out and let
     // the template replace the file (the appended file was a factory product, so it joins the manifest).
     const pc = path.join(hdir, "pre-commit");
@@ -493,9 +648,12 @@ async function initNonInteractiveRefresh() {
     // Own hooks that appeared since (or were never merged): keep them as .own so the templates can take their place.
     for (const own of keepOwnHooks({ dir: hdir })) { manifest.files[own] = hash(fs.readFileSync(own, "utf8")); say(`  keep   ${own} (the project's own hook)`); }
   }
-  for (const rel of walk(path.join(ROOT, "templates"))) if (!skipTemplate(rel, mode)) write(templateTarget(rel, hdir), render(fs.readFileSync(path.join(ROOT, "templates", rel), "utf8"), vars), /\.githooks\/|tools\//.test(rel) ? 0o755 : undefined);
-  write("docs/dev-workflow.md", absolutizeDocLinks(render(fs.readFileSync(path.join(ROOT, "docs", c.project.language === "de" ? "de/workflow.md" : "workflow.md"), "utf8"), vars), c.project.language));
-  for (const rel of walk(path.join(ROOT, "skills"))) write(path.join(".agents/skills", rel), fs.readFileSync(path.join(ROOT, "skills", rel), "utf8"));
+  if (minimal(c)) renderStandard(c, vars);
+  else {
+    for (const rel of walk(path.join(ROOT, "templates"))) if (!skipTemplate(rel, mode)) write(templateTarget(rel, hdir), render(fs.readFileSync(path.join(ROOT, "templates", rel), "utf8"), vars), /\.githooks\/|tools\//.test(rel) ? 0o755 : undefined);
+    write("docs/dev-workflow.md", absolutizeDocLinks(render(fs.readFileSync(path.join(ROOT, "docs", c.project.language === "de" ? "de/workflow.md" : "workflow.md"), "utf8"), vars), c.project.language));
+    for (const rel of walk(path.join(ROOT, "skills"))) write(path.join(".agents/skills", rel), fs.readFileSync(path.join(ROOT, "skills", rel), "utf8"));
+  }
   for (const rel of walk(path.join(ROOT, "controller"))) write(path.join(".factory/controller", rel), render(fs.readFileSync(path.join(ROOT, "controller", rel), "utf8"), vars), /gate$|\.sh$/.test(rel) ? 0o755 : undefined);
   write(".factory/controller/factory.config.json", JSON.stringify(c, null, 2) + "\n");
   for (const s of USER_SKILLS) for (const rel of walk(path.join(ROOT, "skills", s))) write(path.join(".factory/controller/skills", s, rel), fs.readFileSync(path.join(ROOT, "skills", s, rel), "utf8"));
@@ -504,10 +662,11 @@ async function initNonInteractiveRefresh() {
   for (const rel of walk(path.join(ROOT, "server"))) write(path.join(".factory/server", rel), fs.readFileSync(path.join(ROOT, "server", rel), "utf8"), /\.sh$/.test(rel) ? 0o755 : undefined);
   manifest.factoryVersion = PKG.version;
   fs.writeFileSync(".factory/manifest.json", JSON.stringify(manifest, null, 2) + "\n");
-  appendGitignore(IGNORES(fs.existsSync("package.json")));   // projects initialised by an older factory get the current ignore list
+  if (minimal(c)) { installStandard(); if (installStandardOnRemotes(c)) process.exitCode = 1; }
+  else appendGitignore(IGNORES(fs.existsSync("package.json")));   // projects initialised by an older factory get the current ignore list
   // Every checkout of an adopted project (a fresh clone, the server checkout the waves push from) must arm the hooks:
   // core.hooksPath is per clone, not committed. own mode keeps its own setting.
-  if (mode !== "own" && fs.existsSync(path.join(hdir, "pre-commit"))) sh("git", ["config", "core.hooksPath", c.hooks.hooksPath]);
+  if (!minimal(c) && mode !== "own" && fs.existsSync(path.join(hdir, "pre-commit"))) sh("git", ["config", "core.hooksPath", c.hooks.hooksPath]);
   say(`${written} updated, ${kept} kept (locally changed). Review .factory/new/ and merge what you want.`);
 }
 
@@ -518,24 +677,8 @@ function doctor() {
   const major = Number(process.versions.node.split(".")[0]); major >= 22 ? ok(`node ${process.versions.node}`) : bad(`node >= 22 (have ${process.versions.node})`);
   if (!fs.existsSync("factory.config.json")) { bad("factory.config.json (run init)"); process.exit(1); }
   const c = JSON.parse(fs.readFileSync("factory.config.json", "utf8")); ok(`factory.config.json (project ${c.project.name}, factory ${c.factoryVersion})`);
-  const hmode = c.hooks?.mode ?? "factory", hdir = c.hooks?.dir ?? c.hooks?.ownDir ?? ".githooks", wantPath = c.hooks?.hooksPath ?? (hmode === "own" ? sh("git", ["config", "core.hooksPath"]) : ".githooks");
-  const exe = (f) => fs.existsSync(f) && (fs.statSync(f).mode & 0o111);
-  if (hmode === "own") {
-    const cur = sh("git", ["config", "core.hooksPath"]);
-    cur && cur === (c.hooks?.hooksPath || cur) ? ok(`core.hooksPath=${cur} (own hooks armed)`) : bad(`core.hooksPath=${c.hooks?.hooksPath || hdir}: the own hooks are NOT armed (git config core.hooksPath ${c.hooks?.hooksPath || hdir})`);
-    for (const h of ["pre-commit", "pre-push"]) exe(`${hdir}/${h}`) ? ok(`own hook ${hdir}/${h}`) : bad(`own hook ${hdir}/${h} executable`);
-    info("hooks.mode = own: the project's own hooks must enforce the review gate; the factory guardrails are not installed and not verified");
-  } else {
-    sh("git", ["config", "core.hooksPath"]) === wantPath ? ok(`core.hooksPath=${wantPath}`) : bad(`core.hooksPath=${wantPath} (git config core.hooksPath ${wantPath})`);
-    fs.existsSync("tools/factory-guardrails.mjs") ? ok("tools/factory-guardrails.mjs") : bad("tools/factory-guardrails.mjs");
-    // Every gate must be present AND wired: pre-commit (checks), commit-msg (protected files), pre-push (review gate).
-    for (const h of ["pre-commit", "commit-msg", "pre-push"]) exe(`${hdir}/${h}`) && fs.readFileSync(`${hdir}/${h}`, "utf8").includes("factory-guardrails") ? ok(`hook ${hdir}/${h} wired (${hmode})`) : bad(`hook ${hdir}/${h} executable and calling tools/factory-guardrails.mjs`);
-    for (const h of HOOK_NAMES) if (fs.existsSync(`${hdir}/${h}.own`)) !exe(`${hdir}/${h}.own`) ? bad(`${hdir}/${h}.own executable`) : isFactoryHook(`${hdir}/${h}.own`) ? bad(`${hdir}/${h}.own is a factory hook mistaken for an own one; delete it`) : ok(`own hook kept as ${hdir}/${h}.own`);
-    // The directory core.hooksPath points to must exist: husky's .husky/_ is generated by the install and is absent in a fresh clone or worktree.
-    if (!fs.existsSync(wantPath)) bad(`hooks directory ${wantPath} missing${c.hooks?.layout === "husky" ? ` (husky generates it: run \`${c.commands?.install ?? "the install command"}\`)` : ""}: no hook runs here`);
-  }
-  for (const f of ["AGENTS.md", "docs/coordinator.md", "docs/dev-workflow.md", "docs/review-protocol.md", "docs/architect-protocol.md", "docs/debt.md"]) fs.existsSync(f) ? ok(f) : bad(f);
-  fs.existsSync(".agents/skills/ponytail/SKILL.md") ? ok(".agents/skills") : bad(".agents/skills");
+  if (minimal(c)) doctorStandard(ok, bad, info);
+  else doctorTracked(c, ok, bad, info);
   for (const t of [c.agents.default, c.agents.fallback?.agent].filter(Boolean)) has(t) ? ok(`${t} CLI`) : info(`${t} CLI not on this machine`);
   if (c.agents.runner === "orca") has("orca") || has("orca-ide") ? ok("orca CLI") : bad("orca CLI (runner is orca)");
   // User-level skills: the Controller and Front agent sessions run outside the repo and need these on their host.
@@ -559,6 +702,47 @@ function doctor() {
   }
   if (c.hosts.frontAgent.preview.enabled) { const r = spawnSync("curl", ["-s", "-m", "2", "-o", "/dev/null", "-w", "%{http_code}", `http://localhost:${c.hosts.frontAgent.preview.port}/`], { encoding: "utf8" }); /^[23]/.test(r.stdout) ? ok(`preview answers on ${c.hosts.frontAgent.preview.port}`) : info(`preview not running on ${c.hosts.frontAgent.preview.port}`); }
   process.exit(fail ? 1 : 0);
+}
+
+function doctorTracked(c, ok, bad, info) {
+  const hmode = c.hooks?.mode ?? "factory", hdir = c.hooks?.dir ?? c.hooks?.ownDir ?? ".githooks", wantPath = c.hooks?.hooksPath ?? (hmode === "own" ? sh("git", ["config", "core.hooksPath"]) : ".githooks");
+  const exe = (f) => fs.existsSync(f) && (fs.statSync(f).mode & 0o111);
+  if (hmode === "own") {
+    const cur = sh("git", ["config", "core.hooksPath"]);
+    cur && cur === (c.hooks?.hooksPath || cur) ? ok(`core.hooksPath=${cur} (own hooks armed)`) : bad(`core.hooksPath=${c.hooks?.hooksPath || hdir}: the own hooks are NOT armed (git config core.hooksPath ${c.hooks?.hooksPath || hdir})`);
+    for (const h of ["pre-commit", "pre-push"]) exe(`${hdir}/${h}`) ? ok(`own hook ${hdir}/${h}`) : bad(`own hook ${hdir}/${h} executable`);
+    info("hooks.mode = own: the project's own hooks must enforce the review gate; the factory guardrails are not installed and not verified");
+  } else {
+    sh("git", ["config", "core.hooksPath"]) === wantPath ? ok(`core.hooksPath=${wantPath}`) : bad(`core.hooksPath=${wantPath} (git config core.hooksPath ${wantPath})`);
+    fs.existsSync("tools/factory-guardrails.mjs") ? ok("tools/factory-guardrails.mjs") : bad("tools/factory-guardrails.mjs");
+    // Every gate must be present AND wired: pre-commit (checks), commit-msg (protected files), pre-push (review gate).
+    for (const h of ["pre-commit", "commit-msg", "pre-push"]) exe(`${hdir}/${h}`) && fs.readFileSync(`${hdir}/${h}`, "utf8").includes("factory-guardrails") ? ok(`hook ${hdir}/${h} wired (${hmode})`) : bad(`hook ${hdir}/${h} executable and calling tools/factory-guardrails.mjs`);
+    for (const h of HOOK_NAMES) if (fs.existsSync(`${hdir}/${h}.own`)) !exe(`${hdir}/${h}.own`) ? bad(`${hdir}/${h}.own executable`) : isFactoryHook(`${hdir}/${h}.own`) ? bad(`${hdir}/${h}.own is a factory hook mistaken for an own one; delete it`) : ok(`own hook kept as ${hdir}/${h}.own`);
+    // The directory core.hooksPath points to must exist: husky's .husky/_ is generated by the install and is absent in a fresh clone or worktree.
+    if (!fs.existsSync(wantPath)) bad(`hooks directory ${wantPath} missing${c.hooks?.layout === "husky" ? ` (husky generates it: run \`${c.commands?.install ?? "the install command"}\`)` : ""}: no hook runs here`);
+  }
+  for (const f of ["AGENTS.md", "docs/coordinator.md", "docs/dev-workflow.md", "docs/review-protocol.md", "docs/architect-protocol.md", "docs/debt.md"]) fs.existsSync(f) ? ok(f) : bad(f);
+  fs.existsSync(".agents/skills/ponytail/SKILL.md") ? ok(".agents/skills") : bad(".agents/skills");
+}
+// The standard in this clone: armed, linked here, and which files deviate from it.
+function doctorStandard(ok, bad, info) {
+  const dir = path.join(gitCommonDir(), "factory");
+  if (!fs.existsSync(path.join(dir, "standard.json"))) { bad("the factory's standard in this clone (a fresh clone: run `agentic-factory start`)"); return; }
+  const hooksProblem = checkHooks();
+  hooksProblem ? bad(`hooks NOT armed, so no review gate here: ${hooksProblem}`) : ok("hooks armed");
+  const standard = JSON.parse(fs.readFileSync(path.join(dir, "standard.json"), "utf8"));
+  standard.factoryVersion === PKG.version ? ok(`standard of factory ${standard.factoryVersion} in .git/factory`) : info(`standard of factory ${standard.factoryVersion} in .git/factory, this factory is ${PKG.version}: run update`);
+  const root = sh("git", ["rev-parse", "--show-toplevel"]);
+  const missing = standard.links.filter((l) => !fs.existsSync(path.join(root, l.path)));
+  missing.length ? bad(`${missing.length} links missing in this worktree, first ${missing[0].path}: node ${path.join(dir, "arm.mjs")}`) : ok("standard linked in this worktree");
+  const tracked = new Set(sh("git", ["ls-files"]).split("\n"));
+  for (const l of standard.links) {
+    if (tracked.has(l.path) || [...tracked].some((t) => t.startsWith(`${l.path}/`))) info(`deviates from the standard: ${l.path}`);
+    else if (fs.existsSync(path.join(root, l.path)) && !fs.lstatSync(path.join(root, l.path)).isSymbolicLink()) info(`${l.path} is a file of its own but not tracked: git status hides it and a wave's clean deletes it. Commit it with git add -f, or remove it`);
+  }
+  // A new file in a deviating skill stays excluded: it would never be committed, and a wave's clean deletes it.
+  for (const f of sh("git", ["ls-files", "-oi", "--exclude-standard", "--", ".agents/skills", ".claude/skills"]).split("\n").filter(Boolean)) if (!fs.lstatSync(f).isSymbolicLink() && !f.includes("/.git/")) info(`${f} is new in a deviating skill and not tracked: git add -f it`);
+  for (const f of ["docs/debt.md"]) fs.existsSync(f) ? ok(f) : bad(f);
 }
 
 // --- install-skills ---------------------------------------------------------------------------------
@@ -587,7 +771,7 @@ const walkDirs = (dir) => fs.readdirSync(dir, { withFileTypes: true }).filter((e
 // --- selfcheck (for the factory repo itself) ------------------------------------------------------
 function selfcheck() {
   let fail = 0;
-  for (const root of ["controller", "front-agent", "templates", "bin", "server"]) for (const rel of walk(path.join(ROOT, root))) {
+  for (const root of ["controller", "front-agent", "templates", "bin", "server", "standard"]) for (const rel of walk(path.join(ROOT, root))) {
     const full = path.join(ROOT, root, rel);
     if (/\.mjs$/.test(full)) { const r = spawnSync("node", ["--check", full]); if (r.status !== 0) { say(`SYNTAX ${full}`); fail++; } }
     if (/\.sh$|\/gate$|\.githooks\//.test(full)) { const r = spawnSync("bash", ["-n", full]); if (r.status !== 0) { say(`SYNTAX ${full}`); fail++; } }
@@ -603,6 +787,7 @@ function selfcheck() {
 
 // --- status and start: the Front agent's view and its one-command setup ----------------------------
 const readConfig = () => (fs.existsSync("factory.config.json") ? JSON.parse(fs.readFileSync("factory.config.json", "utf8")) : null);
+const isAdopted = () => fs.existsSync("factory.config.json") && (fs.existsSync(".factory/manifest.json") || minimal(readConfig()));
 const expandHome = (p) => String(p ?? "").replace(/^~(?=\/|$)/, os.homedir());
 const sshArgsFor = (h) => [...(h.sshConfig ? ["-F", expandHome(h.sshConfig)] : []), "-o", "ConnectTimeout=5", h.ssh];
 const controllerTitle = (c) => `${c.project.name} · Controller`;
@@ -648,13 +833,13 @@ function collectStatus() {
     { item: "agent CLI", ok: c ? has(c.agents.default) : agents.length > 0, fix: c ? `install and log in to ${c.agents.default}` : "install and log in to codex, claude or pi" },
     ...(c?.steering?.mode === "github-issues" ? [{ item: "gh CLI", ok: has("gh"), fix: "install gh and run gh auth login" }] : []),
   ];
-  const s = { factory: PKG.version, project: cwd, prerequisites, initialised: Boolean(c && fs.existsSync(".factory/manifest.json")) };
+  const s = { factory: PKG.version, project: cwd, prerequisites, initialised: Boolean(c && isAdopted()) };
   if (!s.initialised) { s.phase = prerequisites.every((p) => p.ok) ? "onboarding" : "prerequisites"; s.next = s.phase === "onboarding" ? "run the onboarding as a conversation: init --print-questions, then init --answers <file>" : "fix the missing prerequisites (they need the human)"; return s; }
   const userSkill = (n) => [".claude/skills", ".agents/skills"].some((d) => fs.existsSync(path.join(os.homedir(), d, n, "SKILL.md")));
   const ctl = controllerStatus(c);
   const ctlTerminal = hasControllerTerminal(c);
   s.setup = {
-    hooksArmed: (c.hooks?.mode ?? "factory") === "own" || sh("git", ["config", "core.hooksPath"]) === (c.hooks?.hooksPath ?? ".githooks"),
+    hooksArmed: minimal(c) ? !checkHooks() : (c.hooks?.mode ?? "factory") === "own" || sh("git", ["config", "core.hooksPath"]) === (c.hooks?.hooksPath ?? ".githooks"),
     userSkills: ["orchestration", "orca-cli"].every(userSkill),
     frontAgentBundle: fs.existsSync(path.join(os.homedir(), "front-agent", c.project.name, "FRONT_AGENT.md")),
     controller: { host: ctl.host, statusAgeMin: ctl.ageMin, terminal: ctlTerminal, running: ctlTerminal || (ctl.ageMin !== null && ctl.ageMin <= 25) },
@@ -742,8 +927,8 @@ function nameFrontAgent(c) {
 // the gate, the load log and the Controller's own agent session in an Orca terminal. Idempotent.
 async function start() {
   const c = readConfig();
-  if (!c || !fs.existsSync(".factory/manifest.json")) { say("Not initialised: run init first (the Front agent does this as a conversation)."); process.exit(1); }
-  if (!fs.existsSync(".factory/controller/CONTROLLER.md") || !fs.existsSync(".factory/front-agent/FRONT_AGENT.md")) { say("Bundles missing (a fresh clone): regenerating them from factory.config.json."); await initNonInteractiveRefresh(); }
+  if (!c || !isAdopted()) { say("Not initialised: run init first (the Front agent does this as a conversation)."); process.exit(1); }
+  if (!fs.existsSync(".factory/controller/CONTROLLER.md") || !fs.existsSync(".factory/front-agent/FRONT_AGENT.md") || (minimal(c) && !fs.existsSync(".factory/standard/standard.json"))) { say("Bundles missing (a fresh clone): regenerating them from factory.config.json."); await initNonInteractiveRefresh(); }
   say("\nUser-level skills:"); installSkills();
   const fa = path.join(os.homedir(), "front-agent", c.project.name);
   fs.mkdirSync(fa, { recursive: true }); fs.cpSync(".factory/front-agent", fa, { recursive: true, force: true }); say(`\nFront agent bundle: ${fa.replace(os.homedir(), "~")}`);
@@ -753,6 +938,10 @@ async function start() {
   const session = `cd ${dir} && ${agentCommand(c.agents.default, prompt, c.agents.controllerArgs)}`;
   const title = controllerTitle(c);
   let failed = 0;
+  if (minimal(c)) {
+    say("\nStandard:"); if (!installStandard()) failed++;
+    failed += installStandardOnRemotes(c);
+  }
   // A host can run one Controller per project, each in its own controllerDir. Never overwrite another project's.
   const present = ctl.kind === "local" ? (fs.existsSync(path.join(expandHome(dir), "factory.config.json")) ? fs.readFileSync(path.join(expandHome(dir), "factory.config.json"), "utf8") : "") : sh("ssh", [...sshArgsFor(ctl), `cat ${dir}/factory.config.json 2>/dev/null`]);
   const owner = (() => { try { return JSON.parse(present).project?.name; } catch { return undefined; } })();
@@ -794,6 +983,6 @@ async function start() {
   process.exit(failed ? 1 : 0);
 }
 
-const commands = { init, update, doctor, selfcheck, status, start, "install-skills": installSkills };
-if (!commands[cmd]) { say(`agentic-factory ${PKG.version}\n  init            onboarding: ask the project's questions, write factory.config.json, copy handbooks, hooks, skills and bundles (--keep-own-hooks: leave the project's hooks untouched, hooks.mode own)\n  update          re-render from a newer factory; locally changed files are kept, new versions land in .factory/new/\n  install-skills  install the Orca and coordination skills at user level (~/.claude/skills, ~/.agents/skills) on this host; required wherever a Controller or Front agent runs. --all for every vendored skill, --force to replace\n  doctor          check config, hooks, tools, user-level skills, hosts and the controller's status\n  selfcheck       (factory repo) syntax and placeholder check\n  status          prerequisites, setup, the work in the repo and the phase with the next step (--json for the Front agent)\n  start           user-level skills, Front agent and Controller bundles, gate, load log and the Controller's session in Orca\nFlags: --yes (take defaults), --print-questions (init: the questions as JSON, nothing written), --answers <file> (init: answers as {id: value})\n\nUsually you run none of this yourself: start an agent in your project with\n  claude "Read ${path.join(ROOT, "START.md").replace(os.homedir(), "~")} and set up this project."`); process.exit(cmd ? 1 : 0); }
+const commands = { init, update, doctor, selfcheck, status, start, deviate, "install-skills": installSkills };
+if (!commands[cmd]) { say(`agentic-factory ${PKG.version}\n  init            onboarding: ask the project's questions, write factory.config.json, copy handbooks, hooks, skills and bundles (--keep-own-hooks: leave the project's hooks untouched, hooks.mode own; --untracked-standard: keep the standard out of the project's history)\n  deviate <path>  make a generated file of the untracked standard the project's own: a tracked file that wins over the standard\n  update          re-render from a newer factory; locally changed files are kept, new versions land in .factory/new/\n  install-skills  install the Orca and coordination skills at user level (~/.claude/skills, ~/.agents/skills) on this host; required wherever a Controller or Front agent runs. --all for every vendored skill, --force to replace\n  doctor          check config, hooks, tools, user-level skills, hosts and the controller's status\n  selfcheck       (factory repo) syntax and placeholder check\n  status          prerequisites, setup, the work in the repo and the phase with the next step (--json for the Front agent)\n  start           user-level skills, Front agent and Controller bundles, gate, load log and the Controller's session in Orca\nFlags: --yes (take defaults), --print-questions (init: the questions as JSON, nothing written), --answers <file> (init: answers as {id: value})\n\nUsually you run none of this yourself: start an agent in your project with\n  claude "Read ${path.join(ROOT, "START.md").replace(os.homedir(), "~")} and set up this project."`); process.exit(cmd ? 1 : 0); }
 await commands[cmd]();

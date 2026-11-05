@@ -28,7 +28,7 @@ const stagedPaths = () => git("diff", "--cached", "--name-only", "--no-renames",
 // reviewers' standards: they change only through a reviewed task (fast lane with a Tester), like code.
 // docs/coordinator.md and docs/dev-workflow.md stay exempt: the human's process decisions are recorded there at once.
 const REVIEWED_DOCS = /^(docs\/review-protocol\.md|docs\/architect-protocol\.md|CODING_STANDARDS\.md)$/;
-const isDocsOnly = (paths) => paths.length > 0 && paths.every((p) => !REVIEWED_DOCS.test(p) && ((p.startsWith("docs/") && !p.startsWith("docs/adr/")) || (/^[^/]+\.md$/.test(p) && !/^(AGENTS|ARCHITECTURE)\.md$/.test(p))));
+const isDocsOnly = (paths) => paths.length > 0 && paths.every((p) => !REVIEWED_DOCS.test(p) && ((p.startsWith("docs/") && !p.startsWith("docs/adr/")) || (/^[^/]+\.md$/.test(p) && !/^(AGENTS|AGENTS\.factory|ARCHITECTURE)\.md$/.test(p))));
 
 // --- test-count --------------------------------------------------------------------------------
 const TEST_FILE = /\.(test|spec)\.[cm]?[jt]sx?$|_test\.(py|go)$|Test\.(java|kt)$/;
@@ -56,6 +56,10 @@ function stagedSafety() {
   const check = spawnSync("git", ["diff", "--cached", "--check"], { encoding: "utf8" });
   if (check.status !== 0) fail(`Whitespace errors or conflict markers in the staged diff:\n${check.stdout}`);
   const paths = stagedPaths();
+  const staged = new Set(paths);
+  const symlinks = git("ls-files", "-s", "-z").split("\0").filter((e) => e.startsWith("120000 ")).map((e) => e.split("\t")[1]).filter((p) => staged.has(p));
+  const standardLinks = symlinks.filter((p) => show("index", p).includes(".git/factory/"));
+  if (standardLinks.length) fail(`A link into this clone's standard is staged, and it would hold this machine's path: ${standardLinks.join(", ")}\nUnstage it. To change that file for this project: agentic-factory deviate <path>.`);
   const env = paths.filter((p) => /(^|\/)\.env(\.|$)/.test(p) && !/\.env\.example$/.test(p));
   if (env.length) fail(`Never commit environment files: ${env.join(", ")}`);
   const findings = [];
@@ -97,7 +101,7 @@ function staticChecks() {
 // here: a new dependency is a level-2 change that the Architect's spec review decides (AGENTS.md "Change levels").
 // The hooks directory is protected wherever it lives (.githooks, or the project's own directory in merge mode).
 const HOOKS_DIR = (config.hooks?.dir ?? ".githooks").replace(/\/$/, "");
-const PROTECTED = new RegExp(`^(?:ARCHITECTURE\\.md$|AGENTS\\.md$|docs/adr/|\\.githooks/|${HOOKS_DIR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/|tools/factory-guardrails\\.mjs$)`);
+const PROTECTED = new RegExp(`^(?:ARCHITECTURE\\.md$|AGENTS\\.md$|AGENTS\\.factory\\.md$|docs/adr/|\\.githooks/|${HOOKS_DIR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/|tools/factory-guardrails\\.mjs$)`);
 function protectedFiles(messagePath) {
   const changed = stagedPaths();
   const hits = changed.filter((p) => PROTECTED.test(p));
@@ -110,11 +114,24 @@ function protectedFiles(messagePath) {
 }
 
 // --- review-gate -------------------------------------------------------------------------------
+// What is being pushed must not decide which branch is gated, or a change to mainBranch would switch the gate off for
+// itself. So the branch named by the tree being replaced is gated, as well as the one named here. Without a usable config
+// in that tree, "main" stays gated.
+function gatedBranches(remoteSha) {
+  if (/^0+$/.test(remoteSha)) return [MAIN];
+  let before;
+  try { before = JSON.parse(tryGit("show", `${remoteSha}:factory.config.json`)).project?.mainBranch; } catch {}
+  return [MAIN, before ?? "main"];
+}
 function reviewGate() {
   const updates = readFileSync(0, "utf8").trim().split("\n").filter(Boolean).map((l) => l.split(" "));
   for (const [, localSha, remoteRef, remoteSha] of updates) {
-    if (remoteRef !== `refs/heads/${MAIN}`) continue;
     if (/^0+$/.test(localSha)) continue; // deleting the branch introduces no commits
+    // Without the remote's commits, the range below is empty and nothing would be checked. A plain push is refused by git
+    // in this state anyway; a forced one would overwrite those commits unseen.
+    if (remoteRef.startsWith("refs/heads/") && !/^0+$/.test(remoteSha) && !shaExists(remoteSha)) fail(`The remote has commits on ${remoteRef} this clone does not. Fetch first.`);
+    const branch = gatedBranches(remoteSha).find((b) => remoteRef === `refs/heads/${b}`);
+    if (!branch) continue;
     const range = /^0+$/.test(remoteSha) ? localSha : `${remoteSha}..${localSha}`;
     const commits = tryGit("rev-list", "--no-merges", range).trim().split("\n").filter(Boolean);
     const merges = tryGit("rev-list", "--merges", range).trim().split("\n").filter(Boolean);
@@ -129,7 +146,7 @@ function reviewGate() {
       const covered = reviews.some((r) => shaExists(r.sha) && isAncestor(sha, r.sha) && isAncestor(r.sha, localSha));
       if (!covered) uncovered.push(files.some((f) => f.startsWith("<octopus")) ? `${sha.slice(0, 10)} (octopus merge: merge one branch at a time)` : sha.slice(0, 10));
     }
-    if (uncovered.length) fail(`Push to ${MAIN} rejected. Commits without a passing independent review:\n${uncovered.join("\n")}\nA findings file under docs/reviews/ with "Verdict: pass" and "Reviewed commit: <40-char SHA>" must be in the pushed tree, and each commit must be an ancestor of a reviewed SHA (merge the review branch into the wave).`);
+    if (uncovered.length) fail(`Push to ${branch} rejected. Commits without a passing independent review:\n${uncovered.join("\n")}\nA findings file under docs/reviews/ with "Verdict: pass" and "Reviewed commit: <40-char SHA>" must be in the pushed tree, and each commit must be an ancestor of a reviewed SHA (merge the review branch into the wave).`);
   }
 }
 const shaExists = (sha) => spawnSync("git", ["cat-file", "-e", `${sha}^{commit}`]).status === 0;
