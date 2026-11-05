@@ -30,6 +30,7 @@ function replaceFile(file, content, mode) {
 
 function installHooks(common) {
   const target = path.join(common, "hooks");
+  if (fs.lstatSync(target, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error(`${target} is a link; writing hooks through it could change tracked files`);
   fs.mkdirSync(target, { recursive: true });
   for (const name of fs.readdirSync(SOURCE)) {
     const from = path.join(SOURCE, name), to = path.join(target, name), content = fs.readFileSync(from, "utf8"), mode = fs.statSync(from).mode & 0o777;
@@ -40,6 +41,7 @@ function installHooks(common) {
       if (isHook(name) && !IS_FACTORY_HOOK.test(current)) {
         if (fs.existsSync(`${to}.own`)) fs.renameSync(`${to}.own`, `${to}.own.bak.${Date.now()}`);
         fs.copyFileSync(to, `${to}.own`);
+        console.error(`[factory] the hook ${name} this clone already had now runs first, as ${name}.own`);
       }
     }
     replaceFile(to, content, mode);
@@ -48,9 +50,9 @@ function installHooks(common) {
 
 // A hooks path in this clone would bypass the hooks directory, so it goes. One from elsewhere makes the check below fail.
 function removeLocalHooksPath() {
-  const local = () => git("config", "--local", "--default", "", "core.hooksPath");
-  if (!local()) return;
-  try { git("config", "--local", "--unset-all", "core.hooksPath"); } catch { if (local()) throw new Error("cannot remove the local core.hooksPath"); }
+  const isSet = () => { try { git("config", "--local", "--get-all", "core.hooksPath"); return true; } catch { return false; } };
+  if (!isSet()) return;
+  try { git("config", "--local", "--unset-all", "core.hooksPath"); } catch { if (isSet()) throw new Error("cannot remove the local core.hooksPath"); }
 }
 
 function check(common) {
@@ -115,9 +117,9 @@ try {
     installHooks(common);
     removeLocalHooksPath();
     const previous = writeExclude(common);
-    const roots = process.argv.includes("--all")
-      ? git("worktree", "list", "--porcelain").split("\n\n").filter((e) => !/^bare$/m.test(e)).map((e) => /^worktree (.*)$/m.exec(e)?.[1]).filter((p) => p && fs.existsSync(p))
-      : [git("rev-parse", "--show-toplevel")];
+    const roots = new Set([git("rev-parse", "--show-toplevel")]);
+    // With --separate-git-dir, git lists the git dir itself as the main worktree.
+    if (process.argv.includes("--all")) for (const e of git("worktree", "list", "--porcelain").split("\n\n")) { const p = /^worktree (.*)$/m.exec(e)?.[1]; if (p && !/^bare$/m.test(e) && fs.existsSync(p) && fs.realpathSync(p) !== common) roots.add(p); }
     for (const root of roots) linkIn(root, previous);
   }
   check(common);

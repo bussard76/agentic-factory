@@ -56,7 +56,9 @@ function stagedSafety() {
   const check = spawnSync("git", ["diff", "--cached", "--check"], { encoding: "utf8" });
   if (check.status !== 0) fail(`Whitespace errors or conflict markers in the staged diff:\n${check.stdout}`);
   const paths = stagedPaths();
-  const standardLinks = paths.filter((p) => /^120000 /.test(tryGit("ls-files", "-s", "--", p)) && show("index", p).includes(".git/factory/"));
+  const staged = new Set(paths);
+  const symlinks = git("ls-files", "-s", "-z").split("\0").filter((e) => e.startsWith("120000 ")).map((e) => e.split("\t")[1]).filter((p) => staged.has(p));
+  const standardLinks = symlinks.filter((p) => show("index", p).includes(".git/factory/"));
   if (standardLinks.length) fail(`A link into this clone's standard is staged, and it would hold this machine's path: ${standardLinks.join(", ")}\nUnstage it. To change that file for this project: agentic-factory deviate <path>.`);
   const env = paths.filter((p) => /(^|\/)\.env(\.|$)/.test(p) && !/\.env\.example$/.test(p));
   if (env.length) fail(`Never commit environment files: ${env.join(", ")}`);
@@ -112,10 +114,15 @@ function protectedFiles(messagePath) {
 }
 
 // --- review-gate -------------------------------------------------------------------------------
+// What is being pushed must not decide which branch is gated: a change to mainBranch would switch the gate off for itself.
+function mainBranchBefore(remoteSha) {
+  if (/^0+$/.test(remoteSha)) return MAIN;
+  try { return JSON.parse(tryGit("show", `${remoteSha}:factory.config.json`)).project?.mainBranch ?? MAIN; } catch { return MAIN; }
+}
 function reviewGate() {
   const updates = readFileSync(0, "utf8").trim().split("\n").filter(Boolean).map((l) => l.split(" "));
   for (const [, localSha, remoteRef, remoteSha] of updates) {
-    if (remoteRef !== `refs/heads/${MAIN}`) continue;
+    if (remoteRef !== `refs/heads/${mainBranchBefore(remoteSha)}`) continue;
     if (/^0+$/.test(localSha)) continue; // deleting the branch introduces no commits
     const range = /^0+$/.test(remoteSha) ? localSha : `${remoteSha}..${localSha}`;
     const commits = tryGit("rev-list", "--no-merges", range).trim().split("\n").filter(Boolean);

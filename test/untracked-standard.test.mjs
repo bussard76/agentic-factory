@@ -11,7 +11,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = path.join(ROOT, "bin/agentic-factory.mjs");
 const isLink = (p) => { try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; } };
 
-function adopted({ before } = {}) {
+function adopted({ before, tracked = false } = {}) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-std-")));
   const home = path.join(base, "home"), project = path.join(base, "project");
   fs.mkdirSync(home); fs.mkdirSync(project);
@@ -26,7 +26,7 @@ function adopted({ before } = {}) {
   ok(project, "add", "."); ok(project, "commit", "-qm", "initial");
   const answers = path.join(base, "answers.json");
   fs.writeFileSync(answers, JSON.stringify({ "project.name": "demo", "project.humanName": "Test Human", "agents.default": "claude", "skills.installNow": "no", "rules.confirm": "yes" }));
-  const r = cli(project, "init", "--answers", answers, "--experimental-terminal-runner", "--untracked-standard");
+  const r = cli(project, "init", "--answers", answers, "--experimental-terminal-runner", ...(tracked ? [] : ["--untracked-standard"]));
   assert.equal(r.status, 0, r.stdout + r.stderr);
   const worktree = (name, ...rest) => { const dir = path.join(base, name); ok(project, "worktree", "add", "-q", "-b", `agents/${name}`, dir, "origin/main", ...rest); ok(dir, "config", "user.name", "T"); return dir; };
   return { base, home, project, env, git, ok, cli, answers, worktree, done: () => fs.rmSync(base, { recursive: true, force: true }) };
@@ -451,6 +451,67 @@ test("generated handbooks and specs name the factory's rules and the record that
   assert.match(fs.readFileSync(path.join(h.project, ".factory/controller/templates/mkspec.mjs"), "utf8"), /AGENTS\.factory\.md, the project's AGENTS\.md if it has one/);
   const sub = path.join(h.project, "docs");
   assert.equal(h.cli(sub, "deviate", "docs/architect-protocol.md").status, 0, "deviate works from a subdirectory");
+  h.done();
+});
+
+for (const tracked of [false, true]) test(`a branch that renames the main branch in the config cannot switch the gate off (${tracked ? "tracked project" : "untracked standard"})`, () => {
+  const h = adopted({ tracked });
+  const r = unreviewedWave(h, "t13", { prepareBranch: (task) => { const f = path.join(task, "factory.config.json"); const c = JSON.parse(fs.readFileSync(f, "utf8")); c.project.mainBranch = "elsewhere"; fs.writeFileSync(f, JSON.stringify(c, null, 2) + "\n"); } });
+  assert.match(r.stdout, /PUSH-FAILED/); assert.match(r.stdout, /without a passing independent review/);
+  h.done();
+});
+
+test("an untracked file where the standard goes is refused, and deviate stages one that appeared later", () => {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-untracked-")));
+  const env = { ...process.env, HOME: base, FACTORY_SKIP_ORCA: "1", GIT_CONFIG_NOSYSTEM: "1" };
+  const project = path.join(base, "p"); fs.mkdirSync(path.join(project, "docs"), { recursive: true });
+  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: project, env });
+  fs.writeFileSync(path.join(project, "docs/coordinator.md"), "my notes\n");
+  const r = spawnSync("node", [CLI, "init", "--untracked-standard", "--yes"], { cwd: project, encoding: "utf8", env });
+  assert.notEqual(r.status, 0); assert.match(r.stdout, /docs\/coordinator\.md/);
+  assert.equal(fs.existsSync(path.join(project, "factory.config.json")), false);
+  assert.equal(fs.readFileSync(path.join(project, "docs/coordinator.md"), "utf8"), "my notes\n");
+  fs.rmSync(base, { recursive: true, force: true });
+  const h = adopted();
+  const file = path.join(h.project, "docs/coordinator.md");
+  fs.unlinkSync(file); fs.writeFileSync(file, "later notes\n");
+  assert.equal(h.cli(h.project, "deviate", "docs/coordinator.md").status, 0);
+  assert.match(h.ok(h.project, "diff", "--cached", "--name-only"), /docs\/coordinator\.md/);
+  h.done();
+});
+
+test("a tracked file of the project's is a deviation from the start", () => {
+  const h = adopted({ before: (project) => { fs.mkdirSync(path.join(project, "docs")); fs.writeFileSync(path.join(project, "docs/coordinator.md"), "ours\n"); } });
+  assert.equal(fs.readFileSync(path.join(h.project, "docs/coordinator.md"), "utf8"), "ours\n");
+  assert.equal(isLink(path.join(h.project, "docs/coordinator.md")), false);
+  h.done();
+});
+
+test("hooks through a linked directory are refused, an empty hooks path is removed, a separate git dir gets its links", () => {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-linked-")));
+  const env = { ...process.env, HOME: base, FACTORY_SKIP_ORCA: "1", GIT_CONFIG_NOSYSTEM: "1" };
+  const project = path.join(base, "p"); fs.mkdirSync(path.join(project, "scripts/hooks"), { recursive: true });
+  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: project, env });
+  fs.rmSync(path.join(project, ".git/hooks"), { recursive: true, force: true });
+  fs.symlinkSync("../scripts/hooks", path.join(project, ".git/hooks"));
+  const r = spawnSync("node", [CLI, "init", "--untracked-standard", "--yes"], { cwd: project, encoding: "utf8", env });
+  assert.notEqual(r.status, 0); assert.match(r.stdout, /is a link/);
+  assert.deepEqual(fs.readdirSync(path.join(project, "scripts/hooks")), []);
+  fs.rmSync(base, { recursive: true, force: true });
+  const h = adopted();
+  h.ok(h.project, "config", "--local", "core.hooksPath", "");
+  assert.equal(spawnSync("node", [path.join(h.project, ".git/factory/arm.mjs")], { cwd: h.project, env: h.env }).status, 0);
+  assert.notEqual(h.git(h.project, "config", "--local", "--get-all", "core.hooksPath").status, 0);
+  const moved = adopted({ before: (project) => { spawnSync("git", ["init", "-q", "--separate-git-dir", path.join(project, "..", "gitdir")], { cwd: project }); } });
+  assert.equal(moved.cli(moved.project, "update").status, 0);
+  assert.ok(isLink(path.join(moved.project, "docs/coordinator.md")));
+  assert.equal(fs.existsSync(path.join(moved.base, "gitdir/docs")), false, "nothing is written into the git dir");
+  h.done(); moved.done();
+});
+
+test("git's default worktree update for a push is left alone", () => {
+  const h = adopted();
+  assert.equal(fs.existsSync(path.join(h.project, ".git/hooks/push-to-checkout")), false);
   h.done();
 });
 
