@@ -569,6 +569,18 @@ test("gate runs commands in slots and survives without flock", () => {
   assert.equal(r.status, 3);
 });
 
+test("a worker's setup or shell terminal does not keep its worktree from cleanup", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-holds-"));
+  fs.copyFileSync(path.join(ROOT, "controller", "lib.mjs"), path.join(dir, "lib.mjs"));
+  fs.writeFileSync(path.join(dir, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local" }] } }));
+  const titles = ["T1 · Worker Developer", "T1 · Worker Developer · Setup", "T1 · Worker Developer · Shell", "p · Controller", "p · Integration · Wave 3", "Coordinator old", "my notes"];
+  const code = `import { holdsWorktree } from ${JSON.stringify(path.join(dir, "lib.mjs"))}; console.log(JSON.stringify(${JSON.stringify(titles)}.map((t) => holdsWorktree(t))));`;
+  const r = spawnSync("node", ["--input-type=module", "-e", code], { encoding: "utf8", cwd: dir, env: { ...process.env, FACTORY_CONFIG: path.join(dir, "factory.config.json") } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout), [true, false, false, true, true, true, false]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("names.mjs corrects only automatic names, by role, and leaves an unknown entry alone", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-names-"));
   for (const f of ["names.mjs", "lib.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
@@ -581,13 +593,22 @@ test("names.mjs corrects only automatic names, by role, and leaves an unknown en
     { id: "r::/w/p/mine", path: "/w/p/mine", displayName: "Set by the human", displayNameMode: "manual" },
     { id: "r::/w/p/other", path: "/w/p/other", displayName: "other", displayNameMode: "automatic" },
   ];
+  const terminals = [
+    { handle: "setup", worktreePath: "/w/p/t1", title: "Setup" },
+    { handle: "worker", worktreePath: "/w/p/t1", title: "T1 · Worker Developer" },
+    { handle: "shell", worktreePath: "/w/p/coordinator-integration", title: "user@host: ~/w/p/coordinator-integration" },
+    { handle: "human", worktreePath: "/w/p/mine", title: "Setup" },
+    { handle: "chosen", worktreePath: "/w/p/t1", title: "my notes" },
+    { handle: "unknown", worktreePath: "/w/p/other", title: "Setup" },
+    { handle: "foreign", worktreePath: "/elsewhere/project", title: "Setup" },
+  ];
   const log = path.join(dir, "calls.log");
   const fake = path.join(dir, "fake-orca.mjs");
   fs.writeFileSync(fake, `#!/usr/bin/env node
 import fs from "node:fs";
 const a = process.argv.slice(2);
-if (a[1] === "set") fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(a) + "\\n");
-console.log(JSON.stringify({ ok: true, result: { worktrees: ${JSON.stringify(worktrees)} } }));`);
+if (a[1] === "set" || a[1] === "rename") fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(a) + "\\n");
+console.log(JSON.stringify({ ok: true, result: { worktrees: ${JSON.stringify(worktrees)}, terminals: ${JSON.stringify(terminals)} } }));`);
   fs.chmodSync(fake, 0o755);
   const run = (...args) => spawnSync("node", [path.join(dir, "names.mjs"), ...args], { encoding: "utf8", env: { ...process.env, FACTORY_CONFIG: path.join(dir, "factory.config.json"), ORCA_CLI_COMMAND: fake } });
   const dry = run("--dry");
@@ -595,7 +616,10 @@ console.log(JSON.stringify({ ok: true, result: { worktrees: ${JSON.stringify(wor
   assert.match(dry.stdout, /3 entries named; no known role, left as is: server:other/);
   assert.equal(fs.existsSync(log), false, "--dry changes nothing");
   assert.equal(run().status, 0);
-  const sets = fs.readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const calls = fs.readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const sets = calls.filter((a) => a[1] === "set");
+  const renames = Object.fromEntries(calls.filter((a) => a[1] === "rename").map((a) => [a[a.indexOf("--terminal") + 1], a[a.indexOf("--title") + 1]]));
+  assert.deepEqual(renames, { setup: "T1 · Worker Developer · Setup", shell: "p · Integration · Shell", human: "Set by the human · Setup" }, "only Orca's own names in known entries");
   const nameOf = (id) => { const a = sets.find((c) => c.includes(`id:${id}`)); return a[a.indexOf("--display-name") + 1]; };
   assert.equal(nameOf("r::/p"), "p · Controller");
   assert.equal(nameOf("r::/w/p/t1"), "T1 · Worker Developer");

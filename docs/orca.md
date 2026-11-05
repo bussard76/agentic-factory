@@ -24,7 +24,7 @@ The Controller itself runs **on the server**, in an Orca terminal, so it survive
 
 ## Naming
 
-Every sidebar entry (worktree display name) and every terminal is named after its role or task, on every level. Automatic names such as `main`, a branch name, `Setup` or `user@host: path` must not remain.
+Every sidebar entry (worktree display name) and every terminal, which Orca shows as a tab, is named after its role or task, on every level. Automatic names such as `main`, a branch name, `Setup` or `user@host: path` must not remain.
 
 | Level | Sidebar entry | Terminal | Example |
 |---|---|---|---|
@@ -32,8 +32,9 @@ Every sidebar entry (worktree display name) and every terminal is named after it
 | Controller | `<project> · Controller` | same | `my-app · Controller` |
 | Worker | `<Task> · Worker <Role>` | same | `T22-S5 · Worker Developer` |
 | Integration worktree | `<project> · Integration` | `<project> · Integration · Shell` | `my-app · Integration` |
+| Wave or script run | in the integration entry | `<project> · Integration · <Title>` | `my-app · Integration · T22 S4 Routes` |
 
-**Other terminals in an entry:** `<entry name> · <Purpose>`, for example `T22-S5 · Worker Developer · Setup` or `my-app · Controller · Shell`.
+**Other terminals in an entry:** `<entry name> · <Purpose>`, for example `T22-S5 · Worker Developer · Setup` or `my-app · Controller · Shell`. Such a helper terminal is not the worker itself, so it never keeps a worktree from being cleaned up.
 
 **Parts of a name**
 - `<project>` is the project name from `factory.config.json`.
@@ -49,14 +50,14 @@ Every sidebar entry (worktree display name) and every terminal is named after it
 - On a shared host, only name entries of your own project.
 
 **What the tooling does**
-- `controller/names.mjs` runs after every worker start and every `cleanup.mjs` cycle. It names this project's entries whose name is automatic or just the folder name: the checkout on the Controller's host, the integration worktree and the worktrees in `workers.json`.
+- `controller/names.mjs` runs after every worker start and every `cleanup.mjs` cycle. It names this project's entries whose name is automatic or just the folder name: the checkout on the Controller's host, the integration worktree and the worktrees in `workers.json`. In entries with a known name it also renames terminals that still carry Orca's own name: `Setup` becomes `<entry name> · Setup`, and `user@host: path` becomes `<entry name> · Shell`.
 - `agentic-factory start` names the Front agent's terminal and entry, and the Controller's terminal.
 - A Controller on the human's machine shares the Front agent's checkout, so that one entry is `<project> · Front Agent`, and the Controller keeps its own terminal name.
 - `start.mjs`, `wave.mjs` and `runscript.mjs` name their terminals when they create them.
 
 **Limits of the tooling**
 - An entry with no known role, such as the checkout on a worker-only host, is reported by `names.mjs` and left as it is.
-- Terminals are named when they are created. Orca does not mark a terminal's name as automatic, so a terminal created by hand keeps its name until someone renames it.
+- Orca does not mark a terminal's name as automatic, so only those two patterns count as automatic. Any other name stays until someone renames it. A human who names a terminal exactly `Setup` gets it corrected.
 - A human who names an entry exactly like its folder gets it corrected, because that looks like Orca's own name.
 
 ## Heartbeat

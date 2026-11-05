@@ -5,7 +5,7 @@
 // --dry changes nothing: no fetch, no journal, no removals, no releases.
 // Usage: node cleanup.mjs [--on <host>|--all] [--dry] [--pushed] [--prune-remote]
 import fs from "node:fs";
-import { BRANCH_PREFIX, HOSTS, file, sh, MAIN, ORCA, RUNNER, argHost, journal, onHost, orcaEnvArgsOn, projectDirOn, readJson, trySh, workspacesOn, worktreeRefOn, writeJson } from "./lib.mjs";
+import { BRANCH_PREFIX, HOSTS, file, holdsWorktree, sh, MAIN, ORCA, RUNNER, argHost, journal, onHost, orcaEnvArgsOn, projectDirOn, readJson, trySh, workspacesOn, worktreeRefOn, writeJson } from "./lib.mjs";
 
 const dry = process.argv.includes("--dry"), allowPushed = process.argv.includes("--pushed");
 const hosts = process.argv.includes("--all") ? HOSTS : [argHost(process.argv)];
@@ -26,7 +26,7 @@ for (const host of hosts) {
   const terms = hostTerms.get(host.name);
   if (terms === null) { console.log(`[${host.name}] cannot list terminals; removing nothing here`); continue; }
   const busy = new Set([
-    ...terms.filter((t) => /· Worker|Controller|Coordinator|· Integration/.test(t.title ?? "") && t.status !== "exited").map((t) => t.worktreePath),
+    ...terms.filter((t) => holdsWorktree(t.title) && t.status !== "exited").map((t) => t.worktreePath),
     ...Object.values(workers).filter((w) => (w.host ?? "local") === host.name && ((w.pid && alive(w.pid)) || (w.terminal && terms.some((t) => t.handle === w.terminal && t.status !== "exited")))).map((w) => w.worktree),
   ]);
   // Finished wave terminals pile up in the integration worktree. The newest stays: wavewait and the heartbeat read its result.
