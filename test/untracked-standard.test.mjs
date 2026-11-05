@@ -515,6 +515,84 @@ test("git's default worktree update for a push is left alone", () => {
   h.done();
 });
 
+// A project with the given setup, and a commit nobody reviewed, ready to push from the checkout.
+function withUnreviewedCommit(options) {
+  const h = adopted(options);
+  fs.writeFileSync(path.join(h.project, "app.js"), "export const a = 1;\n"); h.ok(h.project, "add", "app.js"); h.ok(h.project, "commit", "-qm", "unreviewed");
+  return h;
+}
+const rewriteConfig = (dir, change) => { const f = path.join(dir, "factory.config.json"); const c = JSON.parse(fs.readFileSync(f, "utf8")); change(c); fs.writeFileSync(f, JSON.stringify(c, null, 2) + "\n"); };
+
+for (const tracked of [false, true]) {
+  const kind = tracked ? "tracked project" : "untracked standard";
+  test(`a force push from a stale clone cannot skip the gate (${kind})`, () => {
+    const h = withUnreviewedCommit({ tracked });
+    // Someone else moves main, and this clone has not fetched that.
+    const url = h.ok(h.project, "remote", "get-url", "origin"), other = path.join(h.base, "other");
+    h.ok(h.base, "clone", "-q", url, other); h.ok(other, "config", "user.name", "T"); h.ok(other, "config", "user.email", "t@example.invalid");
+    h.ok(other, "commit", "-q", "--allow-empty", "-m", "someone else"); h.ok(other, "push", "-q", "--no-verify", "origin", "HEAD:main");
+    const before = h.ok(other, "rev-parse", "HEAD");
+    const r = h.git(h.project, "push", "--force", "origin", "HEAD:main");
+    assert.notEqual(r.status, 0, r.stdout + r.stderr); assert.match(r.stderr, /Fetch first/);
+    assert.equal(h.ok(other, "ls-remote", "origin", "main").split("\t")[0], before, "the other commit is still on main");
+    h.done();
+  });
+
+  test(`pushing a rename to an existing branch stays gated (${kind})`, () => {
+    const h = withUnreviewedCommit({ tracked });
+    h.ok(h.project, "push", "-q", "--no-verify", "origin", "origin/main:refs/heads/trunk");
+    rewriteConfig(h.project, (c) => { c.project.mainBranch = "trunk"; }); h.ok(h.project, "add", "factory.config.json"); h.ok(h.project, "commit", "-qm", "rename");
+    const r = h.git(h.project, "push", "origin", "HEAD:trunk");
+    assert.notEqual(r.status, 0, r.stdout + r.stderr); assert.match(r.stderr, /Push to trunk rejected/);
+    h.done();
+  });
+
+  test(`an old config without a main branch still gates main (${kind})`, () => {
+    const h = adopted({ tracked });
+    // The config on the remote lacks the field, and the pushed one names another branch.
+    rewriteConfig(h.project, (c) => { delete c.project.mainBranch; }); h.ok(h.project, "add", "factory.config.json"); h.ok(h.project, "commit", "-qm", "drop"); h.ok(h.project, "push", "-q", "--no-verify", "origin", "HEAD:main");
+    rewriteConfig(h.project, (c) => { c.project.mainBranch = "elsewhere"; });
+    fs.writeFileSync(path.join(h.project, "app.js"), "export const a = 1;\n"); h.ok(h.project, "add", "app.js", "factory.config.json"); h.ok(h.project, "commit", "-qm", "unreviewed");
+    const r = h.git(h.project, "push", "origin", "HEAD:main");
+    assert.notEqual(r.status, 0, r.stdout + r.stderr); assert.match(r.stderr, /Push to main rejected/, "names the branch pushed to");
+    h.done();
+  });
+}
+
+test("init accepts a tracked .claude/skills link and a tracked file named docs, and shows what arm reports", () => {
+  const h = adopted({ before: (project) => {
+    fs.mkdirSync(path.join(project, ".agents/skills/tdd"), { recursive: true }); fs.writeFileSync(path.join(project, ".agents/skills/tdd/SKILL.md"), "ours\n");
+    fs.mkdirSync(path.join(project, ".claude")); fs.symlinkSync("../.agents/skills", path.join(project, ".claude/skills"));
+  } });
+  assert.equal(fs.readFileSync(path.join(h.project, ".claude/skills/tdd/SKILL.md"), "utf8"), "ours\n");
+  h.done();
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-docs-")));
+  const env = { ...process.env, HOME: base, FACTORY_SKIP_ORCA: "1", GIT_CONFIG_NOSYSTEM: "1" };
+  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: base, env });
+  fs.writeFileSync(path.join(base, "docs"), "a file\n");
+  const r = spawnSync("node", [CLI, "init", "--untracked-standard", "--yes"], { cwd: base, encoding: "utf8", env });
+  assert.notEqual(r.status, 0); assert.match(r.stdout, /`docs` is a file here/); assert.doesNotMatch(r.stderr, /ENOTDIR/, "a clear refusal, no stack trace");
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test("a moved hook is reported, a link appearing later is refused by arm, a project's push-to-checkout runs", () => {
+  const h = adopted({ before: (project) => {
+    fs.writeFileSync(path.join(project, ".git/hooks/post-commit"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    fs.mkdirSync(path.join(project, ".githooks")); fs.writeFileSync(path.join(project, ".githooks/push-to-checkout"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    spawnSync("git", ["config", "core.hooksPath", ".githooks"], { cwd: project });
+  } });
+  assert.ok(fs.existsSync(path.join(h.project, ".git/hooks/push-to-checkout")));
+  fs.writeFileSync(path.join(h.project, ".git/hooks/post-merge"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  assert.match(h.cli(h.project, "update").stdout, /post-merge this clone already had now runs first/);
+  const hooks = path.join(h.project, ".git/hooks"), away = path.join(h.base, "hooks-away");
+  fs.renameSync(hooks, away); fs.symlinkSync(away, hooks);
+  const before = fs.readFileSync(path.join(away, "pre-push"), "utf8");
+  const r = spawnSync("node", [path.join(h.project, ".git/factory/arm.mjs")], { cwd: h.project, encoding: "utf8", env: h.env });
+  assert.notEqual(r.status, 0); assert.match(r.stderr, /is a link/);
+  assert.equal(fs.readFileSync(path.join(away, "pre-push"), "utf8"), before);
+  h.done();
+});
+
 test("keeping own hooks entirely is refused for now, without touching anything", () => {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-own-")));
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: base });

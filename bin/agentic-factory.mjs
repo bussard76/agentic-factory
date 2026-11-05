@@ -114,7 +114,10 @@ async function init() {
     if (fs.lstatSync(hooksDir, { throwIfNoEntry: false })?.isSymbolicLink()) { say(`--untracked-standard: ${hooksDir} is a link, so the factory's hooks would be written into whatever it points at, possibly tracked files. Nothing was changed.`); process.exit(1); }
     // Excluded and not tracked, such a file would vanish from git status, and a later merge would overwrite it without a word.
     const tracked = sh("git", ["ls-files"]).split("\n");
-    const inTheWay = standardPaths().filter((p) => { const stat = fs.lstatSync(p, { throwIfNoEntry: false }); return stat && !stat.isSymbolicLink() && !tracked.some((t) => t === p || t.startsWith(`${p}/`)); });
+    const lstat = (p) => { try { return fs.lstatSync(p); } catch { return null; } };
+    if (lstat("docs") && !fs.statSync("docs").isDirectory()) { say("--untracked-standard: `docs` is a file here, and the factory needs a directory of that name for ADRs and reviews. Nothing was changed."); process.exit(1); }
+    // A parent that is a link (a tracked .claude/skills) or a file (a tracked file named docs) leaves nothing to hide.
+    const inTheWay = standardPaths().filter((p) => { const stat = lstat(p); return stat && !stat.isSymbolicLink() && !lstat(path.dirname(p))?.isSymbolicLink() && !tracked.some((t) => t === p || t.startsWith(`${p}/`)); });
     if (inTheWay.length) { say(`--untracked-standard: these untracked files sit where the factory's standard goes: ${inTheWay.join(", ")}. Commit them, then they count as this project's deviation, or move them. Nothing was changed.`); process.exit(1); }
     if (foreign.length) { say(`--untracked-standard: a core.hooksPath is set outside this clone's config (${foreign[0].split("\t")[0]}), so git would not run the factory's hooks and there would be no review gate. Remove it first. Nothing was changed.`); process.exit(1); }
     if (fs.existsSync(".husky") || /husky/.test(prepare) || hooksSetup().layout === "husky") { say("--untracked-standard does not support husky yet: every install would switch the factory's hooks off for this clone (F44 in the factory's debt.md). Nothing was changed."); process.exit(1); }
@@ -454,6 +457,7 @@ function installStandard() {
   }
   const r = spawnSync("node", [path.join(dest, "arm.mjs"), "--all"], { encoding: "utf8" });
   if (r.status !== 0) { say(`Standard: ${(r.stderr || "arming failed").trim().split("\n").pop()}`); process.exitCode = 1; return false; }
+  if (r.stderr.trim()) say(r.stderr.trim());
   say("  standard installed in .git/factory, hooks armed, linked into every worktree of this clone");
   return true;
 }

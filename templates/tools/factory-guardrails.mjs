@@ -114,15 +114,23 @@ function protectedFiles(messagePath) {
 }
 
 // --- review-gate -------------------------------------------------------------------------------
-// What is being pushed must not decide which branch is gated: a change to mainBranch would switch the gate off for itself.
-function mainBranchBefore(remoteSha) {
-  if (/^0+$/.test(remoteSha)) return MAIN;
-  try { return JSON.parse(tryGit("show", `${remoteSha}:factory.config.json`)).project?.mainBranch ?? MAIN; } catch { return MAIN; }
+// What is being pushed must not decide which branch is gated, or a change to mainBranch would switch the gate off for
+// itself. So the branch named by the tree being replaced is gated, as well as the one named here. Without a usable config
+// in that tree, "main" stays gated.
+function gatedBranches(remoteSha) {
+  if (/^0+$/.test(remoteSha)) return [MAIN];
+  let before;
+  try { before = JSON.parse(tryGit("show", `${remoteSha}:factory.config.json`)).project?.mainBranch; } catch {}
+  return [MAIN, before ?? "main"];
 }
 function reviewGate() {
   const updates = readFileSync(0, "utf8").trim().split("\n").filter(Boolean).map((l) => l.split(" "));
   for (const [, localSha, remoteRef, remoteSha] of updates) {
-    if (remoteRef !== `refs/heads/${mainBranchBefore(remoteSha)}`) continue;
+    // Without the remote's commits, the range below is empty and nothing would be checked. A plain push is refused by git
+    // in this state anyway; a forced one would overwrite those commits unseen.
+    if (!/^0+$/.test(remoteSha) && !shaExists(remoteSha)) fail(`The remote has commits on ${remoteRef} this clone does not. Fetch first.`);
+    const branch = gatedBranches(remoteSha).find((b) => remoteRef === `refs/heads/${b}`);
+    if (!branch) continue;
     if (/^0+$/.test(localSha)) continue; // deleting the branch introduces no commits
     const range = /^0+$/.test(remoteSha) ? localSha : `${remoteSha}..${localSha}`;
     const commits = tryGit("rev-list", "--no-merges", range).trim().split("\n").filter(Boolean);
@@ -138,7 +146,7 @@ function reviewGate() {
       const covered = reviews.some((r) => shaExists(r.sha) && isAncestor(sha, r.sha) && isAncestor(r.sha, localSha));
       if (!covered) uncovered.push(files.some((f) => f.startsWith("<octopus")) ? `${sha.slice(0, 10)} (octopus merge: merge one branch at a time)` : sha.slice(0, 10));
     }
-    if (uncovered.length) fail(`Push to ${MAIN} rejected. Commits without a passing independent review:\n${uncovered.join("\n")}\nA findings file under docs/reviews/ with "Verdict: pass" and "Reviewed commit: <40-char SHA>" must be in the pushed tree, and each commit must be an ancestor of a reviewed SHA (merge the review branch into the wave).`);
+    if (uncovered.length) fail(`Push to ${branch} rejected. Commits without a passing independent review:\n${uncovered.join("\n")}\nA findings file under docs/reviews/ with "Verdict: pass" and "Reviewed commit: <40-char SHA>" must be in the pushed tree, and each commit must be an ancestor of a reviewed SHA (merge the review branch into the wave).`);
   }
 }
 const shaExists = (sha) => spawnSync("git", ["cat-file", "-e", `${sha}^{commit}`]).status === 0;
