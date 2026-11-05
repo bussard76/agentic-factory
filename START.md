@@ -40,6 +40,8 @@ Run `factory status --json` and read `phase` and `next`.
 
 Run `factory start`. It installs the user-level skills (`orchestration` and `orca-cli` are essential), copies the Front agent bundle to `~/front-agent/<project>/`, copies the Controller bundle to the Controller's host, installs the gate, starts the load log, and starts the Controller's own agent session in an Orca terminal. Then run `factory doctor`. Report anything `MISSING` with its fix; a step that needs the human (an ssh key, a login) you name, you do not work around it.
 
+The Controller takes it from here. If the human chose a maintained `ARCHITECTURE.md` (`architecture.mode`), a Worker Architect creates it: as the first task when the repo holds code, otherwise after the first merged wave.
+
 ## 4. From now on
 
 Read `~/front-agent/<project>/FRONT_AGENT.md`: that is your role from here, filled in for this project. At every session start you run `status`, show the human where the project stands, and ask the question the phase calls for.

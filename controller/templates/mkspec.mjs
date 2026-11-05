@@ -4,6 +4,8 @@
 //   node templates/mkspec.mjs dev     <T> <task-ref> <branch> [--level 1|2] [--review <branch>:<file>] [--extra "…"]
 //   node templates/mkspec.mjs rework  <T> <n> <task-ref> <branch> <review-branch>:<review-file> [--level 1|2] [--extra "…"]
 //   node templates/mkspec.mjs test    <T> <task-ref> <branch> <sha> [--round n] [--review <branch>:<file>]
+//   node templates/mkspec.mjs baseline
+//   node templates/mkspec.mjs steward "<wave title>"
 //   node templates/mkspec.mjs reeval  <T> <task-ref> <branch> <sha> <last-review-branch>:<file>
 //   node templates/mkspec.mjs specreview <T> <task-ref> <branch>
 //   node templates/mkspec.mjs conf    <T> <task-ref> <branch> <sha> <spec-review-branch>:<file>
@@ -15,6 +17,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { BRANCH_PREFIX, CMDS, HUMAN, MAIN, PROJECT, STEERING, config, file } from "../lib.mjs";
 
+const MAINTAINED = config.architecture?.mode === "architect";
+// gate starts a program without a shell, so a command with shell syntax only runs through bash.
+const gated = (cmd) => `gate bash -c '${cmd.replace(/'/g, "'\\''")}'`;
+
 const [role, ...a] = process.argv.slice(2);
 const opt = (flag, def) => { const i = a.indexOf(flag); return i >= 0 ? a[i + 1] : def; };
 const pos = a.filter((x, i) => !x.startsWith("--") && !(i > 0 && a[i - 1].startsWith("--")));
@@ -24,7 +30,7 @@ const taskWhere = (ref) => (STEERING === "github-issues" ? `GitHub issue ${ref} 
 const reportFor = (ref) => `docs/reports/${STEERING === "github-issues" ? `issue-${ref.replace("#", "")}` : path.basename(ref, ".md")}.md`;
 const RULES = `Rules: invented data only, demo or mock only, never send or write anything real, never --no-verify, never print secrets, never push to ${MAIN}.`;
 const FLAKES = `Known load flakes may be rerun once alone and recorded as unrelated debt. An unchanged test that fails only by timeout under load and passes alone is load debt, not a finding. Failures from foreign host load (network changes) count as environment: rerun and state the count.`;
-const DEV_CHECKS = `Checks (Developer stage): ${[CMDS.typecheck, CMDS.lint].filter(Boolean).join(" and ") || "typecheck and lint"}, the affected suites (${CMDS.unit ?? "the unit runner"} <files>) and the browser specs covering your change (through 'gate'). Do NOT run the full '${CMDS.verify ?? "verify"}' or the full '${CMDS.e2e ?? "e2e"}': the independent Tester and the wave run them.`;
+const DEV_CHECKS = `Checks (Developer stage): ${[CMDS.typecheck, CMDS.lint].filter(Boolean).join(" && ") || "typecheck and lint"}, the affected suites (${CMDS.unit ?? "the unit runner"} <files>) and the browser specs covering your change (through 'gate'). Do NOT run the full '${CMDS.verify ?? "verify"}' or the full '${CMDS.e2e ?? "e2e"}': the independent Tester and the wave run them.`;
 const REVIEW_RULE = `Review rule (decided by ${HUMAN}, functional-only): the verdict is 'fail' ONLY for a real functional defect: a specified flow does not work or gives wrong results, data is lost, or a change could reach a real external system (production, real accounts, the human's real data). Missing or weak tests, coverage gaps, edge cases, security, load and style are 'debt candidates' (category tests|edge-case|security|load|style, severity, one-line proposal) and never fail the review. After ${maxRounds} rounds a working feature is integrated; open points become debt plus a preview acceptance item for ${HUMAN}.`;
 const REPLY_DEV = `Reply: worker_done with branch, head sha and check results; or escalate one concrete blocker with progress committed and pushed. Never report an unfinished task as done.`;
 
@@ -65,7 +71,7 @@ Steps:
 1. Read docs/review-protocol.md, ${taskWhere(ref)}${rv.file ? `, the passing architecture spec review ${rv.file} (origin/${rv.branch}; its binding instructions are part of the spec)` : ""} and the report on the branch.
 2. Review the whole diff against its merge-base with origin/${MAIN} against every Result and Observable acceptance item. Run 'ponytail-review' on the full diff. Check the level is kept, tests go through public entry points and fail without the implementation, untrusted content is escaped, invented data only, no secrets, no changes to real external systems.
 3. Create a temporary branch from the reviewed head and merge current origin/${MAIN} into it; if it conflicts, abort, list the files and review on the branch's own base.
-4. Gates: 'gate ${CMDS.verify ?? "verify"}' once${CMDS.e2e ? ` and 'gate ${CMDS.e2e}' once` : ""} (detached with nohup, poll the log). ${FLAKES} Then check the task's main flows in the browser or through the public API with the demo data.
+4. Gates: ${gated(CMDS.verify ?? "verify")} once${CMDS.e2e ? ` and ${gated(CMDS.e2e)} once` : ""} (detached with nohup, poll the log). ${FLAKES} Then check the task's main flows in the browser or through the public API with the demo data.
 5. Only after the gates finished: write docs/reviews/${T}-review-${round}.md with findings by severity, debt candidates, 'Reviewed commit: <full SHA>' and 'Verdict: pass|fail'. Commit only that file on branch ${BRANCH_PREFIX}${T.toLowerCase()}-review-${round} created from the reviewed head, never --no-verify, push only that branch.
 ${REVIEW_RULE}
 Read-only otherwise; demo or mock only; never send anything; no Docker.
@@ -99,9 +105,36 @@ Reply: worker_done with verdict, level, branch and sha (--report-path docs/revie
 Steps:
 1. git fetch origin; create branch ${BRANCH_PREFIX}${T.toLowerCase()}-conformance from origin/${branch} at exactly ${sha} (the head the Tester passed; state the full SHA). Merge nothing into it.
 2. Read docs/architect-protocol.md, ${taskWhere(ref)}, the passing spec review ${rv.file} (origin/${rv.branch}) and docs/coordinator.md.
-3. Coarse boundary check only (decided by ${HUMAN}): no new export, contract, durable store or data flow without a recorded approval, and no forbidden imports. Do NOT hunt logic edge cases; note them as debt candidates. Focused checks only; no full suites. Security and load observations are debt unless a change could reach a real external system.
+${MAINTAINED ? `Also compare the change with ARCHITECTURE.md. A level 3 change that does not update it in this change fails. A level 2 change that makes it wrong is a finding.
+` : ""}3. Coarse boundary check only (decided by ${HUMAN}): no new export, contract, durable store or data flow without a recorded approval, and no forbidden imports. Do NOT hunt logic edge cases; note them as debt candidates. Focused checks only; no full suites. Security and load observations are debt unless a change could reach a real external system.
 4. Write docs/reviews/${T}-architecture-conformance.md with findings, 'Reviewed commit: <full SHA>' and 'Verdict: pass|fail'. Commit only that file, never --no-verify, push only your branch.
 Reply: worker_done with verdict, branch and sha (--report-path docs/reviews/${T}-architecture-conformance.md).`;
+  },
+  baseline() {
+    const template = fs.readFileSync(file("templates/ARCHITECTURE.md"), "utf8");
+    return `You are the Worker Architect creating the architecture baseline under docs/architect-protocol.md, section "Baseline".
+Steps:
+1. git fetch origin; create branch ${BRANCH_PREFIX}architecture-baseline from origin/${MAIN}. Read AGENTS.md, docs/architect-protocol.md, docs/adr/ and the code. Use the codebase-design skill's vocabulary.
+2. If ARCHITECTURE.md exists, do not replace it. Write docs/reviews/architecture-baseline.md listing where it differs from the code, with file evidence, and record the drift in docs/debt.md.
+3. Otherwise write ARCHITECTURE.md from the template below, with the full SHA you read in its first line. Describe what the code does, with file evidence. Do not invent intent. A point without an approved requirement or ADR goes under "Open". Decide nothing.
+4. Commit only those files, citing {{ADOPTION_ADR}} in the message, never --no-verify. Push only your branch.
+Do not change code, do not run test suites, never touch real data.
+Reply: worker_done with branch, sha and the number of open points.
+
+Template:
+${template}`;
+  },
+  steward() {
+    const [title] = pos;
+    return `You are the Worker Architect for the stewardship review after the wave "${title}" under docs/architect-protocol.md. Read-only except the files named here.
+Steps:
+1. git fetch origin; create branch ${BRANCH_PREFIX}stewardship-$(date +%F-%H%M) from origin/${MAIN}. State its full SHA.
+2. Run ponytail-audit on the merged code. Compare modules, responsibilities, exports, allowed imports, data flows and interfaces with ARCHITECTURE.md. Name every drift with file evidence.
+3. Write docs/reviews/stewardship-$(date +%F-%H%M).md with the findings. Record each drift in docs/debt.md with origin, risk, proposal and size. Propose bounded refactor tasks with levels and acceptance checks.
+4. If you found no drift, set the commit in the first line of ARCHITECTURE.md to that SHA. Change nothing else in it: a correction goes through a task. A point the code does but nothing approves is a new "Open" item in your findings, not a decision.
+5. Commit only those files, citing {{ADOPTION_ADR}} in the message if ARCHITECTURE.md changed, never --no-verify. Push only your branch.
+Do not change code, do not run full suites, never touch real data.
+Reply: worker_done with branch, sha, the number of drifts and the debt items added.`;
   },
   audit() {
     const [since] = pos;

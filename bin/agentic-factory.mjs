@@ -33,7 +33,7 @@ const say = (s = "") => (printQuestions ? sayBuffer.push(String(s).trim()) : con
 const rl = batch || cmd !== "init" ? null : readline.createInterface({ input: process.stdin, output: process.stdout });
 // Every question asked, in order, for --print-questions (and to validate --answers).
 const asked = [];
-const validAnswerIds = ["project.name", "project.repo", "project.humanName", "project.language", "rhythm.mode", "steering.mode", "agents.default", ...["small", "default", "large"].map((t) => `agents.models.${t}`), "hosts.where", "hosts.remote.name", "hosts.remote.ssh", "hosts.remote.sshConfig", "hosts.remote.orcaEnvironment", "hosts.controller", "capacity.calibration", "agents.calibration", ...["install", "typecheck", "lint", "unit", "verify", "e2e"].map((k) => `commands.${k}`), "preview.enabled", "preview.port", "preview.command", "reviews.maxRounds", "design.tool", "rules.confirm", "skills.installNow"];
+const validAnswerIds = ["project.name", "project.repo", "project.humanName", "project.language", "rhythm.mode", "steering.mode", "agents.default", "architecture.mode", ...["small", "default", "large"].map((t) => `agents.models.${t}`), "hosts.where", "hosts.remote.name", "hosts.remote.ssh", "hosts.remote.sshConfig", "hosts.remote.orcaEnvironment", "hosts.controller", "capacity.calibration", "agents.calibration", ...["install", "typecheck", "lint", "unit", "verify", "e2e"].map((k) => `commands.${k}`), "preview.enabled", "preview.port", "preview.command", "reviews.maxRounds", "design.tool", "rules.confirm", "skills.installNow"];
 function validateAnswers() {
   if (!answersFile) return;
   if (!presetAnswers || typeof presetAnswers !== "object" || Array.isArray(presetAnswers)) { console.error("--answers: expected an object keyed by question id"); process.exit(1); }
@@ -199,6 +199,7 @@ async function init() {
   if (c.hosts.frontAgent.preview.enabled) { c.hosts.frontAgent.preview.port = Number(await askText("preview.port", "   Port?", "8180")); c.hosts.frontAgent.preview.command = await askText("preview.command", "   Start command?", d.scripts.dev ? `${d.pm} dev` : c.hosts.frontAgent.preview.command); c.hosts.frontAgent.preview.envFile = `~/.config/${c.project.name}/preview.env`; }
   c.reviews.maxRounds = Number(await askText("reviews.maxRounds", "12. Review rounds before a working feature is integrated and the rest becomes debt?", "2"));
   c.design = { tool: await ask("design.tool", "13. Design tool for stage 1 of outside-in?", [{ label: "Figma via its local MCP server", value: "figma" }, { label: "Pencil", value: "pencil" }, { label: "None for now", value: "none" }], d.tools.figma ? "figma" : "none"), exportDir: "design" };
+  c.architecture = { mode: await ask("architecture.mode", "   Architecture document: should a Worker Architect create ARCHITECTURE.md and keep it current?", [{ label: "Yes", value: "architect", hint: "existing code: described as the first task; a new repo: after the first merged wave. An existing ARCHITECTURE.md is kept and checked. Reviews compare against it, and one Architect worker runs after each wave." }, { label: "No", value: "off", hint: "spec and conformance reviews still run, without a document to compare against" }], "architect") };
   say("\n14. Hard rules (they go into AGENTS.md and docs/coordinator.md):\n  - no real data or secrets in the repo, .env never committed\n  - the factory has no outward effects: nothing changes outside the repo and the demo environment\n  - workers never push to main; --no-verify is forbidden\n  - tests run on demo data or a private copy, never on the original\n  - no real model calls in tests");
   if ((await ask("rules.confirm", "   Confirm all of them?", [{ label: "Yes", value: "yes" }, { label: "No, stop here", value: "no" }], "yes")) !== "yes") { say("Stopped. Nothing written."); process.exit(1); }
   const installNow = (await ask("skills.installNow", "15. Install the user-level skills on this machine now (needed by the Front agent here, and by the Controller if it runs here)?", [{ label: "Yes", value: "yes" }, { label: "Later (agentic-factory install-skills)", value: "no" }], "yes")) === "yes";
@@ -313,12 +314,13 @@ function templateVars(c) {
     // DATE is the adoption day, recorded once in factory.config.json: a later update must not rewrite recorded decisions.
     CONTROLLER_DIR: c.hosts?.controller?.controllerDir ?? "~/controller", PROJECT: c.project.name, HUMAN: c.project.humanName, MAIN: c.project.mainBranch, BRANCH_PREFIX: c.project.branchPrefix ?? "agents/", DATE: c.project.adoptedOn ?? (process.env.FACTORY_TODAY ?? new Date().toISOString().slice(0, 10)),
     ADOPTION_ADR: `ADR-${adoptionAdrNumber()}`,
+    ...architectureVars(c),
     HOOKS_DIR: c.hooks?.dir ?? ".githooks",
     HOOKS_PATH: c.hooks?.hooksPath ?? ".githooks",
     HOOK_ENFORCEMENT: (c.hooks?.mode ?? "factory") === "own"
       ? `**hooks.mode = own:** this project keeps its own hooks in \`${c.hooks?.dir ?? c.hooks?.ownDir ?? ".githooks"}\`; they, not the factory's, must enforce the commit checks and the review gate on \`${c.project.mainBranch}\`. The factory does not verify them. The project's own \`pre-push\` must implement the rule below for every update of \`${c.project.mainBranch}\`.`
       : `Enforced by the factory hooks in \`${c.hooks?.dir ?? ".githooks"}/\` (\`tools/factory-guardrails.mjs\`)${(c.hooks?.mode ?? "factory") === "merge" ? "; the project's own hooks run first as `<hook>.own` next to them" : ""}. With the hooks armed (\`core.hooksPath=${c.hooks?.hooksPath ?? ".githooks"}\`), \`pre-push\` checks every update of \`${c.project.mainBranch}\`.`,
-    VERIFY: c.commands.verify || "the verify command", E2E: c.commands.e2e || "the browser suite", RELEASE: (c.commands.release ?? []).join(" and ") || "the release gates",
+    VERIFY: c.commands.verify || "the verify command", E2E: c.commands.e2e || "the browser suite", RELEASE: (c.commands.release ?? []).join(" && ") || "the release gates",
     UI_LANGUAGE: c.project.language === "de" ? "German" : "English", LANGUAGE_NAME: c.project.language === "de" ? "German" : "English",
     MAX_ROUNDS: String(c.reviews.maxRounds), SUITE_MAX: String(ctl.capacity?.suiteWorkersMax ?? c.capacity.suiteWorkersMax), READONLY_MAX: String(ctl.capacity?.readOnlyWorkersMax ?? c.capacity.readOnlyWorkersMax),
     UNIT_SLOTS: String(ctl.capacity?.gate?.unitSlots ?? c.capacity.gate.unitSlots), E2E_SLOTS: String(ctl.capacity?.gate?.e2eSlots ?? c.capacity.gate.e2eSlots),
@@ -342,7 +344,7 @@ function templateVars(c) {
     PROJECT_RULES: fs.existsSync("docs/controller-rules.md") ? fs.readFileSync("docs/controller-rules.md", "utf8").trim() : "_None yet. Put project-specific hard rules, data boundaries, known flakes and decision pointers into `docs/controller-rules.md`; `agentic-factory update` renders them here._",
   };
 }
-const render = (text, vars) => text.replace(/\{\{([A-Z_]+)\}\}/g, (m, k) => (k in vars ? vars[k] : m));
+const render = (text, vars) => text.replace(/\{\{([A-Z0-9_]+)\}\}/g, (m, k) => (k in vars ? vars[k] : m));
 // Templates that an existing project may already have in its own form: the adoption ADR is skipped when the project
 // already has an ADR 0001 (its numbering is its own); the ADR template is skipped when docs/adr/ already exists.
 // Hooks in a project that already has some. Three modes, decided once and recorded in factory.config.json → hooks:
@@ -377,6 +379,36 @@ const hookMode = (setup = hooksSetup()) => (flag("--keep-own-hooks") ? "own" : o
 const ownHooksDir = () => hooksSetup().dir;
 const ownAdr = () => fs.existsSync("docs/adr") && fs.readdirSync("docs/adr").some((f) => /^(ADR-)?0001[-.]/.test(f) && !f.includes("adopt-agentic-factory"));
 // The adoption ADR takes the next free number when the project already numbers its ADRs.
+// architecture.mode is the human's choice. A config from before this choice counts as off until the human decides.
+function architectureVars(c) {
+  if (c.architecture?.mode !== "architect") return {
+    ARCHITECTURE_LOOP: "   - **Architecture document:** this project has not chosen one (`architecture.mode` is not `architect`), so there is no baseline and no stewardship. Spec and conformance reviews still run.",
+    ARCHITECTURE_PROTOCOL: "## Architecture document\n\nThis project has not chosen a maintained `ARCHITECTURE.md` (`architecture.mode` in `factory.config.json`), so there is no baseline and no stewardship. Spec and conformance reviews still run. To turn it on, set the mode to `architect` and run `agentic-factory update`.",
+  };
+  return {
+    ARCHITECTURE_LOOP: `   - **Architecture baseline:** if \`ARCHITECTURE.md\` is missing on \`origin/${c.project.mainBranch}\`, start one (\`mkspec baseline\`) as the first task when the repo holds code beyond the adoption files, otherwise after the first merged wave. It blocks no feature work. An existing file is checked, never replaced.
+   - **Wave merged:** start the stewardship review in the same cycle (\`mkspec steward "<wave title>"\`, \`--readonly\`). Its branch joins the next wave without a Tester, because it changes only documents.
+   - **Open points:** when \`ARCHITECTURE.md\` lists points under "Open", name their number in \`status.md\` under "Problems". They are questions for ${c.project.humanName}, not blockers.`,
+    ARCHITECTURE_PROTOCOL: `## Keeping ARCHITECTURE.md current
+
+\`ARCHITECTURE.md\` describes the architecture as it is, and every review compares against it. ${c.project.humanName} chose this (\`architecture.mode\`).
+
+- Every level 3 change, and every accepted ADR that changes modules, responsibilities, data flows or interfaces, updates \`ARCHITECTURE.md\` in the same change, citing that ADR. A process ADR does not.
+- Conformance fails if a level 3 change does not update it. A level 2 change that makes it wrong is noted as a finding, and stewardship follows it up.
+- Stewardship after each wave reports any drift between the document and the code, with file evidence, and records it in \`docs/debt.md\`.
+- The document states what the code does. A point without an approved requirement or ADR is marked \`open\`. Code never proves a decision.
+
+## Baseline: creating ARCHITECTURE.md
+
+A Worker Architect creates it from the code: as the first task when the repo already holds code, otherwise after the first merged wave. Every statement carries file evidence.
+
+- Nothing is decided here. What the code does but no requirement or ADR approves goes under "Open". Those points are questions for ${c.project.humanName} and block no feature work.
+- An existing \`ARCHITECTURE.md\` is never replaced. The Architect reports where it differs from the code, as a stewardship review does.
+- The file is protected, so the commit cites ${`ADR-${adoptionAdrNumber()}`}. It changes only documents, so it joins the next wave without a Tester.
+- The first line names the commit last checked. Stewardship moves it when it finds no drift, citing the same ADR.`,
+  };
+}
+
 const adoptionAdrNumber = () => { if (!fs.existsSync("docs/adr")) return "0001"; const nums = fs.readdirSync("docs/adr").map((f) => /^(?:ADR-)?(\d{4})[-.]/.exec(f)?.[1]).filter(Boolean).map(Number); const existing = fs.readdirSync("docs/adr").find((f) => f.includes("adopt-agentic-factory")); if (existing) return /(\d{4})/.exec(existing)[1]; return String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4, "0"); };
 const skipTemplate = (rel, mode = hookMode()) => (/^\.githooks\//.test(rel) || rel === "tools/factory-guardrails.mjs") && mode === "own";
 // The adoption ADR template is written under the project's next free number; hook templates go into the hooks directory.
@@ -658,7 +690,8 @@ function collectStatus() {
   else [s.phase, s.next] = ["accept and next", "accept what was integrated on the preview, then choose the next feature"];
   s.hints = [
     ...(!s.work.glossary ? ["the business terms are not written down yet (no GLOSSARY.md): capture them with domain-modeling while specifying"] : []),
-    ...(!s.work.architecture && tickets.total ? ["no ARCHITECTURE.md yet: the Architect's spec reviews have nothing to check against"] : []),
+    ...(c.architecture?.mode === undefined ? ["no decision on ARCHITECTURE.md yet: ask the human, then set architecture.mode to architect or off in factory.config.json and run update"] : []),
+    ...(c.architecture?.mode === "architect" && !s.work.architecture ? ["no ARCHITECTURE.md yet: the Controller starts the baseline (mkspec baseline)"] : []),
     ...(debtOpen ? [`${debtOpen} open debt items: they must be closed or accepted before a release`] : []),
   ];
   return s;

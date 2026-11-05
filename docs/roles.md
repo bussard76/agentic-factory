@@ -16,7 +16,7 @@ Five kinds of participants. The human talks to exactly one of them.
 |---|---|---|
 | **Developer** | implements exactly one task, test-first, on its own branch; keeps a checklist of every requirement in the report; pushes after each item; self-reviews against the spec before replying | default |
 | **Tester** | independent reviewer of one task round; fresh context every round, never the Developer of that task; runs the full gates itself; writes a findings file with a verdict | default |
-| **Architect** | checks every spec before the build (level, interfaces, seams), a coarse conformance check after level-2/3 builds, and architecture health after each merged wave | default; large for ADRs and level 3 |
+| **Architect** | checks every spec before the build (level, interfaces, seams), a coarse conformance check after level-2/3 builds, and, when the project chose a maintained `ARCHITECTURE.md`, creates it and checks it after each merged wave | default; large for ADRs and level 3 |
 | **Spec writer** | drafts large task specs and ADR proposals from the human's decisions; docs only | default |
 | **Auditor** | reads the journal, load log, reviews and debt and writes the top 3 improvements and risks, each with a measured value | default |
 | **Retro** | reads one hard worker session and proposes 1–3 traceable changes to the agents' environment | default |

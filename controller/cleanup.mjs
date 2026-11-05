@@ -11,7 +11,8 @@ const dry = process.argv.includes("--dry"), allowPushed = process.argv.includes(
 const hosts = process.argv.includes("--all") ? HOSTS : [argHost(process.argv)];
 const workers = readJson("workers.json", {});
 const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
-let removed = 0, kept = 0, pruned = 0, released = 0;
+let removed = 0, kept = 0, pruned = 0, released = 0, closedWaves = 0;
+const readText = (name) => { try { return fs.readFileSync(file(name), "utf8"); } catch { return ""; } };
 const failedReleases = [];
 const terminalsOf = (host) => {   // null when the state is unknown; one call per host, reused below
   if (RUNNER !== "orca") return [];
@@ -25,9 +26,18 @@ for (const host of hosts) {
   const terms = hostTerms.get(host.name);
   if (terms === null) { console.log(`[${host.name}] cannot list terminals; removing nothing here`); continue; }
   const busy = new Set([
-    ...terms.filter((t) => /· Worker|Controller|Coordinator/.test(t.title ?? "") && t.status !== "exited").map((t) => t.worktreePath),
+    ...terms.filter((t) => /· Worker|Controller|Coordinator|· Integration/.test(t.title ?? "") && t.status !== "exited").map((t) => t.worktreePath),
     ...Object.values(workers).filter((w) => (w.host ?? "local") === host.name && ((w.pid && alive(w.pid)) || (w.terminal && terms.some((t) => t.handle === w.terminal && t.status !== "exited")))).map((w) => w.worktree),
   ]);
+  // Finished wave terminals pile up in the integration worktree. The newest stays: wavewait and the heartbeat read its result.
+  const newestWave = readText("wave-handle.txt").trim().split(" ")[1];
+  for (const t of terms) {
+    if (t.handle === newestWave || !/^(.* · Integration · |Coordinator )/.test(t.title ?? "") || !t.worktreePath?.endsWith("/coordinator-integration")) continue;
+    const output = trySh(ORCA, ["terminal", "read", "--terminal", t.handle, ...orcaEnvArgsOn(host), "--json"]);
+    if (!/WAVE-END/.test(output.replace(/echo WAVE-END/g, ""))) continue;
+    closedWaves++;
+    if (!dry) trySh(ORCA, ["terminal", "close", "--terminal", t.handle, ...orcaEnvArgsOn(host), "--json"]);
+  }
   const wsTail = WS.split("/").filter(Boolean).slice(-2).join("/");
   const wts = g("worktree", "list", "--porcelain").split("\n\n").map((b) => ({ path: /^worktree (.*)$/m.exec(b)?.[1], branch: /^branch refs\/heads\/(.*)$/m.exec(b)?.[1] })).filter((w) => w.path && w.path.includes(`/${wsTail}/`));
   for (const w of wts) {
@@ -79,7 +89,7 @@ if (!dry) {
   writeJson("workers.json", workers);
   journal("cleanup", "controller", { note: `removed ${removed}, kept ${kept}, pruned ${pruned}, released ${released}${failedReleases.length ? `, release failed ${failedReleases.join(" ")}` : ""}` });
 }
-console.log(`cleanup${dry ? " (dry)" : ""}: removed ${removed} worktrees, kept ${kept}, pruned ${pruned} remote branches, released ${released} dispatches${failedReleases.length ? `; release FAILED for ${failedReleases.join(", ")}` : ""}`);
+console.log(`cleanup${dry ? " (dry)" : ""}: removed ${removed} worktrees, kept ${kept}, pruned ${pruned} remote branches, released ${released} dispatches, closed ${closedWaves} finished wave terminals${failedReleases.length ? `; release FAILED for ${failedReleases.join(", ")}` : ""}`);
 // Every cycle also corrects automatic names: a failure here must not hide what cleanup did.
 if (!dry && RUNNER === "orca") for (const host of hosts) try { process.stdout.write(sh("node", [file("names.mjs"), "--on", host.name])); } catch (e) { console.error(`naming entries on ${host.name} failed: ${e.message}`); }
 function alive(pid) { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } }

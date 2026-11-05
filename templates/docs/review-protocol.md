@@ -23,7 +23,7 @@ Missing or weak tests, coverage gaps, edge cases, security, load and style are *
 ## Reviewer rules
 
 - **Read-only.** Do not edit, stash or reset implementation files. The only file you write is your findings file.
-- **Trust nothing reported.** Rerun the gates yourself: `{{VERIFY}}` always, `{{E2E}}` when the change can affect user flows. Run them through `gate`. Docker gates run only at release.
+- **Trust nothing reported.** Rerun the gates yourself: `{{VERIFY}}` always, `{{E2E}}` when the change can affect user flows. Run them through `gate`, as `gate bash -c '<command>'` because `gate` starts a program without a shell. Docker gates run only at release.
 - **On current `{{MAIN}}` plus the branch.** Use a clean worktree: merge current `{{MAIN}}` into a temporary branch from the reviewed head (abort and note conflicts if any). Failures present only on the stale branch tip are not findings; failures on the merged tree are.
 - **Clean checkout.** No leftover ignored build output from earlier runs; a test that passes only because of leftovers is a finding.
 - **Full diff** against `origin/{{MAIN}}`, not a sample. Run `ponytail-review` on it and merge its findings with the severities below.

@@ -36,7 +36,7 @@ Workers can be **Codex**, **Claude Code** or **Pi** (`--agent` in `start.mjs`; d
 
 | Tool | Use |
 |---|---|
-| `node templates/mkspec.mjs <role> …` | generate a spec (dev, rework, test, reeval, specreview, conf, audit, retro). Always from the template with parameters; never edit another task's spec. |
+| `node templates/mkspec.mjs <role> …` | generate a spec (dev, rework, test, reeval, specreview, conf, baseline, steward, audit, retro). Always from the template with parameters; never edit another task's spec. |
 | `node start.mjs "<Task> · Worker <Role>" <spec-file> <key> [--agent …] [--tier …] [--worktree <dir>] [--readonly] [--force]` | start a worker after the capacity verdict; names its terminal; records it in `workers.json` |
 | `node wait.mjs` (in the background) | waits for `worker_done`, escalations and questions{{ACK_LINE}} |
 | `node stallwatch.mjs` (as a monitor) | reports idle, at-capacity, early-stopped or gone workers; nudge with text into the terminal |
@@ -60,6 +60,7 @@ On every worker event, and otherwise every 10 minutes. `heartbeat.mjs` wakes you
    - **Tester failed:** rework in the same worktree (`mkspec rework`, `start.mjs --worktree <dir> --force`). Second failure: one tier higher. After {{MAX_ROUNDS}} rounds with a working feature: `mkspec reeval`, integrate, open points become debt plus an acceptance item.
    - **Tester passed:** level 2/3 → conformance review (`mkspec conf`, `--readonly`). Then a wave as soon as {{WAVE_PASSED}} passed tasks wait, one has waited {{WAVE_MINUTES}} minutes, or the task is on the critical path. **A wave merges each task branch AND the review branch of its passing round** (`origin/{{BRANCH_PREFIX}}t12 origin/{{BRANCH_PREFIX}}t12-review-2`, plus the conformance branch for level 2/3): the push gate reads the findings files from the pushed tree and rejects a wave without them.
    - **Wave red:** a known load flake gets one isolated rerun; three green isolated runs are the evidence. A real failure goes back to the task.
+{{ARCHITECTURE_LOOP}}
    - **Question or escalation:** decide it if it is level 1/2 and covered by the recorded rules; write the decision into the task or the decisions file. Otherwise "Needs {{HUMAN}}".
    - **Stall, early stop, repeated self-caused error, escalation on the ladder, escaped defect:** nudge, and start a Retro (`mkspec retro`, `--readonly`) per the triggers in `docs/coordinator.md`.
 3. **Fill free capacity** by the verdict of `capacity.mjs`, in this order: critical path, rework and Testers of nearly finished tasks, waves, new development (ready tickets, then the handover queue), debt and improvements (at most {{FAST_LANE_MAX}} fast-lane task at a time).

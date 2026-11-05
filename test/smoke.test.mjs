@@ -554,6 +554,10 @@ test("controller scripts run against the generated config", () => {
   const verdict = JSON.parse(run("capacity.mjs", "--verbose"));
   assert.ok(["start", "wait"].includes(verdict.suite)); assert.equal(verdict.caps.calibration, "auto");
   assert.match(run("templates/mkspec.mjs", "dev", "T01", "docs/tasks/T01-x.md", "agents/t01"), /t01-dev\.txt$/);
+  assert.match(run("templates/mkspec.mjs", "baseline"), /baseline/);
+  // Every placeholder is filled, including those with a digit, and a release is one runnable command.
+  for (const f of ["AGENTS.md", "docs/coordinator.md", "docs/review-protocol.md", "docs/architect-protocol.md", "docs/dev-workflow.md", ".factory/controller/CONTROLLER.md"]) assert.doesNotMatch(fs.readFileSync(path.join(tmp, f), "utf8"), /\{\{[A-Z0-9_]+\}\}/, f);
+  assert.match(run("templates/mkspec.mjs", "steward", "Wave 1"), /steward/);
   run("journal.mjs", "decision", "T01", "note=x");
   assert.match(run("cleanup.mjs", "--dry"), /cleanup \(dry\)/);
   assert.match(run("calibrate-models.mjs"), /no change|updated/);

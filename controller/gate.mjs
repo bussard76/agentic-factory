@@ -51,6 +51,7 @@ const t1 = Date.now();
 const release = () => { try { fs.unlinkSync(path.join(dir, slot)); } catch {} };
 process.on("exit", release); process.on("SIGINT", () => { release(); process.exit(130); }); process.on("SIGTERM", () => { release(); process.exit(143); });
 const r = spawnSync(args[0], args.slice(1), { stdio: "inherit", shell: false });
+if (r.error) console.error(`gate: cannot start "${args[0]}" (${r.error.code}). gate starts a program without a shell; for shell syntax use: gate bash -c '<command>'`);
 const t2 = Date.now();
 release();
 const journal = path.join(controllerDir, "journal.mjs");
