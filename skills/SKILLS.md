@@ -9,6 +9,10 @@ Every skill in this directory is copied unchanged from its source at a pinned co
 | `wayfinder`, `to-spec`, `prototype` | https://github.com/mattpocock/skills (`skills/engineering/`) | `skills-lock.json` | MIT, `MATTPOCOCK-LICENSE` | Front agent: plan large efforts, turn an agreed discussion into a spec, build front-end fakes and logic demos |
 | `orca-cli`, `orchestration` | shipped with Orca (`orca skills get <name>` prints the version-matched guide) | discovery stubs | Orca's terms | Controller and Front agent when the runner is Orca |
 
+## Adapted, not vendored
+
+- The working rules "Think before you build", "Simplest thing that works", "Surgical changes" and "Verifiable goals" in `templates/AGENTS.md` summarise `karpathy-guidelines` from https://github.com/multica-ai/andrej-karpathy-skills in our own words (the skill declares MIT).
+
 ## Omitted on purpose
 
 - `ponytail-help`: its instructions describe global configuration, plugin remote updates and global CLI installation. Everything else in ponytail was read completely and instructs none of that.

@@ -5,6 +5,10 @@ Read first: `ARCHITECTURE.md` (if present), your task, and `docs/coordinator.md`
 ## Way of working
 
 - **One task, its scope only.** Do exactly the task you were given. Out-of-scope findings go into your final report; do not fix them.
+- **Think before you build.** State your assumptions first. If a task can be read several ways, name the readings instead of picking one silently. If something is unclear, stop and ask the coordinator. If a simpler way exists, say so.
+- **Simplest thing that works.** Nothing beyond what was asked: no speculative features, no abstractions for single-use code, no unrequested configurability, no error handling for impossible cases. If 200 lines could be 50, rewrite them.
+- **Surgical changes.** Every changed line traces to your task. Match the existing style, and leave adjacent code, comments and formatting alone. Remove only what your own change made unused; mention other dead code in your report.
+- **Verifiable goals.** Turn the task into checks you can run, and for several steps write a short plan with one check per step. Keep going until they pass.
 - **TDD.** For every behaviour: write a failing test first, make it pass, then refactor. Test through public entry points, not internals.
 - **Done means:** `{{VERIFY}}` is green, the task's acceptance checks pass, and your report lists files changed, tests added and any assumptions.
 - **Never weaken tests.** Do not delete, skip or loosen existing tests. If a test is wrong, escalate.
