@@ -91,7 +91,7 @@ git status                                       # what update changed
 2. **Commit and push.** `update` commits nothing. Protected files need the adoption ADR in the commit message, for example `Update agentic factory (ADR-0001)`. The hooks and the review gate apply as usual.
 3. **Hand it to the Controller:** `node ~/agentic-factory/bin/agentic-factory.mjs start` copies the new bundles to the Controller's directory and the skills to the host. Scripts take effect at their next call. A running Controller read its `CONTROLLER.md` when it started, so close its terminal once it is idle and run `start` again. Workers run in their own terminals and keep running.
 
-Run this in each project. To stay on a release instead of `main`, use `git -C ~/agentic-factory checkout <tag>`, for example `v0.1.2`. `pull --ff-only` then no longer works until you switch back with `git -C ~/agentic-factory switch main`.
+Run this in each project. To stay on a release instead of `main`, use `git -C ~/agentic-factory checkout <tag>`, for example `v0.1.3`. `pull --ff-only` then no longer works until you switch back with `git -C ~/agentic-factory switch main`.
 
 ## Known limits (read before you trust the gates)
 
@@ -145,7 +145,7 @@ site/           the single-page intro
 
 ## A start, not an end state
 
-Version 0.1.2, first extracted on 2026-10-31 from a project that has run this way since 2026-10-27. It is meant as a **starting point**:
+Version 0.1.3, first extracted on 2026-10-31 from a project that has run this way since 2026-10-27. It is meant as a **starting point**:
 
 - every project gets its own copy through `init` and changes it freely; `update` brings newer factory versions in without overwriting local changes (new versions land in `.factory/new/` for you to merge)
 - what proves itself in a project flows back into the factory as a pull request
