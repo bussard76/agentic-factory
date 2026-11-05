@@ -70,6 +70,29 @@ $ORCA agent launch --agent claude --worktree "path:$PWD" --surface terminal --fo
 
 Use `--agent codex` or `--agent pi` if that is your logged-in CLI. The agent's tab opens in Orca; from then on you talk to it there. Adding a project that Orca already knows does no harm. **Windows:** the factory's scripts need a Unix shell, so run Orca's terminal on a WSL 2 distribution (`wsl --install -d Ubuntu` in an admin PowerShell), install Node 22, git and the agent CLI inside WSL, and keep the project in the WSL file system (`~/…`, not `/mnt/c/…`); the commands above stay the same. Native Windows shells are not supported. The Front agent asks the [onboarding questions](docs/onboarding.md) in conversation, creates the adoption commit, starts the Controller and checks the setup. It then reports the project phase and guides the first feature. The [manual CLI path](docs/getting-started.md#appendix-what-the-agent-does-for-you-and-how-to-do-it-by-hand) remains available; updates preserve edited files in `.factory/new/` for merging.
 
+## Update a project that already uses the factory
+
+Your project has its own copy of the handbooks and hooks, so a newer factory reaches it only through these steps. Drop this into the project's Front agent:
+
+```text
+Update this project to the newest agentic factory. Run git -C ~/agentic-factory pull --ff-only, then in this project run node ~/agentic-factory/bin/agentic-factory.mjs update. Show me what changed and every file it kept. Merge each kept file with its new version in .factory/new/ and ask me where they contradict. Commit the changes referencing the adoption ADR, push them, run node ~/agentic-factory/bin/agentic-factory.mjs start and tell me whether the Controller needs a restart.
+```
+
+Or by hand:
+
+```bash
+git -C ~/agentic-factory pull --ff-only          # the newest factory
+cd ~/path/to/your-project
+node ~/agentic-factory/bin/agentic-factory.mjs update
+git status                                       # what update changed
+```
+
+1. **Review.** `update` overwrites only files you have not changed. It keeps a changed file and puts the new version in `.factory/new/`, so merge those by hand.
+2. **Commit and push.** `update` commits nothing. Protected files need the adoption ADR in the commit message, for example `Update agentic factory (ADR-0001)`. The hooks and the review gate apply as usual.
+3. **Hand it to the Controller:** `node ~/agentic-factory/bin/agentic-factory.mjs start` copies the new bundles to the Controller's directory and the skills to the host. Scripts take effect at their next call. A running Controller read its `CONTROLLER.md` when it started, so close its terminal once it is idle and run `start` again. Workers run in their own terminals and keep running.
+
+Run this in each project. To stay on a release instead of `main`, use `git -C ~/agentic-factory checkout <tag>`, for example `v0.1.2`. `pull --ff-only` then no longer works until you switch back with `git -C ~/agentic-factory switch main`.
+
 ## Known limits (read before you trust the gates)
 
 - The git guardrails are **local hooks**. They stop honest mistakes; they are not a security boundary. Protect `main` on the server side too (branch protection, a CI check). See [`debt.md`](debt.md).
