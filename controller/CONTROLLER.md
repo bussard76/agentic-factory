@@ -82,6 +82,7 @@ The reasons are in `docs/learnings.md` of the factory.
 - After an interrupted or failed command, inspect what actually ran before reporting. A chained command may have partly run.
 - Prove a mechanism through a real event. A deployment or a syntax check proves nothing about a signal path, so report it as unproven until a real event has passed through it.
 - Validate a script under its real file extension. `node --check` rejects a `.new` suffix.
+- Silence from a watcher is not evidence. Every pipe stage must flush per line, and after arming a watcher you compare it with its source once.
 
 ## Status file format
 

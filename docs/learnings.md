@@ -14,6 +14,7 @@ Lessons from real projects, with where each one now lives. The handbooks carry t
 | 2 | **Waking must not depend on a list the woken agent can change.** The heartbeat only counted messages from workers in `workers.json`, and a Controller cycle could remove a worker before its message was counted. Keep a separate, append-only record of known workers. | Open: F39 |
 | 3 | **A signal counts as delivered only after a successful wake.** If the Controller is busy, retry on the next tick. Log every attempt, so silence never hides a miss. | Open: F39 |
 | 4 | **Work between phases needs a wake too.** With no workers, no inbox and no ready tickets, the Controller only woke hourly, even though the next step was already approved. "Idle" must mean nothing is approved and waiting, not only that no worker runs. A Controller also fills free capacity in the same cycle after a wave. | Applied: `CONTROLLER.md` |
+| 15 | **A busy Controller must still receive instructions.** A heartbeat that only sends to an idle terminal starves the inbox during long cycles. A human's instruction waited 27 minutes. After a few minutes, deliver a pointer to the inbox into the running session. | Open: F39 |
 
 ### Visibility
 
@@ -39,3 +40,4 @@ Lessons from real projects, with where each one now lives. The handbooks carry t
 | 12 | **After an interrupted or failed command, inspect what actually ran before reporting.** A chained command may have partly run. | Applied: `CONTROLLER.md` |
 | 13 | **Prove a mechanism through a real event.** A successful deployment or syntax check proves nothing about the signal path. Report a path as unproven until a real event has passed through it. | Applied: `CONTROLLER.md` |
 | 14 | **Validate a script under its real file extension.** `node --check` rejects a `.new` suffix, so the deployment silently did not happen. | Applied: `CONTROLLER.md` |
+| 16 | **A monitor stays silent if any pipe stage buffers.** A `cut` after `grep --line-buffered` withheld every event for 30 minutes. Silence from a watcher is not evidence: compare it with the source once after arming it. | Applied: `CONTROLLER.md` |
