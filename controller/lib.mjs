@@ -84,4 +84,8 @@ export const readJson = (name, fallback) => (fs.existsSync(file(name)) ? JSON.pa
 export const writeJson = (name, value) => fs.writeFileSync(file(name), JSON.stringify(value, null, 2) + "\n");
 export const journal = (type, task, extra = {}) => fs.appendFileSync(file("journal.ndjson"), JSON.stringify({ ts: new Date().toISOString(), type, task, ...extra }) + "\n");
 export const modelFor = (tier, agent = config.agents?.default ?? "codex") => (agent === FALLBACK.agent ? FALLBACK.models?.[tier] : MODELS[tier]) ?? MODELS.default;
+/** A setup or shell terminal in an entry. Its name contains the entry's role, but it is neither the worker nor a wave. */
+export const isHelperTerminal = (title = "") => / · (Setup|Shell)$/.test(title);
+/** Whether a terminal keeps its worktree from being cleaned up. */
+export const holdsWorktree = (title = "") => /· Worker|Controller|Coordinator|· Integration/.test(title) && !isHelperTerminal(title);
 export const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");

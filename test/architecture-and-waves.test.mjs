@@ -112,7 +112,7 @@ const a = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(log)}, a.join(" ") + "\\n");
 const handle = a[a.indexOf("--terminal") + 1];
 if (a[0] === "terminal" && a[1] === "list") console.log(JSON.stringify({ ok: true, result: { terminals: ${JSON.stringify(terminals)} } }));
-else if (a[1] === "read") console.log(JSON.stringify({ ok: true, result: { tail: ["term_old", "term_legacy", "term_other"].includes(handle) ? "PUSHED main\\nWAVE-END" : "cmd; echo WAVE-END\\nrunning" } }));
+else if (a[1] === "read") console.log(JSON.stringify({ ok: true, result: { tail: ["term_old", "term_legacy", "term_other", "term_shell"].includes(handle) ? "PUSHED main\\nWAVE-END" : "cmd; echo WAVE-END\\nrunning" } }));
 else if (a[0] === "worktree" && a[1] === "list") console.log(JSON.stringify({ ok: true, result: { worktrees: [] } }));
 else console.log(JSON.stringify({ ok: true, result: {} }));`);
   fs.chmodSync(fake, 0o755);
