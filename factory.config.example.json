@@ -1,6 +1,6 @@
 {
   "$comment": "Written by `agentic-factory init`. Every project-specific value lives here; the handbooks, templates and scripts read it. Never put secrets in this file.",
-  "factoryVersion": "0.1.5",
+  "factoryVersion": "0.1.6",
   "project": {
     "name": "my-app",
     "repo": "github.com/my-org/my-app",
