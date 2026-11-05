@@ -559,7 +559,18 @@ for (const tracked of [false, true]) {
   });
 }
 
-test("init accepts a tracked .claude/skills link and a tracked file named docs, and shows what arm reports", () => {
+test("deleting a remote branch needs no fetch, and a stale force push to any branch does", () => {
+  const h = adopted();
+  const url = h.ok(h.project, "remote", "get-url", "origin"), other = path.join(h.base, "other");
+  h.ok(h.base, "clone", "-q", url, other); h.ok(other, "config", "user.name", "T"); h.ok(other, "config", "user.email", "t@example.invalid");
+  for (const b of ["agents/gone", "agents/moved"]) { h.ok(other, "commit", "-q", "--allow-empty", "-m", b); h.ok(other, "push", "-q", "origin", `HEAD:refs/heads/${b}`); }
+  h.ok(h.project, "push", "origin", "--delete", "agents/gone");
+  const force = h.git(h.project, "push", "--force", "origin", "HEAD:refs/heads/agents/moved");
+  assert.notEqual(force.status, 0); assert.match(force.stderr, /Fetch first/);
+  h.done();
+});
+
+test("init accepts a tracked .claude/skills link, and refuses a file named docs clearly", () => {
   const h = adopted({ before: (project) => {
     fs.mkdirSync(path.join(project, ".agents/skills/tdd"), { recursive: true }); fs.writeFileSync(path.join(project, ".agents/skills/tdd/SKILL.md"), "ours\n");
     fs.mkdirSync(path.join(project, ".claude")); fs.symlinkSync("../.agents/skills", path.join(project, ".claude/skills"));
@@ -571,7 +582,7 @@ test("init accepts a tracked .claude/skills link and a tracked file named docs, 
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: base, env });
   fs.writeFileSync(path.join(base, "docs"), "a file\n");
   const r = spawnSync("node", [CLI, "init", "--untracked-standard", "--yes"], { cwd: base, encoding: "utf8", env });
-  assert.notEqual(r.status, 0); assert.match(r.stdout, /`docs` is a file here/); assert.doesNotMatch(r.stderr, /ENOTDIR/, "a clear refusal, no stack trace");
+  assert.notEqual(r.status, 0); assert.match(r.stdout, /`docs` is not a directory here/); assert.doesNotMatch(r.stderr, /ENOTDIR/, "a clear refusal, no stack trace");
   fs.rmSync(base, { recursive: true, force: true });
 });
 

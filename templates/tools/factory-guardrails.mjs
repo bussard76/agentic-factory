@@ -126,12 +126,12 @@ function gatedBranches(remoteSha) {
 function reviewGate() {
   const updates = readFileSync(0, "utf8").trim().split("\n").filter(Boolean).map((l) => l.split(" "));
   for (const [, localSha, remoteRef, remoteSha] of updates) {
+    if (/^0+$/.test(localSha)) continue; // deleting the branch introduces no commits
     // Without the remote's commits, the range below is empty and nothing would be checked. A plain push is refused by git
     // in this state anyway; a forced one would overwrite those commits unseen.
-    if (!/^0+$/.test(remoteSha) && !shaExists(remoteSha)) fail(`The remote has commits on ${remoteRef} this clone does not. Fetch first.`);
+    if (remoteRef.startsWith("refs/heads/") && !/^0+$/.test(remoteSha) && !shaExists(remoteSha)) fail(`The remote has commits on ${remoteRef} this clone does not. Fetch first.`);
     const branch = gatedBranches(remoteSha).find((b) => remoteRef === `refs/heads/${b}`);
     if (!branch) continue;
-    if (/^0+$/.test(localSha)) continue; // deleting the branch introduces no commits
     const range = /^0+$/.test(remoteSha) ? localSha : `${remoteSha}..${localSha}`;
     const commits = tryGit("rev-list", "--no-merges", range).trim().split("\n").filter(Boolean);
     const merges = tryGit("rev-list", "--merges", range).trim().split("\n").filter(Boolean);

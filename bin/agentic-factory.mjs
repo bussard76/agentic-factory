@@ -115,7 +115,7 @@ async function init() {
     // Excluded and not tracked, such a file would vanish from git status, and a later merge would overwrite it without a word.
     const tracked = sh("git", ["ls-files"]).split("\n");
     const lstat = (p) => { try { return fs.lstatSync(p); } catch { return null; } };
-    if (lstat("docs") && !fs.statSync("docs").isDirectory()) { say("--untracked-standard: `docs` is a file here, and the factory needs a directory of that name for ADRs and reviews. Nothing was changed."); process.exit(1); }
+    if (lstat("docs") && !(fs.existsSync("docs") && fs.statSync("docs").isDirectory())) { say("--untracked-standard: `docs` is not a directory here, and the factory needs a directory of that name for ADRs and reviews. Nothing was changed."); process.exit(1); }
     // A parent that is a link (a tracked .claude/skills) or a file (a tracked file named docs) leaves nothing to hide.
     const inTheWay = standardPaths().filter((p) => { const stat = lstat(p); return stat && !stat.isSymbolicLink() && !lstat(path.dirname(p))?.isSymbolicLink() && !tracked.some((t) => t === p || t.startsWith(`${p}/`)); });
     if (inTheWay.length) { say(`--untracked-standard: these untracked files sit where the factory's standard goes: ${inTheWay.join(", ")}. Commit them, then they count as this project's deviation, or move them. Nothing was changed.`); process.exit(1); }
