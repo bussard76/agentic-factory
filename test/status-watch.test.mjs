@@ -10,13 +10,13 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = path.join(ROOT, "bin/agentic-factory.mjs");
 
-function setup({ terminals, idle = true }) {
+function setup({ terminals, idle = true, recordedHandle = null }) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-watch-")));
   const watch = path.join(dir, "front"), ctl = path.join(dir, "controller"), project = path.join(dir, "project");
   for (const d of [watch, ctl, project]) fs.mkdirSync(d);
   for (const f of ["statuswatch.mjs", "hosts.mjs"]) fs.copyFileSync(path.join(ROOT, "front-agent", f), path.join(watch, f));
   fs.writeFileSync(path.join(watch, "factory.config.json"), JSON.stringify({ project: { name: "p", humanName: "H" }, agents: { runner: "orca" }, capacity: {}, hosts: { controller: { host: "local", controllerDir: ctl }, workers: [{ name: "local", kind: "local", workspacesDir: path.join(dir, "ws") }] } }));
-  fs.writeFileSync(path.join(watch, "front-agent.json"), JSON.stringify({ projectDir: project }));
+  fs.writeFileSync(path.join(watch, "front-agent.json"), JSON.stringify({ projectDir: project, handle: recordedHandle }));
   const state = path.join(dir, "fake.json"), log = path.join(dir, "calls.log");
   const write = (s) => fs.writeFileSync(state, JSON.stringify(s));
   write({ idle, terminals: terminals(project) });
@@ -25,6 +25,8 @@ function setup({ terminals, idle = true }) {
 import fs from "node:fs";
 const a = process.argv.slice(2), s = JSON.parse(fs.readFileSync(${JSON.stringify(state)}, "utf8"));
 if (a[1] === "send" || a[1] === "set") fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(a) + "\\n");
+if (s.broken) { console.error("orca: not available"); process.exit(1); }
+if (a[1] === "wait" && !s.idle) process.exit(1);
 console.log(JSON.stringify({ ok: true, result: { terminals: s.terminals, wait: { satisfied: s.idle } } }));`, { mode: 0o755 });
   const status = (needs, age = 0) => { const f = path.join(ctl, "status.md"); fs.writeFileSync(f, `## On main\nabc\n\n## Needs H\n${needs}\n\n## Problems\n`); const t = new Date(Date.now() - age * 60_000); fs.utimesSync(f, t, t); };
   const run = () => { const r = spawnSync("node", [path.join(watch, "statuswatch.mjs")], { encoding: "utf8", env: { ...process.env, ORCA_CLI_COMMAND: fake } }); assert.equal(r.status, 0, r.stderr); };
@@ -70,6 +72,42 @@ test("two possible terminals are a guess, so nothing is sent; the name decides w
   h.done();
 });
 
+test("a name or handle that outlived the agent does not win over the real agent", () => {
+  const h = setup({ recordedHandle: "shell", terminals: (p) => [{ handle: "shell", title: "p · Front Agent", worktreePath: p }, { handle: "other", title: "p · Front Agent", worktreePath: "/another/project", agentIdentity: "x" }, agentIn(p, "real")] });
+  h.status("nothing"); h.run(); h.status("a question"); h.run();
+  const sent = h.calls("send");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0][sent[0].indexOf("--terminal") + 1], "real");
+  h.done();
+});
+
+test("status text cannot submit early, and a broken Orca is reported instead of hidden", () => {
+  const h = setup({ terminals: (p) => [agentIn(p)] });
+  h.status("nothing"); h.run(); h.status("line one\r\nline \u001b[31mtwo"); h.run();
+  const text = h.calls("send")[0]; assert.doesNotMatch(text[text.indexOf("--text") + 1], /[\x00-\x1f]/);
+  h.write({ broken: true, idle: true, terminals: [] }); h.status("another question"); h.run();
+  assert.match(fs.readFileSync(path.join(h.watch, "statuswatch.problem"), "utf8"), /not available|failed/i);
+  h.write({ idle: true, terminals: h.terminals(h.project) }); h.run();
+  assert.equal(fs.existsSync(path.join(h.watch, "statuswatch.problem")), false);
+  assert.match(JSON.stringify(h.calls("send").at(-1)), /another question/, "it still arrives");
+  h.done();
+});
+
+test("a second run waits its turn, an old lock expires, and a broken state file loses no run", () => {
+  const h = setup({ terminals: (p) => [agentIn(p)] });
+  h.status("nothing"); h.run(); h.status("a question");
+  const lock = path.join(h.watch, "statuswatch.lock"); fs.mkdirSync(lock);
+  h.run();
+  assert.equal(h.calls("send").length, 0, "another run holds the lock");
+  const old = new Date(Date.now() - 11 * 60_000); fs.utimesSync(lock, old, old);
+  h.run();
+  assert.equal(h.calls("send").length, 1);
+  assert.equal(fs.existsSync(lock), false);
+  fs.writeFileSync(path.join(h.watch, "statuswatch-state.json"), '{"pending":null}');
+  h.run();
+  h.done();
+});
+
 test("a lasting problem is announced once, and again after it went away", () => {
   const h = setup({ terminals: (p) => [agentIn(p)] });
   h.status("nothing", 40); h.run(); h.run();
@@ -86,13 +124,17 @@ test("the schedule keeps the rest of the crontab and can be repeated", async () 
   const tab = path.join(dir, "tab");
   fs.writeFileSync(tab, "0 1 * * * something-else\n");
   fs.writeFileSync(path.join(dir, "crontab"), `#!/bin/sh\nif [ "$1" = "-l" ]; then cat ${tab}; else cat > ${tab}.new && mv ${tab}.new ${tab}; fi\n`, { mode: 0o755 });
-  const run = () => spawnSync("bash", ["-c", statusWatchCronScript("~/front-agent/p", "p")], { encoding: "utf8", env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } });
+  const run = () => spawnSync("bash", ["-c", statusWatchCronScript("~/front-agent/p", "p", "/opt/node/bin")], { encoding: "utf8", env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } });
   assert.equal(run().stdout.trim(), "added");
   assert.equal(run().stdout.trim(), "exists");
   const lines = fs.readFileSync(tab, "utf8");
   assert.match(lines, /something-else/);
   assert.equal(lines.split("statuswatch.mjs").length, 2, "one line");
   assert.match(lines, /^\*\/5 /m);
+  assert.match(lines, /PATH="\/opt\/node\/bin:/, "cron finds node under nvm and the like");
+  // A heartbeat and a watch in one directory do not hide each other.
+  const { heartbeatCronScript } = await import(path.join(ROOT, "bin/heartbeat-cron.mjs"));
+  assert.equal(spawnSync("bash", ["-c", heartbeatCronScript("~/front-agent/p", "p")], { encoding: "utf8", env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } }).stdout.trim(), "added");
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -102,9 +144,10 @@ test("start schedules the watch and runs it once; status shows whether it runs, 
   for (const d of [home, project, bin]) fs.mkdirSync(d);
   fs.writeFileSync(tab, "");
   fs.writeFileSync(path.join(bin, "crontab"), `#!/bin/sh\nif [ "$1" = "-l" ]; then cat ${tab}; else cat > ${tab}.new && mv ${tab}.new ${tab}; fi\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "claude"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   fs.writeFileSync(path.join(bin, "orca"), `#!/usr/bin/env node\nconsole.log(JSON.stringify({ ok: true, result: { terminals: [], repos: [] } }));\n`, { mode: 0o755 });
-  const env = { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, GIT_CONFIG_NOSYSTEM: "1", ORCA_CLI_COMMAND: path.join(bin, "orca") };
-  delete env.ORCA_TERMINAL_HANDLE;
+  const env = { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, GIT_CONFIG_NOSYSTEM: "1" };
+  delete env.ORCA_TERMINAL_HANDLE; delete env.ORCA_CLI_COMMAND;
   const git = (...a) => { const r = spawnSync("git", a, { cwd: project, encoding: "utf8", env }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
   const cli = (...a) => spawnSync("node", [CLI, ...a], { cwd: project, encoding: "utf8", env });
   git("init", "-q", "-b", "main"); git("config", "user.name", "T"); git("config", "user.email", "t@example.invalid");
@@ -116,7 +159,7 @@ test("start schedules the watch and runs it once; status shows whether it runs, 
   assert.equal(cli("update").status, 0);
   const before = JSON.parse(cli("status", "--json").stdout);
   assert.equal(before.setup.statusWatch, false);
-  assert.match(before.next, /status watch/, "not running sends the Front agent to start");
+  assert.equal(before.setup.statusWatch, false);
   const r = cli("start");
   spawnSync("pkill", ["-f", path.join(home, "controller", "loadlog.sh")]);
   assert.match(r.stdout, /Status watch: scheduled/, r.stdout + r.stderr);
@@ -124,18 +167,20 @@ test("start schedules the watch and runs it once; status shows whether it runs, 
   const dir = path.join(home, "front-agent/demo");
   const recorded = JSON.parse(fs.readFileSync(path.join(dir, "front-agent.json"), "utf8"));
   assert.equal(recorded.projectDir, fs.realpathSync(project));
-  assert.equal(recorded.orcaCommand, path.join(bin, "orca"), "cron has no ORCA_CLI_COMMAND, so the command is recorded");
+  assert.equal(recorded.orcaCommand, path.join(bin, "orca"), "a bare name would not be found under cron's PATH");
   for (let i = 0; i < 50 && !fs.existsSync(path.join(dir, "statuswatch.alive")); i++) await new Promise((done) => setTimeout(done, 100));
   assert.equal(JSON.parse(cli("status", "--json").stdout).setup.statusWatch, true);
   assert.match(cli("doctor").stdout, /status watch running/);
   // Stopped polling: gone, whatever the file says.
   const old = new Date(Date.now() - 12 * 60_000); fs.utimesSync(path.join(dir, "statuswatch.alive"), old, old);
   assert.equal(JSON.parse(cli("status", "--json").stdout).setup.statusWatch, false);
-  // A schedule that fails is a failed start.
+  assert.match(JSON.parse(cli("status", "--json").stdout).next, /status watch is not running/);
+  // A machine without a working cron still works, is told, and is not held in a phase.
   fs.writeFileSync(tab, ""); fs.writeFileSync(path.join(bin, "crontab"), `#!/bin/sh\nif [ "$1" = "-l" ]; then exit 0; fi\nexit 1\n`, { mode: 0o755 });
   const failed = cli("start");
   spawnSync("pkill", ["-f", path.join(home, "controller", "loadlog.sh")]);
-  assert.notEqual(failed.status, 0); assert.match(failed.stdout, /Status watch: could not schedule/);
+  assert.match(failed.stdout, /Status watch: could not schedule.*statusWatch/);
+  assert.equal(JSON.parse(cli("status", "--json").stdout).phase, before.phase, "the watch never decides the phase");
   config.hosts.frontAgent.statusWatch = false; fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
   assert.doesNotMatch(JSON.parse(cli("status", "--json").stdout).next, /status watch/);
   fs.rmSync(base, { recursive: true, force: true });

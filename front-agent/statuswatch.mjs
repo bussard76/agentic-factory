@@ -19,6 +19,16 @@ const IDLE_WAIT_MS = 20_000, SUMMARY_MS = 30 * 60_000, MAX_PENDING = 20;
 // Written first: `status` and `doctor` read it, and a Controller that cannot be reached does not mean the watch is gone.
 fs.writeFileSync(here("statuswatch.alive"), new Date().toISOString() + "\n");
 
+// One run at a time: `start` runs it too, and two at once would send an alert twice. A lock left by a killed run expires.
+const LOCK = here("statuswatch.lock"), LOCK_MAX_MS = 10 * 60_000;
+try { fs.mkdirSync(LOCK); }
+catch {
+  if (Date.now() - fs.statSync(LOCK).mtimeMs < LOCK_MAX_MS) process.exit(0);
+  fs.rmSync(LOCK, { recursive: true, force: true });
+  fs.mkdirSync(LOCK);
+}
+process.on("exit", () => fs.rmSync(LOCK, { recursive: true, force: true }));
+
 const cfg = loadConfig(HERE);
 const host = controllerHost(cfg);
 const ctlDir = cfg.hosts.controller?.controllerDir ?? "~/controller";
@@ -67,11 +77,11 @@ const orca = (...args) => JSON.parse(execFileSync(process.env.ORCA_CLI_COMMAND ?
 function frontAgentTerminal() {
   const { projectDir, handle } = readJson("front-agent.json", {});
   const terminals = orca("terminal", "list").result?.terminals ?? [];
-  const named = terminals.find((t) => t.title === `${cfg.project.name} · Front Agent`);
-  if (named) return named.handle;
-  if (handle && terminals.some((t) => t.handle === handle)) return handle;
+  // A name or a handle can outlive the agent, and `start` may have run from another terminal. So only an agent in this
+  // project's checkout counts, and a shell or a Controller never does.
   const agents = terminals.filter((t) => t.worktreePath === projectDir && t.agentIdentity && !/· (Controller|Worker|Integration)/.test(t.title ?? ""));
-  return agents.length === 1 ? agents[0].handle : null;
+  const chosen = agents.find((t) => t.title === `${cfg.project.name} · Front Agent`) ?? agents.find((t) => t.handle === handle) ?? (agents.length === 1 ? agents[0] : null);
+  return chosen?.handle ?? null;
 }
 
 function deliver(state) {
@@ -79,20 +89,33 @@ function deliver(state) {
   const { projectDir } = readJson("front-agent.json", {});
   try {
     const terminal = frontAgentTerminal();
-    const idle = terminal && orca("terminal", "wait", "--terminal", terminal, "--for", "tui-idle", "--timeout-ms", String(IDLE_WAIT_MS)).result?.wait?.satisfied === true;
+    // Orca exits non-zero when the wait is not satisfied: that means busy, not broken.
+    let idle = false;
+    if (terminal) try { idle = orca("terminal", "wait", "--terminal", terminal, "--for", "tui-idle", "--timeout-ms", String(IDLE_WAIT_MS)).result?.wait?.satisfied === true; } catch {}
     if (idle) {
-      orca("terminal", "send", "--terminal", terminal, "--text", `Status watch for ${cfg.project.name}, read from the Controller's status file. Tell ${cfg.project.humanName ?? "the human"} what matters: ${state.pending.join(" / ")}`, "--enter");
+      // Status text goes into an agent's input: no control characters, nothing that could submit early.
+      const text = state.pending.join(" / ").replace(/[\x00-\x1f\x7f]+/g, " ");
+      orca("terminal", "send", "--terminal", terminal, "--text", `Status watch for ${cfg.project.name}, read from the Controller's status file. Tell ${cfg.project.humanName ?? "the human"} what matters: ${text}`, "--enter");
       state.pending = [];
+      fs.rmSync(here("statuswatch.problem"), { force: true });
       return;
     }
     const notice = `Status watch: ${state.pending.at(-1).slice(0, 120)}`;
     if (projectDir && state.notice !== notice) { orca("worktree", "set", "--worktree", `path:${projectDir}`, "--comment", notice, "--unread"); state.notice = notice; }
-  } catch (e) { console.log(`not delivered: ${String(e.message).replace(/pair|token|code=/gi, "…").split("\n")[0].slice(0, 160)}`); }
+    fs.rmSync(here("statuswatch.problem"), { force: true });
+  } catch (e) {
+    // Orca itself failed. The watch runs, but nothing arrives, and `status` must say so.
+    const problem = String(e.message).replace(/pair|token|code=/gi, "…").split("\n")[0].slice(0, 160);
+    console.log(`not delivered: ${problem}`);
+    fs.writeFileSync(here("statuswatch.problem"), problem + "\n");
+  }
 }
 
-const state = { pending: [], ...readJson("statuswatch-state.json", {}) };
+const state = { ...readJson("statuswatch-state.json", {}) };
+if (!Array.isArray(state.pending)) state.pending = [];
 const alerts = check(state);
 for (const alert of alerts) console.log(`${new Date().toISOString()} ${alert}`);
 state.pending = [...state.pending, ...alerts].slice(-MAX_PENDING);
 deliver(state);
-fs.writeFileSync(here("statuswatch-state.json"), JSON.stringify(state, null, 2) + "\n");
+fs.writeFileSync(here("statuswatch-state.json.tmp"), JSON.stringify(state, null, 2) + "\n");
+fs.renameSync(here("statuswatch-state.json.tmp"), here("statuswatch-state.json"));

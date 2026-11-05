@@ -60,6 +60,12 @@ Every sidebar entry (worktree display name) and every terminal, which Orca shows
 - Orca does not mark a terminal's name as automatic, so only those two patterns count as automatic. Any other name stays until someone renames it. A human who names a terminal exactly `Setup` gets it corrected.
 - A human who names an entry exactly like its folder gets it corrected, because that looks like Orca's own name.
 
+## Status watch
+
+`agentic-factory start` schedules `statuswatch.mjs` on the Front agent's machine every 5 minutes through cron, outside any session, so it works with whichever agent is in front. It sends alerts into the Front agent's terminal through Orca when that is idle; until then they wait, and the sidebar shows them. That terminal is an agent in the project's own checkout, preferably one named `<project> · Front Agent`.
+
+`status` and `doctor` say when it stopped or cannot reach the terminal, and open questions stay visible either way. Set `hosts.frontAgent.statusWatch` to `false` where nobody works in front. Under WSL, check that the cron service runs.
+
 ## Heartbeat
 
 `controller/heartbeat.mjs` wakes the Controller from outside, so noticing finished work does not depend on the Controller itself. `agentic-factory start` adds one cron line per Controller directory on the Controller's host and leaves the rest of the crontab alone. Set `hosts.controller.heartbeat` to `false` to opt out.

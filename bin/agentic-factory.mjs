@@ -679,6 +679,7 @@ function doctor() {
   const c = JSON.parse(fs.readFileSync("factory.config.json", "utf8")); ok(`factory.config.json (project ${c.project.name}, factory ${c.factoryVersion})`);
   if (minimal(c)) doctorStandard(ok, bad, info);
   else doctorTracked(c, ok, bad, info);
+  if (watchRequired(c) && readWatchProblem(c)) info(`status watch cannot reach the terminal: ${readWatchProblem(c)}`);
   // Under WSL the cron service does not always run, and then the schedule is there but nothing happens.
   if (watchRequired(c)) statusWatchRuns(c) ? ok("status watch running") : info(`status watch not running: without it, finished work and open questions do not reach the Front agent. Run start${/microsoft/i.test(os.release()) ? "; under WSL also check the cron service (sudo service cron start)" : ""}`);
   for (const t of [c.agents.default, c.agents.fallback?.agent].filter(Boolean)) has(t) ? ok(`${t} CLI`) : info(`${t} CLI not on this machine`);
@@ -868,14 +869,18 @@ function collectStatus() {
   const debtOpen = fs.existsSync("docs/debt.md") ? fs.readFileSync("docs/debt.md", "utf8").split("\n").filter((l) => /\|\s*open\s*\|/.test(l) && !/<[a-z][^>]*>/.test(l)).length : 0;
   s.work = { designedFeatures: features, tickets, adrs, architecture: fs.existsSync("ARCHITECTURE.md"), glossary: ["GLOSSARY.md", "CONTEXT.md", "docs/glossary.md"].some((f) => fs.existsSync(f)), debtOpen, needsHuman: ctl.needs };
   // The phase is a hint for the Front agent's next question, derived from what is in the repo; the human decides.
-  const setupMissing = !s.setup.hooksArmed || !s.setup.userSkills || !s.setup.frontAgentBundle || !s.setup.controller.running || (watchRequired(c) && !s.setup.statusWatch);
+  const setupMissing = !s.setup.hooksArmed || !s.setup.userSkills || !s.setup.frontAgentBundle || !s.setup.controller.running;
   if (!prerequisites.every((p) => p.ok)) [s.phase, s.next] = ["prerequisites", "fix the missing prerequisites (they need the human)"];
-  else if (setupMissing) [s.phase, s.next] = ["start", `run \`start\`: user-level skills, the Front agent bundle${watchRequired(c) && !s.setup.statusWatch ? ", the status watch" : ""} and the Controller`];
+  else if (setupMissing) [s.phase, s.next] = ["start", `run \`start\`: user-level skills, the Front agent bundle and the Controller`];
   else if (ctl.needs.length) [s.phase, s.next] = ["decisions", "the Controller waits for the human: ask the open questions one at a time"];
   else if (!features.length && !tickets.total) [s.phase, s.next] = ["outside-in: surface", "sketch the surface of the first feature with the human (design tool or a clickable fake with the prototype skill), export it to design/<feature>/"];
   else if (drafts || (features.length > tickets.total && !active)) [s.phase, s.next] = ["outside-in: data and logic", "for the designed features: list data in and out on the fake, agree the logic in words and a diagram (grilling), then write the tickets as ready"];
   else if (active) [s.phase, s.next] = ["building", "the Controller works on the ready tickets: show the status table; accept what reaches main on the preview"];
   else [s.phase, s.next] = ["accept and next", "accept what was integrated on the preview, then choose the next feature"];
+  // A hint, not a phase: a laptop that slept or a machine without cron must not hide open questions behind `start`.
+  if (s.setup.frontAgentBundle && watchRequired(c) && !s.setup.statusWatch) s.next = `The status watch is not running, so finished work and open questions do not reach you: run \`start\`, and if that does not help, \`doctor\`. Then: ${s.next}`;
+  const watchProblem = readWatchProblem(c);
+  if (watchProblem) s.next = `The status watch runs but cannot reach your terminal (${watchProblem}). Then: ${s.next}`;
   s.hints = [
     ...(!s.work.glossary ? ["the business terms are not written down yet (no GLOSSARY.md): capture them with domain-modeling while specifying"] : []),
     ...(c.architecture?.mode === undefined ? ["no decision on ARCHITECTURE.md yet: ask the human, then set architecture.mode to architect or off in factory.config.json and run update"] : []),
@@ -929,15 +934,19 @@ function nameFrontAgent(c) {
 // Sets everything up that the Front agent needs to hand over to the Controller: user-level skills, the bundles,
 // the gate, the load log and the Controller's own agent session in an Orca terminal. Idempotent.
 // The status watch runs on a schedule, outside any session: it needs no agent to start it and works with whichever agent is
-// in front. A failed schedule is a failed start, because otherwise nobody learns of finished work or open questions.
+// in front. Like the heartbeat, a schedule that fails is reported and stops nothing: a machine without cron must still work.
 const watchRequired = (c) => c.agents.runner === "orca" && process.env.FACTORY_SKIP_ORCA !== "1" && c.hosts.frontAgent?.statusWatch !== false;
+const readWatchProblem = (c) => { try { return fs.readFileSync(path.join(os.homedir(), "front-agent", c.project.name, "statuswatch.problem"), "utf8").trim(); } catch { return ""; } };
 const statusWatchRuns = (c) => { try { return Date.now() - fs.statSync(path.join(os.homedir(), "front-agent", c.project.name, "statuswatch.alive")).mtimeMs < 11 * 60_000; } catch { return false; } };
 function armStatusWatch(c, frontAgentDir) {
   // Cron has none of this session's environment. Under WSL, Orca's command comes from ORCA_CLI_COMMAND, so it is recorded here.
-  fs.writeFileSync(path.join(frontAgentDir, "front-agent.json"), JSON.stringify({ projectDir: cwd, handle: process.env.ORCA_TERMINAL_HANDLE ?? null, orcaCommand: ORCA_BIN }, null, 2) + "\n");
+  // Inside an Orca terminal, its command is found through a PATH that cron does not have, so the full path is recorded.
+  const orcaFound = spawnSync("sh", ["-c", `command -v ${JSON.stringify(ORCA_BIN)}`], { encoding: "utf8" }).stdout?.trim();
+  const orcaCommand = orcaFound?.startsWith("/") ? orcaFound : process.env.ORCA_CLI_BIN_DIR ? path.join(process.env.ORCA_CLI_BIN_DIR, ORCA_BIN) : ORCA_BIN;
+  fs.writeFileSync(path.join(frontAgentDir, "front-agent.json"), JSON.stringify({ projectDir: cwd, handle: process.env.ORCA_TERMINAL_HANDLE ?? null, orcaCommand }, null, 2) + "\n");
   if (!watchRequired(c)) return false;
-  const r = spawnSync("sh", ["-c", statusWatchCronScript(frontAgentDir, c.project.name)], { encoding: "utf8" });
-  if (r.status !== 0) { say(`Status watch: could not schedule it (${(r.stderr || r.error?.message || "").trim().slice(0, 200)}). Without it, finished work and open questions do not reach the Front agent.`); return true; }
+  const r = spawnSync("sh", ["-c", statusWatchCronScript(frontAgentDir, c.project.name, path.dirname(process.execPath))], { encoding: "utf8" });
+  if (r.status !== 0) { say(`Status watch: could not schedule it (${(r.stderr || r.error?.message || "").trim().slice(0, 200)}). Without it, finished work and open questions do not reach the Front agent. Fix cron, or set hosts.frontAgent.statusWatch to false in factory.config.json if nobody works in front here, and run start again.`); return false; }
   // At once, not in up to 5 minutes. Detached, because it can wait for the Controller and for an idle terminal.
   const log = fs.openSync(path.join(frontAgentDir, "statuswatch.log"), "a");
   spawn("node", ["statuswatch.mjs"], { cwd: frontAgentDir, detached: true, stdio: ["ignore", log, log] }).unref();
