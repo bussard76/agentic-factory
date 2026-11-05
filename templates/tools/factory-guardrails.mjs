@@ -56,6 +56,8 @@ function stagedSafety() {
   const check = spawnSync("git", ["diff", "--cached", "--check"], { encoding: "utf8" });
   if (check.status !== 0) fail(`Whitespace errors or conflict markers in the staged diff:\n${check.stdout}`);
   const paths = stagedPaths();
+  const standardLinks = paths.filter((p) => /^120000 /.test(tryGit("ls-files", "-s", "--", p)) && show("index", p).includes(".git/factory/"));
+  if (standardLinks.length) fail(`A link into this clone's standard is staged, and it would hold this machine's path: ${standardLinks.join(", ")}\nUnstage it. To change that file for this project: agentic-factory deviate <path>.`);
   const env = paths.filter((p) => /(^|\/)\.env(\.|$)/.test(p) && !/\.env\.example$/.test(p));
   if (env.length) fail(`Never commit environment files: ${env.join(", ")}`);
   const findings = [];

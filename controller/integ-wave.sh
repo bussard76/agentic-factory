@@ -18,16 +18,19 @@ MAIN="${MAIN:-main}"; GATE="${GATE:-$HOME/.local/bin/gate}"
 strip() { sed "s/\x1b\[[0-9;]*m//g"; }
 # With the untracked standard, a clean removes the links and an install script (husky's prepare) can reset the hooks path,
 # which would switch the review gate off without a word. So: arm again after each of them.
-# Fails closed: a project with the untracked standard never pushes from a clone without working hooks.
+# Fails closed: a project with the untracked standard never pushes from a clone without working hooks. arm.mjs ends by
+# checking what git would really run, wherever a hooks path comes from.
+STANDARD=0
 arm() {
-  grep -q '"footprint": *"minimal"' factory.config.json 2>/dev/null || return 0
+  [ "$STANDARD" = 1 ] || return 0
   a="$(git rev-parse --git-common-dir)/factory/arm.mjs"
   [ -f "$a" ] || { echo "NOT-ARMED: this clone has no factory standard; run agentic-factory start"; exit 1; }
-  node "$a" || { echo "NOT-ARMED: arming failed"; exit 1; }
-  [ -x "$(git rev-parse --git-path hooks)/pre-push" ] || { echo "NOT-ARMED: no pre-push hook after arming"; exit 1; }
+  node "$a" || { echo "NOT-ARMED: see the line above"; exit 1; }
 }
 git merge --abort 2>/dev/null; git reset -q --hard 2>/dev/null
 git fetch -q origin || { echo "FETCH-FAILED"; exit 1; }
+# Decided here and once, from this clone and from main: a branch merged below cannot switch the check off.
+if [ -f "$(git rev-parse --git-common-dir)/factory/standard.json" ] || git show "origin/$MAIN:factory.config.json" 2>/dev/null | grep -Eq '"footprint"[[:space:]]*:[[:space:]]*"minimal"'; then STANDARD=1; fi
 git checkout -q -B integration "origin/$MAIN" || { echo "CHECKOUT-FAILED"; exit 1; }
 # The integration worktree is disposable: drop untracked AND ignored leftovers (lockfiles or build output from an
 # earlier install), otherwise a branch that adds such a file cannot be merged ("would be overwritten").
