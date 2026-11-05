@@ -3,6 +3,7 @@
 Status: draft | ready | building | review | passed | integrated | paused
 Decided by: <human>, <date>
 Origin: <wish, live-test finding, audit, retro, debt item>
+Depends on: <tasks or shared interfaces that must exist first, or "nothing">
 
 ## Goal
 
@@ -37,4 +38,4 @@ Binding instructions from the Architect's spec review, shared decisions, known f
 
 ## Ready check
 
-Before this ticket becomes `ready`: its requirements and evidence do not conflict with the project's rules or with the Controller's hard rules, for example a required screenshot in git where binaries are forbidden. A conflict found here costs minutes; found at the wave, it can block everything behind it.
+Before this ticket becomes `ready`: its requirements and evidence do not conflict with the project's rules or with the Controller's hard rules, for example a required screenshot in git where binaries are forbidden. A conflict found here costs minutes; found at the wave, it can block everything behind it. A task that runs in parallel names each shared interface with exact fields. Demo data shows the normal case: most items look like real use, and special states stay on a few.

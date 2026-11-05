@@ -93,7 +93,7 @@ Reply: worker_done with verdict and --report-path docs/reviews/${T}-review-final
     return `You are the Worker Architect for the pre-build architecture spec review of ${T} under docs/architect-protocol.md.
 Steps:
 1. git fetch origin; create branch ${BRANCH_PREFIX}${T.toLowerCase()}-specreview from origin/${branch}. Read ${taskWhere(ref)}, AGENTS.md, ARCHITECTURE.md (if present) and the connected code.
-2. Confirm or raise the level. Are the interfaces exact and buildable, the seams, bounds, states (empty, ambiguous, error), privacy and ownership sufficient? Does the outside-in evidence (design/<feature>/, interfaces, logic diagram) match the spec?
+2. Confirm or raise the level. Are the interfaces exact and buildable, the seams, bounds, states (empty, ambiguous, error), privacy and ownership sufficient? Does the outside-in evidence (design/<feature>/, interfaces, logic diagram) match the spec? If this task runs in parallel with others, is each shared interface fixed with exact fields, is there one test through the real producer and consumer, and does the task state what it depends on? An edge case that causes no real functional defect is a debt candidate, not a reason for change-spec.
 3. Write docs/reviews/${T}-architecture-spec.md with findings and 'Verdict: pass|change-spec|level-3'. Precision-only gaps may be binding instructions for the Developer with a pass; anything design-relevant is change-spec; anything needing ${HUMAN}'s decision is level-3 with options and a recommendation.
 4. Commit only that file, never --no-verify, push only your branch.
 Done when the review is pushed. Do not write code, do not run test suites, never touch real data.
@@ -161,5 +161,7 @@ const text = specs[role]();
 fs.mkdirSync(file("specs"), { recursive: true });
 const key = `${(pos[0] ?? role).toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${role}${pos[1] && /^\d+$/.test(pos[1]) ? pos[1] : ""}`;
 const out = file(`specs/${key}.txt`);
-fs.writeFileSync(out, text + "\n");
+// On a host with several projects, a default Controller directory may belong to another one. A checkout outside the worktrees is never cleaned up.
+const HOST_NOTES = `\n\nThis project's Controller directory on its host is {{CONTROLLER_DIR}}. Never read another project's. Work in your own worktree. If you need another checkout, remove it before you reply.`;
+fs.writeFileSync(out, text + HOST_NOTES + "\n");
 console.log(out);

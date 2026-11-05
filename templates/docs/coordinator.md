@@ -4,6 +4,8 @@ These rules bind whichever agent coordinates work in this repo: the Front agent 
 
 `docs/dev-workflow.md` explains this workflow to people. Whenever a rule here, in `AGENTS.md`, `docs/review-protocol.md` or `docs/architect-protocol.md` changes, update it in the same change.
 
+**Only {{HUMAN}} decides for {{HUMAN}}:** "Decided by {{HUMAN}}" needs {{HUMAN}}'s quoted statement with a date. Anything an agent chose is written as `Assumption:` until {{HUMAN}} confirms it, and no reviewer holds work to an assumption as if it were a decision. The sections marked "decided by" below were confirmed at adoption.
+
 **Process decisions go into the docs immediately:** whenever {{HUMAN}} and a coordinator decide something about the way of working, the coordinator updates this handbook and `docs/dev-workflow.md` in the same turn, marked "decided by {{HUMAN}}, <date>". An agent's private memory is never the only record.
 
 ## Roles
@@ -24,6 +26,7 @@ New features go from the outside in. Nothing is built until {{HUMAN}} has signed
 - A review fails only for a real functional defect: a specified flow does not work or gives wrong results, data is lost, or a change could reach a real external system (production, real accounts, {{HUMAN}}'s real data).
 - Tests, coverage, edge cases, security, load and style are debt candidates with a category (`tests`, `edge-case`, `security`, `load`, `style`), a severity and a one-line proposal. They never fail a review. They are collected in `docs/debt.md` and worked off in a **hardening phase** once the functional breadth is there; {{HUMAN}} starts it, the Front agent proposes it.
 - Architecture conformance is a coarse boundary check.
+- **Spec reviews keep proportion too:** at most {{MAX_ROUNDS}} rounds on a spec. An edge case that causes no real functional defect becomes debt.
 - At most {{MAX_ROUNDS}} review rounds, then integrate if the feature works; open points become debt plus an acceptance item for {{HUMAN}} on the preview.
 - **Always on:** code quality (`ponytail-review`, `CODING_STANDARDS.md`) and architecture conformance (level, exports, dependencies, data flows, import boundaries) are checked in every review. An architecture violation blocks; quality findings are fixed when trivial, otherwise debt with a follow-up.
 - **Not in daily runs, mandatory before release:** load and security tests slow development down (observed), so they do not run in task or wave gates. The deferred categories (`security`, `load`, `tests`, `edge-case`) are paid in the hardening phase and before every release; the release gate runs the security and load tests in addition to `{{RELEASE}}`. No release while such a debt item is open or failing, unless {{HUMAN}} accepts the specific item in writing in `docs/debt.md`. The Controller reports open debt by category in every `status.md`; the Front agent proposes the hardening phase in time.
@@ -69,6 +72,7 @@ Close finished workers' terminals, release or abandon their dispatches, remove w
 
 ## Starting workers
 
+- **Parallel tasks:** before they start, the plan names each shared interface with exact fields and one test through the real producer and consumer. A task states what it depends on in its spec, not only in a message.
 - Name every worker `<Task> · Worker <Role>`, and every sidebar entry and terminal after its role or task. Never keep an automatic name. `start.mjs` and `names.mjs` do this; other terminals in an entry are `<entry name> · <Purpose>`. On a shared host, name only your own project's entries.
 - Generate every spec from the template (`templates/mkspec.mjs <role> …`) with parameters. Never derive a spec by editing another task's spec.
 - Specs have numbered steps, "done when", abort criteria, a self-review against the spec, and the reply format (`worker_done` with branch, head SHA and check results, or one concrete escalation with progress pushed).

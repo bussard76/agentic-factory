@@ -41,3 +41,24 @@ Lessons from real projects, with where each one now lives. The handbooks carry t
 | 13 | **Prove a mechanism through a real event.** A successful deployment or syntax check proves nothing about the signal path. Report a path as unproven until a real event has passed through it. | Applied: `CONTROLLER.md` |
 | 14 | **Validate a script under its real file extension.** `node --check` rejects a `.new` suffix, so the deployment silently did not happen. | Applied: `CONTROLLER.md` |
 | 16 | **A monitor stays silent if any pipe stage buffers.** A `cut` after `grep --line-buffered` withheld every event for 30 minutes. Silence from a watcher is not evidence: compare it with the source once after arming it. | Applied: `CONTROLLER.md` |
+
+## Building a feature in parallel (2026-11-05)
+
+From one project's feature with six slices, built in parallel on a shared host, in one day. Only what holds across projects and brings a real gain in quality or speed was taken over.
+
+| # | Learning | Evidence | Status |
+|---|---|---|---|
+| 17 | **Green reviews do not mean it looks right.** Two UI slices passed Tester and conformance, yet the human's first look at the demo failed: most rows showed `N/A`, and the layout differed from the signed-off screens. Reviews check the spec, not the overall impression. | Browser run | Applied: `FRONT_AGENT.md` |
+| 18 | **Demo data must show the normal case.** The fixtures covered the special states, so most items showed one. | Browser run | Applied: `T00-template.md` |
+| 19 | **Review rounds need proportion at spec level too.** One small state in a local one-user app took several spec rounds on rare edge cases. | Review files | Applied: `coordinator.md`, spec review |
+| 20 | **Agent assumptions must not be recorded as human decisions.** A worker cap and a file exception appeared under "Decided by" although agents had chosen them, and a later Tester held the system to the invented cap. | Review file, project docs | Applied as a rule: `coordinator.md`, `review-protocol.md`. No check enforces it. |
+| 21 | **Fix internal interfaces before parallel slices start.** A consumer slice was merged against an assumed interface the producer did not supply, and isolated tests could not show it. | Spec review | Applied: `coordinator.md`, spec review, `T00-template.md` |
+| 22 | **State order in the task spec.** Slices started before their shared base existed, although a message said to wait. Whether this caused rework was not measured. | Journal, status | Applied: `T00-template.md`, `coordinator.md` |
+| 23 | **Check the review gate before running the gates.** A wave passed verify and e2e and was only then rejected at push, because a merge commit had no review. | Wave output | Applied: `integ-wave.sh` |
+| 24 | **The update flow does not mention the review gate.** Documentation needs no review, except the review and Architect protocols and the coding standards, so an update that changes those needs one. | Review files, hook | Applied: `README.md` |
+| 25 | **The status file goes stale during long cycles.** An answered question stayed under "Needs" for minutes, because `status.md` was written at the end of a cycle. | Heartbeat log, status | Applied: `CONTROLLER.md` |
+| 26 | **Worker setup dirties the lockfile.** Worktrees showed the same lockfile change after setup, and cleanup then kept them. | `git status`, journal | Not taken over: the trigger is unknown, so there is nothing general to fix yet. |
+| 27 | **State the Controller directory in specs.** On a host with several Controllers, a Tester checked another project's directory and reported a false finding. | Review file | Applied: `mkspec` |
+| 28 | **Review worktrees pile up.** Testers left checkouts in the temp directory that no cleanup covers. | `git worktree list` | Applied: `mkspec`, as a rule for workers. Existing leftovers stay. |
+| 29 | **`start.mjs` failed in existing worktrees.** It passed creation options that Orca rejects there, so a rework could not start through it. | Orca's help, a test with a fake Orca | Fixed: `start.mjs`. Not yet run against a real Orca. |
+| 30 | **The review preview belongs on the human's machine.** | Human statement | Not taken over: `preview` already exists, and when to offer it is a preference. |

@@ -88,7 +88,7 @@ git status                                       # what update changed
 ```
 
 1. **Review.** `update` overwrites only files you have not changed. It keeps a changed file and puts the new version in `.factory/new/`, so merge those by hand.
-2. **Commit and push.** `update` commits nothing. Protected files need the adoption ADR in the commit message, for example `Update agentic factory (ADR-0001)`. The hooks and the review gate apply as usual.
+2. **Commit and push.** `update` commits nothing. Protected files need the adoption ADR in the commit message, for example `Update agentic factory (ADR-0001)`. The hooks and the review gate apply as usual. Documentation needs no review, except `docs/review-protocol.md`, `docs/architect-protocol.md` and `CODING_STANDARDS.md`, so an update that changes those needs a passing review before a wave accepts it.
 3. **Hand it to the Controller:** `node ~/agentic-factory/bin/agentic-factory.mjs start` copies the new bundles to the Controller's directory and the skills to the host. Scripts take effect at their next call. A running Controller read its `CONTROLLER.md` when it started, so close its terminal once it is idle and run `start` again. Workers run in their own terminals and keep running.
 
 An older project has not chosen yet whether a Worker Architect keeps an `ARCHITECTURE.md`. `status` then asks, and you set `architecture.mode` to `architect` or `off` in `factory.config.json` and run `update` again.

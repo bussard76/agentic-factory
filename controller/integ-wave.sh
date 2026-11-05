@@ -22,6 +22,8 @@ git checkout -q -B integration "origin/$MAIN" || { echo "CHECKOUT-FAILED"; exit 
 # The integration worktree is disposable: drop untracked AND ignored leftovers (lockfiles or build output from an
 # earlier install), otherwise a branch that adds such a file cannot be merged ("would be overwritten").
 git clean -fdxq
+# A dry run still runs the pre-push hook, so a missing review fails in seconds instead of after the gates.
+git push --dry-run origin "integration:$MAIN" > "$LOGS/wave-precheck.log" 2>&1 || { strip < "$LOGS/wave-precheck.log" | grep -a -E '^\[factory\]|^error:|^fatal:|rejected' | head -12; echo "PUSH-CHECK-FAILED"; exit 1; }
 if [ -n "${INSTALL_CMD:-}" ]; then bash -c "$INSTALL_CMD" > "$LOGS/wave-install.log" 2>&1 || echo "install on $MAIN failed, retrying after merge"; fi
 merged=0
 for b in $BR; do

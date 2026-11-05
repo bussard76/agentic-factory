@@ -54,7 +54,7 @@ Workers can be **Codex**, **Claude Code** or **Pi** (`--agent` in `start.mjs`; d
 
 On every worker event, and otherwise every 10 minutes. `heartbeat.mjs` wakes you from cron with a line that starts with "Heartbeat:"; it also marks progress in the sidebar and logs every attempt to `heartbeat.log`. Its message about the inbox means: read `inbox.md` after your current step.
 
-1. **Read events.** `git pull` in the project. Read `{{CONTROLLER_DIR}}/inbox.md` and act on new entries from {{HUMAN}}; move each processed line to `inbox-done.md`.
+1. **Read events.** `git pull` in the project. Read `{{CONTROLLER_DIR}}/inbox.md` and act on new entries from {{HUMAN}}; move each processed line to `inbox-done.md`. As soon as an entry answers a question, remove it from "Needs {{HUMAN}}" in `status.md`, without waiting for the end of the cycle.
 2. **Act per event:**
    - **Developer done:** start the Tester (`mkspec test`).
    - **Tester failed:** rework in the same worktree (`mkspec rework`, `start.mjs --worktree <dir> --force`). Second failure: one tier higher. After {{MAX_ROUNDS}} rounds with a working feature: `mkspec reeval`, integrate, open points become debt plus an acceptance item.

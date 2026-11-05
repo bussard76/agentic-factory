@@ -123,3 +123,58 @@ else console.log(JSON.stringify({ ok: true, result: {} }));`);
   assert.deepEqual(closed.sort(), ["term_legacy", "term_old"]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("start.mjs passes creation flags only for a new worktree, and specs name the Controller directory", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-start-"));
+  const ctl = path.join(dir, "ctl");
+  fs.mkdirSync(ctl);
+  for (const f of ["start.mjs", "lib.mjs", "journal.mjs", "names.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
+  fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca", default: "claude" }, commands: {}, capacity: { gate: {} }, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local", orcaRepoId: "r" }] } }));
+  fs.writeFileSync(path.join(dir, "spec.txt"), "do it\n");
+  const log = path.join(dir, "calls.log");
+  const fake = path.join(dir, "fake-orca.mjs");
+  fs.writeFileSync(fake, `#!/usr/bin/env node
+import fs from "node:fs";
+const a = process.argv.slice(2);
+if (a[1] === "worker-start") fs.writeFileSync(${JSON.stringify(log)}, JSON.stringify(a));
+console.log(JSON.stringify({ ok: true, result: a[1] === "worker-start" ? { dispatchId: "d", terminal: "term_x" } : { worktrees: [] } }));`);
+  fs.chmodSync(fake, 0o755);
+  const start = (...extra) => {
+    const r = spawnSync("node", [path.join(ctl, "start.mjs"), "T1 · Worker Developer", path.join(dir, "spec.txt"), "t1", "--model", "m", "--force", ...extra], { encoding: "utf8", env: { ...process.env, ORCA_CLI_COMMAND: fake, ORCA_TERMINAL_HANDLE: "term_c" } });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    return JSON.parse(fs.readFileSync(log, "utf8"));
+  };
+  const fresh = start();
+  for (const flag of ["--repo", "--name", "--base-branch", "--setup"]) assert.ok(fresh.includes(flag), flag);
+  assert.equal(fresh[fresh.indexOf("--worktree") + 1], "new-child");
+  const rework = start("--worktree", "t1");
+  for (const flag of ["--repo", "--name", "--base-branch", "--setup", "--display-name", "--comment"]) assert.ok(!rework.includes(flag), `${flag} is rejected for an existing worktree`);
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  const p = initProject("off");
+  const out = spawnSync("node", ["templates/mkspec.mjs", "steward", "W"], { cwd: path.join(p.project, ".factory/controller"), encoding: "utf8" }).stdout.trim();
+  assert.match(fs.readFileSync(out, "utf8"), /Controller directory on its host is ~\/controller\./);
+  p.done();
+});
+
+test("a wave without a review fails before the long gates run", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-precheck-"));
+  const git = (cwd, ...a) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...a], { cwd, encoding: "utf8" });
+  const origin = path.join(dir, "o.git"), wt = path.join(dir, "coordinator-integration");
+  git(dir, "init", "-q", "--bare", origin);
+  git(dir, "init", "-q", "-b", "main", wt);
+  git(wt, "commit", "-q", "--allow-empty", "-m", "first");
+  git(wt, "remote", "add", "origin", origin);
+  git(wt, "push", "-q", "origin", "main");
+  git(wt, "switch", "-q", "-c", "task");
+  fs.writeFileSync(path.join(wt, "a.txt"), "a\n");
+  git(wt, "add", "a.txt"); git(wt, "commit", "-q", "-m", "task"); git(wt, "push", "-q", "origin", "task");
+  git(wt, "switch", "-q", "main");
+  fs.writeFileSync(path.join(wt, ".git/hooks/pre-push"), "#!/bin/sh\necho '[factory] no review'\nexit 1\n", { mode: 0o755 });
+  const gate = path.join(dir, "gate"), ran = path.join(dir, "gate-ran");
+  fs.writeFileSync(gate, `#!/bin/sh\ntouch "${ran}"\n"$@"\n`, { mode: 0o755 });
+  const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "t", "s", "origin/task"], { cwd: wt, encoding: "utf8", env: { ...process.env, MAIN: "main", VERIFY_CMD: "true", GATE: gate, WAVE_LOG_DIR: path.join(dir, "logs"), GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" } });
+  assert.match(r.stdout, /PUSH-CHECK-FAILED/, r.stdout + r.stderr);
+  assert.equal(fs.existsSync(ran), false, "the gates did not run");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
