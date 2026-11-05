@@ -105,9 +105,9 @@ Run this in each project. To stay on a release instead of `main`, use `git -C ~/
 | `factory.config.json`, ADRs, `ARCHITECTURE.md`, the project's own `AGENTS.md` and hooks | In the repository |
 | Tickets, reviews, debt | Still in the repository, until the private companion repository exists |
 
-**A deviation is a tracked file at the same path, and it wins.** `agentic-factory deviate docs/review-protocol.md` turns a link into the project's own file. Later factory versions no longer update it, and `doctor` lists it. For a deviating skill, `git add -f` new files in its directory, because the path stays excluded. A process decision goes into `docs/process-decisions.md`.
+**A deviation is a tracked file at the same path, and it wins.** `agentic-factory deviate docs/review-protocol.md` turns a link into the project's own file. Later factory versions no longer update it, and `doctor` lists it. A skill that deviates stays excluded as a path, so stage its files with `git add -A` or `git add -f`: a plain `git add <file>` exits with an error although it stages the file. A process decision goes into `docs/process-decisions.md`.
 
-A fresh clone needs `agentic-factory start` once. Existing projects stay as they are; moving them follows with a reviewed `update`. See `F43` to `F45` in [debt.md](debt.md) for what is open.
+The hooks live in the clone's `.git/hooks`, and a hook that was already there runs first as `<hook>.own`. A fresh clone needs `agentic-factory start` once, and a wave refuses to run from a clone that has not had it. Not supported yet: husky and `--keep-own-hooks`. Existing projects stay as they are; moving them follows with a reviewed `update`. See `F43` to `F45` in [debt.md](debt.md) for what is open.
 
 ## Known limits (read before you trust the gates)
 

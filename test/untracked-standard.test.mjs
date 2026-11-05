@@ -1,7 +1,7 @@
 // The factory's standard stays out of a project's history: only real git, real hooks and real worktrees here.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -145,6 +145,157 @@ test("a project whose .claude/skills is already a link keeps working skills", ()
   } });
   const w = h.worktree("t5");
   for (const dir of [h.project, w]) assert.match(fs.readFileSync(path.join(dir, ".claude/skills/retro/SKILL.md"), "utf8"), /retro/i, dir);
+  h.done();
+});
+
+test("a clone without the standard refuses to run a wave", () => {
+  const h = adopted();
+  const task = h.worktree("t6");
+  fs.writeFileSync(path.join(task, "app.js"), "export const a = 1;\n"); h.ok(task, "add", "app.js"); h.ok(task, "commit", "-qm", "unreviewed"); h.ok(task, "push", "-q", "origin", "HEAD:refs/heads/agents/t6");
+  const clone = path.join(h.base, "fresh"); h.ok(h.base, "clone", "-q", h.ok(h.project, "remote", "get-url", "origin"), clone);
+  const integ = path.join(h.base, "coordinator-integration"); h.ok(clone, "fetch", "-q", "origin"); h.ok(clone, "worktree", "add", "-q", "--detach", integ, "origin/main");
+  const before = h.ok(clone, "ls-remote", "origin", "main");
+  const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "Wave", "sum", "origin/agents/t6"], { cwd: integ, encoding: "utf8", env: { ...h.env, MAIN: "main", VERIFY_CMD: "true", GATE: "env", WAVE_LOG_DIR: path.join(h.base, "logs") } });
+  assert.notEqual(r.status, 0, r.stdout); assert.match(r.stdout, /NOT-ARMED/);
+  assert.equal(h.ok(clone, "ls-remote", "origin", "main"), before);
+  h.done();
+});
+
+test("the gate survives moving the repository, and arming repairs the links", () => {
+  const h = adopted();
+  const moved = path.join(h.base, "moved"); fs.renameSync(h.project, moved);
+  fs.writeFileSync(path.join(moved, "app.js"), "export const a = 1;\n"); h.ok(moved, "add", "app.js"); h.ok(moved, "commit", "-qm", "code");
+  const push = h.git(moved, "push", "origin", "HEAD:main");
+  assert.notEqual(push.status, 0); assert.match(push.stderr, /without a passing independent review/);
+  assert.equal(fs.existsSync(path.join(moved, "docs/coordinator.md")), false, "the link is dangling for now");
+  assert.equal(spawnSync("node", [path.join(moved, ".git/factory/arm.mjs")], { cwd: moved, env: h.env }).status, 0);
+  assert.ok(fs.existsSync(path.join(moved, "docs/coordinator.md")));
+  h.done();
+});
+
+test("a verify command that resets the hooks path cannot open the gate", () => {
+  const h = adopted();
+  const task = h.worktree("t7");
+  fs.writeFileSync(path.join(task, "app.js"), "export const a = 1;\n"); h.ok(task, "add", "app.js"); h.ok(task, "commit", "-qm", "unreviewed"); h.ok(task, "push", "-q", "origin", "HEAD:refs/heads/agents/t7");
+  const integ = h.worktree("coordinator-integration");
+  const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "Wave", "sum", "origin/agents/t7"], { cwd: integ, encoding: "utf8", env: { ...h.env, MAIN: "main", VERIFY_CMD: "git config core.hooksPath .husky/_", GATE: "env", WAVE_LOG_DIR: path.join(h.base, "logs") } });
+  assert.notEqual(r.status, 0, r.stdout); assert.match(r.stdout, /PUSH-FAILED/);
+  h.done();
+});
+
+test("hooks are never missing while the standard is replaced", async () => {
+  const h = adopted();
+  const hook = path.join(h.project, ".git/hooks/pre-push");
+  let missing = 0, running = true;
+  const child = spawn("node", [CLI, "update"], { cwd: h.project, env: h.env, stdio: "ignore" });
+  const finished = new Promise((resolve) => child.on("close", (code) => { running = false; resolve(code); }));
+  while (running) { if (!fs.existsSync(hook)) missing++; await new Promise((r) => setImmediate(r)); }
+  assert.equal(await finished, 0);
+  assert.equal(missing, 0);
+  h.done();
+});
+
+test("parallel arming keeps the human's exclude lines", async () => {
+  const h = adopted();
+  const exclude = path.join(h.project, ".git/info/exclude");
+  fs.appendFileSync(exclude, "my-notes.txt\n");
+  for (let round = 0; round < 8; round++) {
+    // Each round brings a change, so that every run has something to write.
+    fs.writeFileSync(exclude, fs.readFileSync(exclude, "utf8").replace("/docs/coordinator.md\n", ""));
+    await Promise.all(Array.from({ length: 8 }, () => new Promise((resolve) => spawn("node", [path.join(h.project, ".git/factory/arm.mjs")], { cwd: h.project, env: h.env, stdio: "ignore" }).on("close", resolve))));
+    assert.match(fs.readFileSync(exclude, "utf8"), /my-notes\.txt/, `round ${round}`);
+  }
+  h.done();
+});
+
+test("a hook the clone already had and a project's other hooks keep running", () => {
+  const h = adopted({ before: (project) => {
+    fs.mkdirSync(path.join(project, ".githooks"));
+    fs.writeFileSync(path.join(project, ".githooks/pre-commit"), "#!/usr/bin/env node\nrequire('node:fs').writeFileSync('node-hook-ran', 'x');\n", { mode: 0o755 });
+    fs.writeFileSync(path.join(project, ".githooks/package.json"), "{}\n");
+    fs.writeFileSync(path.join(project, ".githooks/prepare-commit-msg"), "#!/bin/sh\ntouch prepare-ran\n", { mode: 0o755 });
+    fs.writeFileSync(path.join(project, ".git/hooks/post-commit"), "#!/bin/sh\ntouch native-ran\n", { mode: 0o755 });
+    spawnSync("git", ["config", "core.hooksPath", ".githooks"], { cwd: project });
+  } });
+  assert.equal(h.git(h.project, "config", "--local", "core.hooksPath").stdout.trim(), "", "the hooks path no longer bypasses the hooks");
+  const w = h.worktree("t8");
+  fs.writeFileSync(path.join(w, "a.txt"), "a\n"); h.ok(w, "add", "a.txt"); h.ok(w, "commit", "-qm", "a");
+  for (const f of ["node-hook-ran", "prepare-ran", "native-ran"]) assert.ok(fs.existsSync(path.join(w, f)), f);
+  h.done();
+});
+
+test("a skill that left the standard leaves nothing behind", () => {
+  const h = adopted();
+  const file = path.join(h.project, ".git/factory/standard.json");
+  const standard = JSON.parse(fs.readFileSync(file, "utf8"));
+  standard.links = standard.links.filter((l) => !l.path.endsWith("/retro"));
+  fs.writeFileSync(file, JSON.stringify(standard));
+  assert.equal(spawnSync("node", [path.join(h.project, ".git/factory/arm.mjs")], { cwd: h.project, env: h.env }).status, 0);
+  assert.equal(isLink(path.join(h.project, ".claude/skills/retro")), false);
+  assert.equal(isLink(path.join(h.project, ".agents/skills/retro")), false);
+  assert.equal(h.ok(h.project, "status", "--porcelain"), "");
+  h.done();
+});
+
+test("status, doctor, start and deviate tell the truth about a broken clone", () => {
+  const h = adopted();
+  const hooks = path.join(h.project, ".git/hooks");
+  fs.renameSync(path.join(hooks, "pre-push"), path.join(hooks, "pre-push.away"));
+  assert.equal(JSON.parse(h.cli(h.project, "status", "--json").stdout).setup.hooksArmed, false);
+  assert.match(h.cli(h.project, "doctor").stdout, /hooks NOT armed/);
+  fs.renameSync(path.join(hooks, "pre-push.away"), path.join(hooks, "pre-push"));
+  // Arming fails after the hooks are in place: start says so, and the gate is armed anyway.
+  fs.rmSync(path.join(hooks, "pre-commit"));
+  const exclude = path.join(h.project, ".git/info/exclude");
+  fs.writeFileSync(exclude, fs.readFileSync(exclude, "utf8").replace("/docs/coordinator.md\n", ""));
+  fs.chmodSync(path.join(h.project, ".git/info"), 0o555);
+  const r = h.cli(h.project, "start");
+  fs.chmodSync(path.join(h.project, ".git/info"), 0o755);
+  spawnSync("pkill", ["-f", path.join(h.home, "controller", "loadlog.sh")]);
+  assert.notEqual(r.status, 0, r.stdout); assert.match(r.stdout, /arming failed/);
+  assert.ok(fs.existsSync(path.join(hooks, "pre-commit")), "the hooks went in first");
+  const clone = path.join(h.base, "fresh"); h.ok(h.base, "clone", "-q", h.ok(h.project, "remote", "get-url", "origin"), clone);
+  const d = h.cli(clone, "deviate", "docs/coordinator.md");
+  assert.notEqual(d.status, 0); assert.match(d.stdout, /agentic-factory start/); assert.doesNotMatch(d.stderr, /at /);
+  h.done();
+});
+
+test("update reaches a remote host's clone, and says so when it cannot", { skip: spawnSync("rsync", ["--version"]).status !== 0 }, () => {
+  const h = adopted();
+  const clone = path.join(h.base, "server-clone"); h.ok(h.base, "clone", "-q", h.ok(h.project, "remote", "get-url", "origin"), clone);
+  const bin = path.join(h.base, "bin"); fs.mkdirSync(bin);
+  // A fake ssh that runs the command on this machine. Real ssh has not run: F43 in debt.md.
+  fs.writeFileSync(path.join(bin, "ssh"), '#!/bin/bash\nwhile [ "$1" = "-o" ] || [ "$1" = "-F" ]; do shift 2; done\nshift\nexec bash -c "$*"\n', { mode: 0o755 });
+  const env = { ...h.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` };
+  const configFile = path.join(h.project, "factory.config.json");
+  const config = JSON.parse(fs.readFileSync(configFile, "utf8"));
+  const host = { name: "server", kind: "remote", ssh: "server", projectDir: clone, projectsDir: h.base, workspacesDir: h.base };
+  config.hosts.workers.push(host);
+  fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
+  let r = spawnSync("node", [CLI, "update"], { cwd: h.project, encoding: "utf8", env });
+  assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /server: standard installed/);
+  assert.ok(isLink(path.join(clone, "docs/coordinator.md")));
+  assert.ok(fs.existsSync(path.join(clone, ".git/hooks/pre-push")));
+  host.projectDir = path.join(h.base, "no-such-clone");
+  fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
+  r = spawnSync("node", [CLI, "update"], { cwd: h.project, encoding: "utf8", env });
+  assert.notEqual(r.status, 0); assert.match(r.stdout, /no clone at/);
+  assert.equal(fs.existsSync(host.projectDir), false, "nothing is created there");
+  h.done();
+});
+
+test("husky and an already tracked project are refused without a change", () => {
+  const h = adopted();
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-husky-")));
+  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: base }); fs.mkdirSync(path.join(base, ".husky"));
+  const env = { ...process.env, HOME: base, FACTORY_SKIP_ORCA: "1" };
+  let r = spawnSync("node", [CLI, "init", "--untracked-standard", "--yes"], { cwd: base, encoding: "utf8", env });
+  assert.notEqual(r.status, 0); assert.match(r.stdout, /husky/); assert.equal(fs.existsSync(path.join(base, "factory.config.json")), false);
+  fs.rmSync(path.join(base, ".husky"), { recursive: true });
+  fs.writeFileSync(path.join(base, "factory.config.json"), JSON.stringify({ project: { name: "p" } })); fs.mkdirSync(path.join(base, ".factory")); fs.writeFileSync(path.join(base, ".factory/manifest.json"), "{}");
+  r = spawnSync("node", [CLI, "init", "--untracked-standard", "--yes"], { cwd: base, encoding: "utf8", env });
+  assert.notEqual(r.status, 0); assert.match(r.stdout, /already tracks the standard/);
+  fs.rmSync(base, { recursive: true, force: true });
   h.done();
 });
 

@@ -18,7 +18,14 @@ MAIN="${MAIN:-main}"; GATE="${GATE:-$HOME/.local/bin/gate}"
 strip() { sed "s/\x1b\[[0-9;]*m//g"; }
 # With the untracked standard, a clean removes the links and an install script (husky's prepare) can reset the hooks path,
 # which would switch the review gate off without a word. So: arm again after each of them.
-arm() { a="$(git rev-parse --git-common-dir)/factory/arm.mjs"; [ -f "$a" ] || return 0; node "$a" || { echo "ARM-FAILED"; exit 1; }; }
+# Fails closed: a project with the untracked standard never pushes from a clone without working hooks.
+arm() {
+  grep -q '"footprint": *"minimal"' factory.config.json 2>/dev/null || return 0
+  a="$(git rev-parse --git-common-dir)/factory/arm.mjs"
+  [ -f "$a" ] || { echo "NOT-ARMED: this clone has no factory standard; run agentic-factory start"; exit 1; }
+  node "$a" || { echo "NOT-ARMED: arming failed"; exit 1; }
+  [ -x "$(git rev-parse --git-path hooks)/pre-push" ] || { echo "NOT-ARMED: no pre-push hook after arming"; exit 1; }
+}
 git merge --abort 2>/dev/null; git reset -q --hard 2>/dev/null
 git fetch -q origin || { echo "FETCH-FAILED"; exit 1; }
 git checkout -q -B integration "origin/$MAIN" || { echo "CHECKOUT-FAILED"; exit 1; }
@@ -54,4 +61,5 @@ if [ -n "${E2E_CMD:-}" ]; then
   if "$GATE" bash -c "$E2E_CMD" > "$LOGS/wave-e2e.log" 2>&1; then echo "e2e PASS $(( $(date +%s) - s ))s"; else echo "e2e FAIL"; strip < "$LOGS/wave-e2e.log" | grep -a -E "failed|✘|Error" | head -6; exit 1; fi
 fi
 git log --oneline -3
+arm
 if git push origin "integration:$MAIN" > "$LOGS/wave-push.log" 2>&1; then strip < "$LOGS/wave-push.log" | tail -2; echo "PUSHED $MAIN"; else strip < "$LOGS/wave-push.log" | grep -a -E '^\[factory\]|^[0-9a-f]{10}|^remote:|^error:|^fatal:' | head -12; echo "PUSH-FAILED"; exit 1; fi
