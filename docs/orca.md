@@ -34,7 +34,7 @@ Every sidebar entry (worktree display name) and every terminal, which Orca shows
 | Integration worktree | `<project> · Integration` | `<project> · Integration · Shell` | `my-app · Integration` |
 | Wave or script run | in the integration entry | `<project> · Integration · <Title>` | `my-app · Integration · T22 S4 Routes` |
 
-**Other terminals in an entry:** `<entry name> · <Purpose>`, for example `T22-S5 · Worker Developer · Setup` or `my-app · Controller · Shell`. Such a helper terminal is not the worker itself, so it never keeps a worktree from being cleaned up.
+**Other terminals in an entry:** `<entry name> · <Purpose>`, for example `T22-S5 · Worker Developer · Setup` or `my-app · Controller · Shell`. Such a helper terminal is not the worker itself: it never keeps a worktree from being cleaned up, `stallwatch.mjs` does not watch it, and `cleanup.mjs` does not close it as a finished wave. So do not give a wave or a script the title `Setup` or `Shell`.
 
 **Parts of a name**
 - `<project>` is the project name from `factory.config.json`.

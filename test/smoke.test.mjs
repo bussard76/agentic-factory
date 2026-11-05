@@ -581,6 +581,25 @@ test("a worker's setup or shell terminal does not keep its worktree from cleanup
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("stallwatch watches a worker's own terminal, not its setup or shell terminal", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-stall-"));
+  for (const f of ["stallwatch.mjs", "lib.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
+  fs.writeFileSync(path.join(dir, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local" }] } }));
+  const terminals = [{ handle: "worker", title: "T1 · Worker Developer" }, { handle: "setup", title: "T1 · Worker Developer · Setup" }, { handle: "shell", title: "T1 · Worker Developer · Shell" }];
+  const log = path.join(dir, "reads.log");
+  const fake = path.join(dir, "fake-orca.mjs");
+  fs.writeFileSync(fake, `#!/usr/bin/env node
+import fs from "node:fs";
+const a = process.argv.slice(2);
+if (a[1] === "read") fs.appendFileSync(${JSON.stringify(log)}, a[a.indexOf("--terminal") + 1] + "\\n");
+console.log(JSON.stringify({ ok: true, result: { terminals: ${JSON.stringify(terminals)}, terminal: { tail: [] } } }));`);
+  fs.chmodSync(fake, 0o755);
+  // It runs until killed and sleeps after its first pass.
+  spawnSync("node", [path.join(dir, "stallwatch.mjs")], { encoding: "utf8", timeout: 4000, env: { ...process.env, FACTORY_CONFIG: path.join(dir, "factory.config.json"), ORCA_CLI_COMMAND: fake } });
+  assert.deepEqual(fs.readFileSync(log, "utf8").trim().split("\n"), ["worker"]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("names.mjs corrects only automatic names, by role, and leaves an unknown entry alone", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-names-"));
   for (const f of ["names.mjs", "lib.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));

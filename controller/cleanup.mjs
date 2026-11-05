@@ -5,7 +5,7 @@
 // --dry changes nothing: no fetch, no journal, no removals, no releases.
 // Usage: node cleanup.mjs [--on <host>|--all] [--dry] [--pushed] [--prune-remote]
 import fs from "node:fs";
-import { BRANCH_PREFIX, HOSTS, file, holdsWorktree, sh, MAIN, ORCA, RUNNER, argHost, journal, onHost, orcaEnvArgsOn, projectDirOn, readJson, trySh, workspacesOn, worktreeRefOn, writeJson } from "./lib.mjs";
+import { BRANCH_PREFIX, HOSTS, file, holdsWorktree, isHelperTerminal, sh, MAIN, ORCA, RUNNER, argHost, journal, onHost, orcaEnvArgsOn, projectDirOn, readJson, trySh, workspacesOn, worktreeRefOn, writeJson } from "./lib.mjs";
 
 const dry = process.argv.includes("--dry"), allowPushed = process.argv.includes("--pushed");
 const hosts = process.argv.includes("--all") ? HOSTS : [argHost(process.argv)];
@@ -32,7 +32,7 @@ for (const host of hosts) {
   // Finished wave terminals pile up in the integration worktree. The newest stays: wavewait and the heartbeat read its result.
   const newestWave = readText("wave-handle.txt").trim().split(" ")[1];
   for (const t of terms) {
-    if (t.handle === newestWave || !/^(.* · Integration · |Coordinator )/.test(t.title ?? "") || !t.worktreePath?.endsWith("/coordinator-integration")) continue;
+    if (t.handle === newestWave || isHelperTerminal(t.title) || !/^(.* · Integration · |Coordinator )/.test(t.title ?? "") || !t.worktreePath?.endsWith("/coordinator-integration")) continue;
     const output = trySh(ORCA, ["terminal", "read", "--terminal", t.handle, ...orcaEnvArgsOn(host), "--json"]);
     if (!/WAVE-END/.test(output.replace(/echo WAVE-END/g, ""))) continue;
     closedWaves++;

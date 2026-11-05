@@ -3,7 +3,7 @@
 // Idle counts only after the screen stopped changing for 90 s. Nudge idle workers with a message into their terminal.
 // Runs until killed. Usage: node stallwatch.mjs
 import fs from "node:fs";
-import { HOSTS, ORCA, RUNNER, file, journal, onHost, orcaEnvArgsOn, readJson, trySh } from "./lib.mjs";
+import { HOSTS, ORCA, RUNNER, file, isHelperTerminal, journal, onHost, orcaEnvArgsOn, readJson, trySh } from "./lib.mjs";
 
 const PROMPTS = /Ask Codex to do anything|\? for shortcuts|^> $|Type your message|│ >/m;   // agent prompt patterns (Codex, Claude Code, Pi)
 const WORKING = /esc to interrupt|Working \(|Thinking|⠋|⠙|⠹|Running /i;
@@ -22,7 +22,7 @@ for (;;) {
     if (RUNNER === "orca") {
       let terms = [];
       try { terms = JSON.parse(trySh(ORCA, ["terminal", "list", ...orcaEnvArgsOn(host), "--json"]) || "{}").result?.terminals ?? []; } catch {}
-      for (const t of terms.filter((t) => / · Worker /.test(t.title ?? "") && t.status !== "exited")) {
+      for (const t of terms.filter((t) => / · Worker /.test(t.title ?? "") && !isHelperTerminal(t.title) && t.status !== "exited")) {
         const key = `${host.name}|${t.handle}`; seen.add(key);
         let tail = "";
         try { tail = (JSON.parse(trySh(ORCA, ["terminal", "read", "--terminal", t.handle, "--screen", ...orcaEnvArgsOn(host), "--json"]) || "{}").result?.terminal?.tail ?? []).join("\n"); } catch {}
