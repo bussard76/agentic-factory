@@ -6,7 +6,7 @@ The factory steers work in one of two modes. Roles, reviews, waves and rules are
 
 The mode in daily use on the originating project.
 
-- **Tickets** are files `docs/tasks/T<n>-<slug>.md` with a `Status:` line, an `## Architecture impact` section (level, modules, boundaries), results and observable acceptance. Numbers are unique; the Front agent checks before creating one.
+- **Tickets** are files `docs/tasks/T<n>-<slug>.md` with a `Status:` line, an `## Architecture impact` section (level, modules, boundaries), results and observable acceptance. Numbers are unique; the Front agent checks before creating one. A task counts as ready only when every task number in its `Depends on:` line is `integrated`.
 - **Workers** run as Orca-supervised terminals in their own worktrees. The Controller starts them with `controller/start.mjs`, waits for `worker_done`, `escalation` and `question` messages with `wait.mjs`, and nudges stuck ones through `stallwatch.mjs`.
 - **Reviews and reports** are files under `docs/reviews/` and `docs/reports/`.
 - **Decisions** go into the task file or a dated decisions file under `docs/reviews/`.
@@ -15,7 +15,7 @@ Strengths: everything is in git, works offline, no tracker needed. Weakness: not
 
 ## `github-issues`
 
-- **Tickets** are GitHub issues. Labels: `ready-for-agent` (buildable), `in-progress`, `needs-human`, `debt:<category>`, and the `wayfinder:*` labels for decision maps. Blocking uses GitHub's native "blocked by" relationships, so the frontier is visible in the tracker.
+- **Tickets** are GitHub issues. Labels: `ready-for-agent` (buildable), `in-progress`, `needs-human`, `debt:<category>`, and the `wayfinder:*` labels for decision maps. Blocking uses GitHub's native "blocked by" relationships, so the frontier is visible in the tracker. An issue with an open blocker does not count as ready. A server without this field, such as an older GitHub Enterprise, makes the ready list fail instead of handing out blocked tickets.
 - **Workers** run either through Orca (`agents.runner: orca`) or as plain agent processes in git worktrees (`agents.runner: terminal`). The Controller's `steering/issues.mjs` lists ready issues, claims one by assigning the factory's account and labelling it, posts the Tester's verdict as a comment, and closes it when the wave reaches `main`.
 - **Reviews** are still committed files under `docs/reviews/` (the push gate needs them in the tree); the issue gets a comment linking the file.
 - **Decisions** are resolution comments on the issue, mirrored as one line into the project's decisions file.

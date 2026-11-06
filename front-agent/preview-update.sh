@@ -1,6 +1,7 @@
 #!/bin/bash
 # Keeps the human's local preview on the current origin/<main>. Runs every 3 minutes from a launchd agent (macOS)
-# or a systemd timer; restarts only when origin/<main> moved or the preview process is not running.
+# or a systemd timer (its oneshot service needs KillMode=process, or the preview ends with this script); restarts only
+# when origin/<main> moved or the preview process is not running.
 # Config: edit the block below (init fills it) or export the variables before calling.
 set -u
 export PATH=/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH
@@ -14,6 +15,15 @@ INSTALL_CMD="${PREVIEW_INSTALL:-{{INSTALL_CMD}}}"
 START_CMD="${PREVIEW_START:-{{PREVIEW_CMD}}}"
 PID=/tmp/${PROJECT}-preview.pid
 LOG=/tmp/${PROJECT}-preview.log
+
+# Bash does not expand a ~ inside quotes, and the config writes the path with one.
+case "$ENV_FILE" in "~/"*) ENV_FILE="$HOME/${ENV_FILE#"~/"}" ;; esac
+# Without its env file the app falls back to its default state, which can be the human's real data. So nothing starts,
+# and a preview that already runs stays as it is.
+if [ -n "$ENV_FILE" ] && { [ ! -f "$ENV_FILE" ] || [ ! -r "$ENV_FILE" ]; }; then
+  echo "$(date '+%F %T') not starting the preview: env file $ENV_FILE is missing or unreadable"
+  exit 0
+fi
 
 cd "$W" || { echo "preview worktree $W missing"; exit 1; }
 git fetch -q origin || exit 0

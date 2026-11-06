@@ -87,16 +87,20 @@ test("gate explains the shell form when it cannot start a command", () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("cleanup closes finished wave terminals, keeps a running one and the newest", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-waves-"));
+test("cleanup closes this project's finished wave terminals, keeps a running one, the newest, and every other project's", () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-waves-")));
   const ctl = path.join(dir, "ctl"), project = path.join(dir, "p");
   fs.mkdirSync(ctl); fs.mkdirSync(project);
   for (const f of ["cleanup.mjs", "lib.mjs", "journal.mjs", "names.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
+  const integ = path.join(dir, "ws/p/coordinator-integration"), otherInteg = path.join(dir, "ws/q/coordinator-integration");
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: project });
-  fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local", projectDir: project }] } }));
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "first"], { cwd: project });
+  execFileSync("git", ["worktree", "add", "-q", "-b", "integration", integ], { cwd: project, stdio: "ignore" });
+  fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local", projectDir: project, workspacesDir: path.join(dir, "ws") }] } }));
   fs.writeFileSync(path.join(ctl, "wave-handle.txt"), "local term_newest\n");
-  const integ = "/w/p/coordinator-integration";
   const terminals = [
+    { handle: "term_other_wave", title: "q · Integration · T8", worktreePath: otherInteg },
+    { handle: "term_other_legacy", title: "Coordinator T7", worktreePath: otherInteg },
     { handle: "term_old", title: "p · Integration · T1", worktreePath: integ },
     { handle: "term_legacy", title: "Coordinator T0", worktreePath: integ },
     { handle: "term_running", title: "p · Integration · T2", worktreePath: integ },
@@ -112,15 +116,27 @@ const a = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(log)}, a.join(" ") + "\\n");
 const handle = a[a.indexOf("--terminal") + 1];
 if (a[0] === "terminal" && a[1] === "list") console.log(JSON.stringify({ ok: true, result: { terminals: ${JSON.stringify(terminals)} } }));
-else if (a[1] === "read") console.log(JSON.stringify({ ok: true, result: { tail: ["term_old", "term_legacy", "term_other", "term_shell"].includes(handle) ? "PUSHED main\\nWAVE-END" : "cmd; echo WAVE-END\\nrunning" } }));
+else if (a[1] === "read") console.log(JSON.stringify({ ok: true, result: { tail: ["term_old", "term_legacy", "term_other", "term_other_wave", "term_other_legacy", "term_shell"].includes(handle) ? "PUSHED main\\nWAVE-END" : "cmd; echo WAVE-END\\nrunning" } }));
 else if (a[0] === "worktree" && a[1] === "list") console.log(JSON.stringify({ ok: true, result: { worktrees: [] } }));
 else console.log(JSON.stringify({ ok: true, result: {} }));`);
   fs.chmodSync(fake, 0o755);
-  const r = spawnSync("node", [path.join(ctl, "cleanup.mjs")], { cwd: project, encoding: "utf8", env: { ...process.env, ORCA_CLI_COMMAND: fake, FACTORY_CONFIG: path.join(ctl, "factory.config.json") } });
+  const cleanup = (...args) => spawnSync("node", [path.join(ctl, "cleanup.mjs"), ...args], { cwd: project, encoding: "utf8", env: { ...process.env, ORCA_CLI_COMMAND: fake, FACTORY_CONFIG: path.join(ctl, "factory.config.json") } });
+  const closed = () => fs.readFileSync(log, "utf8").split("\n").filter((l) => l.startsWith("terminal close")).map((l) => l.split(" ")[3]);
+  const dry = cleanup("--dry");
+  assert.equal(dry.status, 0, dry.stdout + dry.stderr);
+  assert.match(dry.stdout, /would close the finished wave terminal "p · Integration · T1"/);
+  assert.match(dry.stdout, /would close the finished wave terminal "Coordinator T0"/);
+  assert.doesNotMatch(dry.stdout, /would close .*(q · Integration|Coordinator T7)/);
+  assert.deepEqual(closed(), [], "a dry run closes nothing");
+  const r = cleanup();
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /closed 2 finished wave terminals/);
-  const closed = fs.readFileSync(log, "utf8").split("\n").filter((l) => l.startsWith("terminal close")).map((l) => l.split(" ")[3]);
-  assert.deepEqual(closed.sort(), ["term_legacy", "term_old"]);
+  assert.deepEqual(closed().sort(), ["term_legacy", "term_old"]);
+  // Without a wave of its own, another project's newest wave is still not this project's to close.
+  fs.rmSync(path.join(ctl, "wave-handle.txt"));
+  fs.rmSync(log);
+  assert.equal(cleanup().status, 0);
+  assert.ok(!closed().some((h) => h.startsWith("term_other")));
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

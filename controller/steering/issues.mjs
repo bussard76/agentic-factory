@@ -11,8 +11,16 @@ const ready = config.steering?.readyLabel ?? "ready-for-agent";
 const gh = (...a) => sh("gh", a, { cwd: PROJECT_DIR });
 const [cmd, n, arg] = process.argv.slice(2);
 if (cmd === "ready") {
-  const list = JSON.parse(gh("issue", "list", "--label", ready, "--state", "open", "--json", "number,title,labels,assignees,body", "--limit", "100"));
-  const open = list.filter((i) => !i.assignees?.length).map((i) => ({ number: i.number, title: i.title, level: /level\s*(\d)/i.exec(i.body ?? "")?.[1] ?? "?", labels: i.labels.map((l) => l.name) }));
+  // One query for the whole list, because the heartbeat asks every minute. A server without the blockers field fails the
+  // query, and the caller then reports the tickets as unreadable rather than handing out blocked ones.
+  const query = `query($owner: String!, $name: String!, $label: String!) { repository(owner: $owner, name: $name) { issues(states: OPEN, first: 100, labels: [$label]) { nodes { number title body assignees(first: 1) { nodes { login } } labels(first: 100) { nodes { name } } issueDependenciesSummary { blockedBy } } } } }`;
+  const list = JSON.parse(gh("api", "graphql", "-F", "owner={owner}", "-F", "name={repo}", "-f", `label=${ready}`, "-f", `query=${query}`)).data.repository.issues.nodes;
+  const unblocked = (i) => {
+    const blockers = i.issueDependenciesSummary?.blockedBy;
+    if (!Number.isInteger(blockers)) console.error(`#${i.number}: its blockers cannot be read, so it is left out`);
+    return blockers === 0;
+  };
+  const open = list.filter((i) => !i.assignees.nodes.length).filter(unblocked).map((i) => ({ number: i.number, title: i.title, level: /level\s*(\d)/i.exec(i.body ?? "")?.[1] ?? "?", labels: i.labels.nodes.map((l) => l.name) }));
   console.log(JSON.stringify(open, null, 1));
 } else if (cmd === "claim") { gh("issue", "edit", n, "--add-assignee", "@me", "--remove-label", ready, "--add-label", "in-progress"); console.log("ok"); }
 else if (cmd === "comment") { gh("issue", "comment", n, "--body-file", arg); console.log("ok"); }

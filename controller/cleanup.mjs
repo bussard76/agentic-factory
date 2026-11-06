@@ -29,17 +29,21 @@ for (const host of hosts) {
     ...terms.filter((t) => holdsWorktree(t.title) && t.status !== "exited").map((t) => t.worktreePath),
     ...Object.values(workers).filter((w) => (w.host ?? "local") === host.name && ((w.pid && alive(w.pid)) || (w.terminal && terms.some((t) => t.handle === w.terminal && t.status !== "exited")))).map((w) => w.worktree),
   ]);
+  const wsTail = WS.split("/").filter(Boolean).slice(-2).join("/");
+  const wts = g("worktree", "list", "--porcelain").split("\n\n").map((b) => ({ path: /^worktree (.*)$/m.exec(b)?.[1], branch: /^branch refs\/heads\/(.*)$/m.exec(b)?.[1] })).filter((w) => w.path && w.path.includes(`/${wsTail}/`));
   // Finished wave terminals pile up in the integration worktree. The newest stays: wavewait and the heartbeat read its result.
+  // A shared host lists every project's terminals, and only this repository's own worktree tells them apart. Its path comes
+  // from git, because a remote host's configured path can start with ~.
+  const integration = wts.find((w) => w.path.split("/").pop() === "coordinator-integration")?.path;
   const newestWave = readText("wave-handle.txt").trim().split(" ")[1];
   for (const t of terms) {
-    if (t.handle === newestWave || isHelperTerminal(t.title) || !/^(.* · Integration · |Coordinator )/.test(t.title ?? "") || !t.worktreePath?.endsWith("/coordinator-integration")) continue;
+    if (t.handle === newestWave || isHelperTerminal(t.title) || !/^(.* · Integration · |Coordinator )/.test(t.title ?? "") || !integration || t.worktreePath !== integration) continue;
     const output = trySh(ORCA, ["terminal", "read", "--terminal", t.handle, ...orcaEnvArgsOn(host), "--json"]);
     if (!/WAVE-END/.test(output.replace(/echo WAVE-END/g, ""))) continue;
     closedWaves++;
-    if (!dry) trySh(ORCA, ["terminal", "close", "--terminal", t.handle, ...orcaEnvArgsOn(host), "--json"]);
+    if (dry) console.log(`[${host.name}] would close the finished wave terminal "${t.title}"`);
+    else trySh(ORCA, ["terminal", "close", "--terminal", t.handle, ...orcaEnvArgsOn(host), "--json"]);
   }
-  const wsTail = WS.split("/").filter(Boolean).slice(-2).join("/");
-  const wts = g("worktree", "list", "--porcelain").split("\n\n").map((b) => ({ path: /^worktree (.*)$/m.exec(b)?.[1], branch: /^branch refs\/heads\/(.*)$/m.exec(b)?.[1] })).filter((w) => w.path && w.path.includes(`/${wsTail}/`));
   for (const w of wts) {
     const name = w.path.split("/").pop();
     const dirty = onHost(host, `git -C ${q(w.path)} status --porcelain`).trim();   // includes untracked files
