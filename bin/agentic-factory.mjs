@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
-import { heartbeatCronScript, statusWatchCronScript } from "./heartbeat-cron.mjs";
+import { heartbeatCronScript, statusWatchCronScript, statusWatchLabel, statusWatchPlist } from "./heartbeat-cron.mjs";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
@@ -879,8 +879,7 @@ function collectStatus() {
   else [s.phase, s.next] = ["accept and next", "accept what was integrated on the preview, then choose the next feature"];
   // A hint, not a phase: a laptop that slept or a machine without cron must not hide open questions behind `start`.
   if (s.setup.frontAgentBundle && watchRequired(c) && !s.setup.statusWatch) s.next = `The status watch is not running, so finished work and open questions do not reach you: run \`start\`, and if that does not help, \`doctor\`. Then: ${s.next}`;
-  const watchProblem = readWatchProblem(c);
-  if (watchProblem) s.next = `The status watch runs but cannot reach your terminal (${watchProblem}). Then: ${s.next}`;
+  else if (watchRequired(c) && readWatchProblem(c)) s.next = `The status watch runs but cannot reach your terminal (${readWatchProblem(c)}). Then: ${s.next}`;
   s.hints = [
     ...(!s.work.glossary ? ["the business terms are not written down yet (no GLOSSARY.md): capture them with domain-modeling while specifying"] : []),
     ...(c.architecture?.mode === undefined ? ["no decision on ARCHITECTURE.md yet: ask the human, then set architecture.mode to architect or off in factory.config.json and run update"] : []),
@@ -934,7 +933,17 @@ function nameFrontAgent(c) {
 // Sets everything up that the Front agent needs to hand over to the Controller: user-level skills, the bundles,
 // the gate, the load log and the Controller's own agent session in an Orca terminal. Idempotent.
 // The status watch runs on a schedule, outside any session: it needs no agent to start it and works with whichever agent is
-// in front. Like the heartbeat, a schedule that fails is reported and stops nothing: a machine without cron must still work.
+// in front. launchd on macOS, cron elsewhere. Like the heartbeat, a schedule that fails is reported and stops nothing.
+function scheduleStatusWatch(c, frontAgentDir) {
+  if ((process.env.FACTORY_SCHEDULER ?? (process.platform === "darwin" ? "launchd" : "cron")) !== "launchd") return spawnSync("sh", ["-c", statusWatchCronScript(frontAgentDir, c.project.name, path.dirname(process.execPath))], { encoding: "utf8" });
+  const label = statusWatchLabel(c.project.name), domain = `gui/${process.getuid()}`;
+  const plist = path.join(os.homedir(), "Library/LaunchAgents", `${label}.plist`);
+  fs.mkdirSync(path.dirname(plist), { recursive: true });
+  fs.writeFileSync(plist, statusWatchPlist(frontAgentDir, c.project.name, process.execPath, os.homedir()));
+  // Replaced each time, so that a node version removed since does not stay in it.
+  spawnSync("launchctl", ["bootout", `${domain}/${label}`], { encoding: "utf8" });
+  return spawnSync("launchctl", ["bootstrap", domain, plist], { encoding: "utf8" });
+}
 const watchRequired = (c) => c.agents.runner === "orca" && process.env.FACTORY_SKIP_ORCA !== "1" && c.hosts.frontAgent?.statusWatch !== false;
 const readWatchProblem = (c) => { try { return fs.readFileSync(path.join(os.homedir(), "front-agent", c.project.name, "statuswatch.problem"), "utf8").trim(); } catch { return ""; } };
 const statusWatchRuns = (c) => { try { return Date.now() - fs.statSync(path.join(os.homedir(), "front-agent", c.project.name, "statuswatch.alive")).mtimeMs < 11 * 60_000; } catch { return false; } };
@@ -944,14 +953,13 @@ function armStatusWatch(c, frontAgentDir) {
   const orcaFound = spawnSync("sh", ["-c", `command -v ${JSON.stringify(ORCA_BIN)}`], { encoding: "utf8" }).stdout?.trim();
   const orcaCommand = orcaFound?.startsWith("/") ? orcaFound : process.env.ORCA_CLI_BIN_DIR ? path.join(process.env.ORCA_CLI_BIN_DIR, ORCA_BIN) : ORCA_BIN;
   fs.writeFileSync(path.join(frontAgentDir, "front-agent.json"), JSON.stringify({ projectDir: cwd, handle: process.env.ORCA_TERMINAL_HANDLE ?? null, orcaCommand }, null, 2) + "\n");
-  if (!watchRequired(c)) return false;
-  const r = spawnSync("sh", ["-c", statusWatchCronScript(frontAgentDir, c.project.name, path.dirname(process.execPath))], { encoding: "utf8" });
-  if (r.status !== 0) { say(`Status watch: could not schedule it (${(r.stderr || r.error?.message || "").trim().slice(0, 200)}). Without it, finished work and open questions do not reach the Front agent. Fix cron, or set hosts.frontAgent.statusWatch to false in factory.config.json if nobody works in front here, and run start again.`); return false; }
+  if (!watchRequired(c)) return;
+  const r = scheduleStatusWatch(c, frontAgentDir);
+  if (r.status !== 0) { say(`Status watch: could not schedule it (${(r.stderr || r.error?.message || "").trim().slice(0, 200)}). Without it, finished work and open questions do not reach the Front agent. Fix the scheduler, or set hosts.frontAgent.statusWatch to false in factory.config.json if nobody works in front here, and run start again.`); return; }
   // At once, not in up to 5 minutes. Detached, because it can wait for the Controller and for an idle terminal.
   const log = fs.openSync(path.join(frontAgentDir, "statuswatch.log"), "a");
   spawn("node", ["statuswatch.mjs"], { cwd: frontAgentDir, detached: true, stdio: ["ignore", log, log] }).unref();
   say("Status watch: scheduled, every 5 minutes");
-  return false;
 }
 
 async function start() {
@@ -961,13 +969,13 @@ async function start() {
   say("\nUser-level skills:"); installSkills();
   const fa = path.join(os.homedir(), "front-agent", c.project.name);
   fs.mkdirSync(fa, { recursive: true }); fs.cpSync(".factory/front-agent", fa, { recursive: true, force: true }); say(`\nFront agent bundle: ${fa.replace(os.homedir(), "~")}`);
-  const watchFailed = armStatusWatch(c, fa);
+  armStatusWatch(c, fa);
   const ctl = c.hosts.workers.find((h) => h.name === c.hosts.controller.host) ?? { kind: "local", name: "local" };
   const dir = c.hosts.controller.controllerDir ?? "~/controller";
   const prompt = `Read ${dir}/CONTROLLER.md and act as the Controller for the project ${c.project.name}.`;
   const session = `cd ${dir} && ${agentCommand(c.agents.default, prompt, c.agents.controllerArgs)}`;
   const title = controllerTitle(c);
-  let failed = watchFailed ? 1 : 0;
+  let failed = 0;
   if (minimal(c)) {
     say("\nStandard:"); if (!installStandard()) failed++;
     failed += installStandardOnRemotes(c);

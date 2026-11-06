@@ -135,6 +135,7 @@ test("agent entry questions, answers, status and start in an isolated home", asy
     fs.writeFileSync(path.join(bin, "rsync"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     // start schedules the status watch on this machine: a test must never reach the real crontab.
     fs.writeFileSync(path.join(bin, "crontab"), "#!/bin/sh\n[ \"$1\" = -l ] && exit 0\ncat > /dev/null\n", { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "launchctl"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     fs.writeFileSync(path.join(bin, "ssh"), `#!/bin/sh\ncase "$*" in *'printf '*) printf '/remote/home\\n';; *) printf '%s\\n' "$*" >> '${calls}.ssh'; printf 'ok\\n';; esac\n`, { mode: 0o755 });
     config.hosts.workers = [{ name: "remote", kind: "remote", ssh: "fake", projectsDir: "~/projects", orcaEnvironment: "saved-server" }]; config.hosts.controller.host = "remote";
     fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));

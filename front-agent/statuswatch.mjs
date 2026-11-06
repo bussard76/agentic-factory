@@ -14,7 +14,9 @@ import { controllerHost, expand, loadConfig } from "./hosts.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const here = (name) => path.join(HERE, name);
 const readJson = (name, fallback) => { try { return JSON.parse(fs.readFileSync(here(name), "utf8")); } catch { return fallback; } };
-const IDLE_WAIT_MS = 20_000, SUMMARY_MS = 30 * 60_000, MAX_PENDING = 20;
+const IDLE_WAIT_MS = 20_000, SUMMARY_MS = 30 * 60_000, MAX_PENDING = 20, NO_STATUS_GRACE_MS = 15 * 60_000;
+// Status text goes into an agent's input and a sidebar: no control characters, nothing that could submit early.
+const clean = (text) => text.replace(/[\x00-\x1f\x7f-\x9f]+/g, " ");
 
 // Written first: `status` and `doctor` read it, and a Controller that cannot be reached does not mean the watch is gone.
 fs.writeFileSync(here("statuswatch.alive"), new Date().toISOString() + "\n");
@@ -28,6 +30,7 @@ catch {
   fs.mkdirSync(LOCK);
 }
 process.on("exit", () => fs.rmSync(LOCK, { recursive: true, force: true }));
+process.on("SIGTERM", () => process.exit(0));
 
 const cfg = loadConfig(HERE);
 const host = controllerHost(cfg);
@@ -57,7 +60,9 @@ function check(state) {
     const ageMin = mtime ? Math.round((Date.now() / 1000 - mtime) / 60) : Infinity;
     const now = { main: section(text, "On "), needs: section(text, "Needs "), problems: section(text, "Problems") };
     for (const [k, label] of [["main", "NEW ON MAIN"], ["needs", "NEEDS HUMAN"], ["problems", "PROBLEMS"]]) if (state.last?.[k] !== undefined && state.last[k] !== now[k]) alerts.push(`${label}: ${now[k].replace(/\n/g, " | ").slice(0, 400)}`);
-    if (!mtime) problems.status = `NO STATUS: ${ctlDir}/status.md missing on ${host.name} (Controller not started?)`;
+    state.firstRun ??= Date.now();
+    if (!mtime && Date.now() - state.firstRun < NO_STATUS_GRACE_MS) { /* a fresh start: the Controller has not written it yet */ }
+    else if (!mtime) problems.status = `NO STATUS: ${ctlDir}/status.md missing on ${host.name} (Controller not started?)`;
     else if (ageMin > 25) problems.status = `STALE: status.md is older than 25 min`;
     state.last = now;
     if (Date.now() - (state.lastSummary ?? 0) > SUMMARY_MS && state.summarised !== text) {
@@ -93,14 +98,13 @@ function deliver(state) {
     let idle = false;
     if (terminal) try { idle = orca("terminal", "wait", "--terminal", terminal, "--for", "tui-idle", "--timeout-ms", String(IDLE_WAIT_MS)).result?.wait?.satisfied === true; } catch {}
     if (idle) {
-      // Status text goes into an agent's input: no control characters, nothing that could submit early.
-      const text = state.pending.join(" / ").replace(/[\x00-\x1f\x7f]+/g, " ");
+      const text = clean(state.pending.join(" / "));
       orca("terminal", "send", "--terminal", terminal, "--text", `Status watch for ${cfg.project.name}, read from the Controller's status file. Tell ${cfg.project.humanName ?? "the human"} what matters: ${text}`, "--enter");
       state.pending = [];
       fs.rmSync(here("statuswatch.problem"), { force: true });
       return;
     }
-    const notice = `Status watch: ${state.pending.at(-1).slice(0, 120)}`;
+    const notice = `Status watch: ${clean(state.pending.at(-1)).slice(0, 120)}`;
     if (projectDir && state.notice !== notice) { orca("worktree", "set", "--worktree", `path:${projectDir}`, "--comment", notice, "--unread"); state.notice = notice; }
     fs.rmSync(here("statuswatch.problem"), { force: true });
   } catch (e) {

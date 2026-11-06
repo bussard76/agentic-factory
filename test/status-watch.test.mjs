@@ -83,8 +83,8 @@ test("a name or handle that outlived the agent does not win over the real agent"
 
 test("status text cannot submit early, and a broken Orca is reported instead of hidden", () => {
   const h = setup({ terminals: (p) => [agentIn(p)] });
-  h.status("nothing"); h.run(); h.status("line one\r\nline \u001b[31mtwo"); h.run();
-  const text = h.calls("send")[0]; assert.doesNotMatch(text[text.indexOf("--text") + 1], /[\x00-\x1f]/);
+  h.status("nothing"); h.run(); h.status("line one\r\nline \u001b[31mtwo \u009b3m"); h.run();
+  const text = h.calls("send")[0]; assert.doesNotMatch(text[text.indexOf("--text") + 1], /[\x00-\x1f\x7f-\x9f]/);
   h.write({ broken: true, idle: true, terminals: [] }); h.status("another question"); h.run();
   assert.match(fs.readFileSync(path.join(h.watch, "statuswatch.problem"), "utf8"), /not available|failed/i);
   h.write({ idle: true, terminals: h.terminals(h.project) }); h.run();
@@ -108,6 +108,17 @@ test("a second run waits its turn, an old lock expires, and a broken state file 
   h.done();
 });
 
+test("a fresh start gives no false alert while the Controller has not written its status", () => {
+  const h = setup({ terminals: (p) => [agentIn(p)] });
+  h.run(); h.run();
+  assert.equal(h.calls("send").length, 0);
+  const f = path.join(h.watch, "statuswatch-state.json");
+  const state = JSON.parse(fs.readFileSync(f, "utf8")); state.firstRun = Date.now() - 16 * 60_000; fs.writeFileSync(f, JSON.stringify(state));
+  h.run();
+  assert.match(JSON.stringify(h.calls("send")), /NO STATUS/, "after a while it is a real problem");
+  h.done();
+});
+
 test("a lasting problem is announced once, and again after it went away", () => {
   const h = setup({ terminals: (p) => [agentIn(p)] });
   h.status("nothing", 40); h.run(); h.run();
@@ -127,6 +138,11 @@ test("the schedule keeps the rest of the crontab and can be repeated", async () 
   const run = () => spawnSync("bash", ["-c", statusWatchCronScript("~/front-agent/p", "p", "/opt/node/bin")], { encoding: "utf8", env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } });
   assert.equal(run().stdout.trim(), "added");
   assert.equal(run().stdout.trim(), "exists");
+  // A node version that is gone is replaced, not kept.
+  const again = spawnSync("bash", ["-c", statusWatchCronScript("~/front-agent/p", "p", "/opt/node2/bin")], { encoding: "utf8", env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } });
+  assert.equal(again.stdout.trim(), "added");
+  assert.doesNotMatch(fs.readFileSync(tab, "utf8"), /\/opt\/node\/bin/);
+  assert.equal(run().stdout.trim(), "added");
   const lines = fs.readFileSync(tab, "utf8");
   assert.match(lines, /something-else/);
   assert.equal(lines.split("statuswatch.mjs").length, 2, "one line");
@@ -145,8 +161,11 @@ test("start schedules the watch and runs it once; status shows whether it runs, 
   fs.writeFileSync(tab, "");
   fs.writeFileSync(path.join(bin, "crontab"), `#!/bin/sh\nif [ "$1" = "-l" ]; then cat ${tab}; else cat > ${tab}.new && mv ${tab}.new ${tab}; fi\n`, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, "claude"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  // launchd as a fake too: no test may ever reach the real scheduler.
+  const launchLog = path.join(base, "launchctl.log");
+  fs.writeFileSync(path.join(bin, "launchctl"), `#!/bin/sh\necho "$@" >> ${launchLog}\n`, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, "orca"), `#!/usr/bin/env node\nconsole.log(JSON.stringify({ ok: true, result: { terminals: [], repos: [] } }));\n`, { mode: 0o755 });
-  const env = { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, GIT_CONFIG_NOSYSTEM: "1" };
+  const env = { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, GIT_CONFIG_NOSYSTEM: "1", FACTORY_SCHEDULER: "cron" };
   delete env.ORCA_TERMINAL_HANDLE; delete env.ORCA_CLI_COMMAND;
   const git = (...a) => { const r = spawnSync("git", a, { cwd: project, encoding: "utf8", env }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
   const cli = (...a) => spawnSync("node", [CLI, ...a], { cwd: project, encoding: "utf8", env });
@@ -181,6 +200,21 @@ test("start schedules the watch and runs it once; status shows whether it runs, 
   spawnSync("pkill", ["-f", path.join(home, "controller", "loadlog.sh")]);
   assert.match(failed.stdout, /Status watch: could not schedule.*statusWatch/);
   assert.equal(JSON.parse(cli("status", "--json").stdout).phase, before.phase, "the watch never decides the phase");
+  // macOS: launchd, replaced each time, with the running node.
+  fs.rmSync(path.join(dir, "statuswatch.alive"), { force: true });
+  const launchd = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SCHEDULER: "launchd" } });
+  spawnSync("pkill", ["-f", path.join(home, "controller", "loadlog.sh")]);
+  assert.match(launchd.stdout, /Status watch: scheduled/);
+  const calls = fs.readFileSync(launchLog, "utf8").trim().split("\n");
+  assert.match(calls[0], /^bootout gui\/\d+\/de\.agentic-factory\.statuswatch\.demo$/);
+  assert.match(calls[1], /^bootstrap gui\/\d+ .*LaunchAgents\/de\.agentic-factory\.statuswatch\.demo\.plist$/);
+  const plist = fs.readFileSync(path.join(home, "Library/LaunchAgents/de.agentic-factory.statuswatch.demo.plist"), "utf8");
+  assert.ok(plist.includes(`<string>${process.execPath}</string>`)); assert.match(plist, /<integer>300<\/integer>/);
+  assert.ok(plist.includes(`<string>${dir}</string>`));
+  fs.writeFileSync(path.join(bin, "launchctl"), `#!/bin/sh\necho refused >&2\nexit 1\n`, { mode: 0o755 });
+  const refused = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SCHEDULER: "launchd" } });
+  spawnSync("pkill", ["-f", path.join(home, "controller", "loadlog.sh")]);
+  assert.match(refused.stdout, /could not schedule it \(refused\)/);
   config.hosts.frontAgent.statusWatch = false; fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
   assert.doesNotMatch(JSON.parse(cli("status", "--json").stdout).next, /status watch/);
   fs.rmSync(base, { recursive: true, force: true });

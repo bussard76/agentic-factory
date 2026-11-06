@@ -62,7 +62,7 @@ Every sidebar entry (worktree display name) and every terminal, which Orca shows
 
 ## Status watch
 
-`agentic-factory start` schedules `statuswatch.mjs` on the Front agent's machine every 5 minutes through cron, outside any session, so it works with whichever agent is in front. It sends alerts into the Front agent's terminal through Orca when that is idle; until then they wait, and the sidebar shows them. That terminal is an agent in the project's own checkout, preferably one named `<project> · Front Agent`.
+`agentic-factory start` schedules `statuswatch.mjs` on the Front agent's machine every 5 minutes, through launchd on macOS and cron elsewhere, outside any session, so it works with whichever agent is in front. It sends alerts into the Front agent's terminal through Orca when that is idle; until then they wait, and the sidebar shows them. That terminal is an agent in the project's own checkout, preferably one named `<project> · Front Agent`.
 
 `status` and `doctor` say when it stopped or cannot reach the terminal, and open questions stay visible either way. Set `hosts.frontAgent.statusWatch` to `false` where nobody works in front. Under WSL, check that the cron service runs.
 
