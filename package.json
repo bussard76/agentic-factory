@@ -1,6 +1,6 @@
 {
   "name": "agentic-factory",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "A DevOps harness for building software with coordinated AI agents: a front agent for the human, an unattended controller, independent reviewers, measured capacity and a self-improving pipeline.",
   "license": "MIT",
   "type": "module",
