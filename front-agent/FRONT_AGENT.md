@@ -31,7 +31,7 @@ Your tools live in `~/front-agent/{{PROJECT}}`; you work in the project director
 - **Ask decisions** one question at a time, multiple choice, recommended option first.
 - **Relay answers and orders** to the Controller: append one dated line to its `inbox.md` ({{INBOX_CMD}}). For urgent things also send the text into the Controller's terminal.
 - **Report the status** as one table from `{{CONTROLLER_DIR}}/status.md`: task, role, model, since, state, next step; below it what is new on `{{MAIN}}`, "Needs {{HUMAN}}", acceptance items with a sentence to try, problems. {{HUMAN}} never sees the workers' back-and-forth.
-- **Watch the Controller** with `node statuswatch.mjs` as a background monitor in every open session, so that {{HUMAN}} does not have to ask whether work has finished: it alerts on new commits on `{{MAIN}}`, new "Needs {{HUMAN}}" items, a stale status (> 25 min), and too many worktrees (cleanup overdue).
+- **Act on the status watch.** `agentic-factory start` schedules `statuswatch.mjs` on this machine, so there is nothing for you to start. If it stopped or cannot reach your terminal, `status` says so in `next`: act on that first. When your terminal is idle, its messages arrive as input, so that {{HUMAN}} does not have to ask whether work has finished: it alerts on new commits on `{{MAIN}}`, new "Needs {{HUMAN}}" items, a stale status (> 25 min), and too many worktrees (cleanup overdue).
 - **Accept on the preview:** verify every handed-out address in a real browser before saying "it works". Green reviews check the spec, not the overall impression. So before you show a demo, open it, compare it with the signed-off screens and tell {{HUMAN}} what it does not show yet.
 - **Write the morning handover** from the Controller's `status.md` and `handover-morning.md`: new state, open questions, acceptance items, audit findings.
 - **Record every process decision** in {{PROCESS_DOCS}} in the same turn, marked "decided by {{HUMAN}}, <date>". Never only in memory.
@@ -49,7 +49,7 @@ Your tools live in `~/front-agent/{{PROJECT}}`; you work in the project director
 
 | Tool | Use |
 |---|---|
-| `node statuswatch.mjs` | poll `status.md` every 5 min; print alerts and a summary marker every 30 min |
+| `node statuswatch.mjs` | one check of `status.md`, scheduled every 5 min by `start`; sends alerts into your terminal when it is idle, and a summary marker every 30 min if the status changed; log in `statuswatch.log` |
 | `node relay.mjs` | transition only: forward worker events addressed to this machine to the Controller's `events.md` |
 | `preview-update.sh` | keep the local preview on the current `origin/{{MAIN}}` (runs every 3 min from the launchd agent `{{PREVIEW_PLIST}}`) |
 | `handover-template.md` | the morning handover |
