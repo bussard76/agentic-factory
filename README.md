@@ -23,7 +23,7 @@ flowchart LR
   F -- orders, answers --> C[Controller<br/>unattended]
   C -- status --> F
   C --> W[Workers<br/>Developer, Tester,<br/>Architect, Auditor, Retro]
-  W -- reviewed wave --> M[(main)]
+  C -- reviewed wave --> M[(main)]
   M --> P[Preview]
   P --> H
 ```
@@ -43,9 +43,9 @@ You see one status table and get questions with options. The Controller starts w
 
 ## Quick start
 
-**You need** [Orca](https://github.com/stablyai/orca) running, one logged-in agent CLI (Claude Code, Codex or Pi), Node 22+ and git. On Windows, use WSL 2. A Linux server for the workers is optional.
+**You need** macOS or Linux (on Windows, WSL 2), [Orca](https://github.com/stablyai/orca) running, one logged-in agent CLI (Claude Code, Codex or Pi), Node 22+ and git. A Linux server for the workers is optional.
 
-**Open your project in that agent and drop in this prompt:**
+**Open your project in that agent, in Orca if you can, and drop in this prompt:**
 
 ```text
 Set up the agentic factory for this project. If ~/agentic-factory does not exist, clone https://github.com/bussard76/agentic-factory.git into it; otherwise update it with git -C ~/agentic-factory pull --ff-only. Then read ~/agentic-factory/START.md and follow it: check the prerequisites, move into Orca if needed, and guide me through the onboarding.
@@ -74,7 +74,7 @@ Prefer the terminal? [Getting started](docs/getting-started.md) has every step b
 A project has its own copy of the handbooks and hooks, so a newer factory reaches it only through an update. Drop this into the project's Front agent:
 
 ```text
-Update this project to the newest agentic factory. Run git -C ~/agentic-factory pull --ff-only, then in this project run node ~/agentic-factory/bin/agentic-factory.mjs update. Show me what changed and every file it kept. Merge each kept file with its new version in .factory/new/ and ask me where they contradict. Commit the changes referencing the adoption ADR, push them, run node ~/agentic-factory/bin/agentic-factory.mjs start and tell me whether the Controller needs a restart.
+Update this project to the newest agentic factory. Run git -C ~/agentic-factory pull --ff-only, then in this project run node ~/agentic-factory/bin/agentic-factory.mjs update. Show me what changed and every file it kept. Merge each kept file with its new version in .factory/new/ and ask me where they contradict. Commit the changes referencing the adoption ADR. A push to main needs a passing review, so put them on a branch and have the Controller review and merge them. Then run node ~/agentic-factory/bin/agentic-factory.mjs start and tell me whether the Controller needs a restart.
 ```
 
 <details>
@@ -88,7 +88,7 @@ git status
 ```
 
 1. **Review.** `update` overwrites only files you have not changed. A changed file stays, and its new version lands in `.factory/new/` for you to merge.
-2. **Commit and push.** `update` commits nothing. Protected files need the adoption ADR in the message, for example `Update agentic factory (ADR-0001)`. `docs/review-protocol.md`, `docs/architect-protocol.md` and `CODING_STANDARDS.md` also need a passing review.
+2. **Commit, get it reviewed, then push.** `update` commits nothing. Protected files need the adoption ADR in the message, for example `Update agentic factory (ADR-0001)`. Only documentation reaches `main` without a review, and `docs/review-protocol.md`, `docs/architect-protocol.md` and `CODING_STANDARDS.md` do not count as documentation. An update also changes `.factory/manifest.json`, and often hooks and skills, so the pre-push hook refuses a direct push until a passing review covers the commit. Put it on a branch and hand it to the Controller.
 3. **Run `start`:** `node ~/agentic-factory/bin/agentic-factory.mjs start`. A running Controller read its handbook when it started, so close its terminal once it is idle and run `start` again. Workers keep running.
 
 An older project has not chosen yet whether an Architect maintains an `ARCHITECTURE.md`. `status` asks; set `architecture.mode` to `architect` or `off` in `factory.config.json` and run `update` again.
@@ -119,7 +119,7 @@ Open points are in [`debt.md`](debt.md), and past reviews of this repository in 
 | [Orca](docs/orca.md) · [Server setup](docs/server-setup.md) · [Steering modes](docs/steering-modes.md) | Running it: naming, heartbeat, hosts, tickets |
 | [Decisions](docs/decisions.md) · [Learnings](docs/learnings.md) | Why it is the way it is |
 
-The ten-minute overview, in German, is [`site/index.html`](site/index.html).
+The ten-minute overview, in German, is [`site/index.html`](site/index.html). Open the file in a browser.
 
 ## What is in this repository
 

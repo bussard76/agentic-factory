@@ -4,6 +4,8 @@
 
 This is a preview. It has not run on a real project or on a remote host yet, and an existing project cannot switch yet. See `F43` to `F45` in [`debt.md`](../debt.md).
 
+`agentic-factory` below stands for `node ~/agentic-factory/bin/agentic-factory.mjs`.
+
 ## What lives where
 
 | What | Where |
