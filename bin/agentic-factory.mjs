@@ -938,11 +938,19 @@ function scheduleStatusWatch(c, frontAgentDir) {
   if ((process.env.FACTORY_SCHEDULER ?? (process.platform === "darwin" ? "launchd" : "cron")) !== "launchd") return spawnSync("sh", ["-c", statusWatchCronScript(frontAgentDir, c.project.name, path.dirname(process.execPath))], { encoding: "utf8" });
   const label = statusWatchLabel(c.project.name), domain = `gui/${process.getuid()}`;
   const plist = path.join(os.homedir(), "Library/LaunchAgents", `${label}.plist`);
-  fs.mkdirSync(path.dirname(plist), { recursive: true });
-  fs.writeFileSync(plist, statusWatchPlist(frontAgentDir, c.project.name, process.execPath, os.homedir()));
-  // Replaced each time, so that a node version removed since does not stay in it.
+  try {
+    fs.mkdirSync(path.dirname(plist), { recursive: true });
+    fs.writeFileSync(plist, statusWatchPlist(frontAgentDir, c.project.name, process.execPath, os.homedir()));
+  } catch (error) { return { status: 1, stderr: error.message }; }
   spawnSync("launchctl", ["bootout", `${domain}/${label}`], { encoding: "utf8" });
-  return spawnSync("launchctl", ["bootstrap", domain, plist], { encoding: "utf8" });
+  // A run that is still ending can make the first attempt fail.
+  let r;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    r = spawnSync("launchctl", ["bootstrap", domain, plist], { encoding: "utf8" });
+    if (r.status === 0) break;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+  }
+  return r;
 }
 const watchRequired = (c) => c.agents.runner === "orca" && process.env.FACTORY_SKIP_ORCA !== "1" && c.hosts.frontAgent?.statusWatch !== false;
 const readWatchProblem = (c) => { try { return fs.readFileSync(path.join(os.homedir(), "front-agent", c.project.name, "statuswatch.problem"), "utf8").trim(); } catch { return ""; } };
@@ -953,6 +961,9 @@ function armStatusWatch(c, frontAgentDir) {
   const orcaFound = spawnSync("sh", ["-c", `command -v ${JSON.stringify(ORCA_BIN)}`], { encoding: "utf8" }).stdout?.trim();
   const orcaCommand = orcaFound?.startsWith("/") ? orcaFound : process.env.ORCA_CLI_BIN_DIR ? path.join(process.env.ORCA_CLI_BIN_DIR, ORCA_BIN) : ORCA_BIN;
   fs.writeFileSync(path.join(frontAgentDir, "front-agent.json"), JSON.stringify({ projectDir: cwd, handle: process.env.ORCA_TERMINAL_HANDLE ?? null, orcaCommand }, null, 2) + "\n");
+  // Opted out: a job from before must not go on alerting without any hint.
+  const oldPlist = path.join(os.homedir(), "Library/LaunchAgents", `${statusWatchLabel(c.project.name)}.plist`);
+  if (c.hosts.frontAgent?.statusWatch === false && process.env.FACTORY_SKIP_ORCA !== "1" && fs.existsSync(oldPlist)) { spawnSync("launchctl", ["bootout", `gui/${process.getuid()}/${statusWatchLabel(c.project.name)}`], { encoding: "utf8" }); fs.rmSync(oldPlist, { force: true }); }
   if (!watchRequired(c)) return;
   const r = scheduleStatusWatch(c, frontAgentDir);
   if (r.status !== 0) { say(`Status watch: could not schedule it (${(r.stderr || r.error?.message || "").trim().slice(0, 200)}). Without it, finished work and open questions do not reach the Front agent. Fix the scheduler, or set hosts.frontAgent.statusWatch to false in factory.config.json if nobody works in front here, and run start again.`); return; }

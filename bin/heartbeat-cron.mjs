@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 // The shell script that adds the heartbeat's cron line on the Controller's host. It leaves the rest of the crontab alone,
 // and a line that already runs this directory's heartbeat stays. It prints "added" or "exists".
 export function heartbeatCronScript(dir, project) {
@@ -27,7 +29,9 @@ export function statusWatchCronScript(dir, project, nodeDir = "") {
 
 // macOS: launchd, because `crontab -` can be refused there ("Operation not permitted"). Runs every 5 minutes after login.
 const xml = (text) => String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-export const statusWatchLabel = (project) => `de.agentic-factory.statuswatch.${String(project).toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+// The hash keeps "My App" and "my-app" apart. node comes through PATH below, because Homebrew's real path names a version
+// that an upgrade removes, and launchd would then fail without a line in any log.
+export const statusWatchLabel = (project) => `de.agentic-factory.statuswatch.${String(project).toLowerCase().replace(/[^a-z0-9]+/g, "-")}.${createHash("sha256").update(String(project)).digest("hex").slice(0, 6)}`;
 export function statusWatchPlist(dir, project, nodePath, homeDir) {
   const nodeDir = nodePath.slice(0, nodePath.lastIndexOf("/"));
   const log = `${dir}/statuswatch.log`;
@@ -37,7 +41,7 @@ export function statusWatchPlist(dir, project, nodePath, homeDir) {
 <dict>
   <key>Label</key><string>${xml(statusWatchLabel(project))}</string>
   <key>ProgramArguments</key>
-  <array><string>${xml(nodePath)}</string><string>statuswatch.mjs</string></array>
+  <array><string>/usr/bin/env</string><string>node</string><string>statuswatch.mjs</string></array>
   <key>WorkingDirectory</key><string>${xml(dir)}</string>
   <key>StartInterval</key><integer>300</integer>
   <key>StandardOutPath</key><string>${xml(log)}</string>
