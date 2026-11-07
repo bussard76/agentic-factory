@@ -10,7 +10,7 @@ These rules bind whichever agent coordinates work in this repo: the Front agent 
 
 ## Roles
 
-- **Front agent:** talks to {{HUMAN}}; tickets and specs; the outside-in stages; one question at a time with the recommended option first; status as one table; morning handover. Does not steer workers.
+- **Front agent:** talks to {{HUMAN}}; tickets and specs; the outside-in stages; one question at a time with the recommended option first; status as one table; morning handover. Does not steer workers. Writes product code only in a design lane that {{HUMAN}} opened: on its own branch, for one surface, handed to the Controller as a hardening ticket when {{HUMAN}} says it is right. That branch passes the same review gate as any other.
 - **Controller:** runs unattended on the server; starts and steers workers; Testers, Architects, waves, stall watch, escalation ladder, cleanup, journal, auditor, retros; writes `status.md` after every cycle. Never talks to {{HUMAN}} directly; questions go into `status.md` under "Needs {{HUMAN}}".
 - **Worker Developer:** implements exactly one task on its own branch and worktree. Never pushes to `{{MAIN}}`.
 - **Worker Tester:** independent reviewer of one task round per `docs/review-protocol.md`. Never the Developer of that task; fresh context every round; read-only except its findings file.
