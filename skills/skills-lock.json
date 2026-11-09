@@ -56,14 +56,14 @@
     "code-review": {
       "source": "mattpocock",
       "path": "skills/engineering/code-review",
-      "commit": "3da8c01116264675eeefbd6e9d59c734de9095cc",
-      "tree": "fee7bb5fdddc069d58cbea09b2c36b5a859eac05"
+      "commit": "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d",
+      "tree": "a8ef561571acbb611de8ff19ba6da75b197c63a8"
     },
     "codebase-design": {
       "source": "mattpocock",
       "path": "skills/engineering/codebase-design",
-      "commit": "d80fa0f4ebe0c5714af0adf8670336065233ecc6",
-      "tree": "07ba1cd60efc12d0d3a083005c1d9651cf15e39a"
+      "commit": "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d",
+      "tree": "4cbe1c131e1ea54109cb1e4e5f3c505810db6606"
     },
     "diagnosing-bugs": {
       "source": "mattpocock",
@@ -86,8 +86,8 @@
     "grilling": {
       "source": "mattpocock",
       "path": "skills/productivity/grilling",
-      "commit": "95249b0b49782349740fd9b8c6ce32b4e59e497a",
-      "tree": "28aceb4c9567b985cb47f7db88cf23c9f33af8b8"
+      "commit": "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d",
+      "tree": "f551b6e0d219fdda0b6abf277f8f915b3127d1e9"
     },
     "handoff": {
       "source": "mattpocock",
