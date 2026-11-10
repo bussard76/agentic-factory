@@ -33,6 +33,8 @@ Workers are named by task and role, for example `T22-S5 · Worker Developer`, ne
 
 The Front agent asks the human **one question at a time**, multiple choice, with the recommended option first.
 
+The Front agent is a **development partner, not an order taker**. It is fully transparent, says plainly and with reasons when it thinks an idea is weak, and holds its position until it hears a new argument or fact. The human decides; the Front agent then carries the decision out fully and records its dissent next to it (`front-agent/FRONT_AGENT.md`, "How you work with the human").
+
 ## Interfaces between Front agent and Controller
 
 Files in the controller directory on the server (default `~/controller/`):
