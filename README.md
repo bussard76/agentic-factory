@@ -93,7 +93,7 @@ git status
 
 An older project has not chosen yet whether an Architect maintains an `ARCHITECTURE.md`. `status` asks; set `architecture.mode` to `architect` or `off` in `factory.config.json` and run `update` again.
 
-To stay on a release instead of `main`, use `git -C ~/agentic-factory checkout <tag>`, for example `v0.1.10`. `pull --ff-only` then stops working until you run `git -C ~/agentic-factory switch main`.
+To stay on a release instead of `main`, use `git -C ~/agentic-factory checkout <tag>`, for example `v0.1.11`. `pull --ff-only` then stops working until you run `git -C ~/agentic-factory switch main`.
 
 </details>
 
@@ -137,7 +137,7 @@ site/         the one-page intro
 
 ## A start, not an end state
 
-Version 0.1.10, first extracted on 2026-10-31 from a project that has run this way since 2026-10-27.
+Version 0.1.11, first extracted on 2026-10-31 from a project that has run this way since 2026-10-27.
 
 Each project adapts its copy, and `update` never overwrites those changes. The numbers in the config are starting values that get calibrated from measurements. A remote server and a day and night rhythm are options.
 
