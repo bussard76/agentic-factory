@@ -99,7 +99,7 @@ Jedes Ticket, ob GitHub-Issue oder Task-Datei, wird zu genau einem Branch und ei
 | 5b. `pass` | Architekt (nur Stufe 2/3) | `agents/t12-conformance` vom bestandenen SHA | grobe Grenzprüfung, `T12-architecture-conformance.md` |
 | 6. Wave | Controller | Worktree `<workspaces>/<projekt>/coordinator-integration/`, Branch `integration` auf `origin/main` zurückgesetzt | führt jeden bestandenen Task-Branch **zusammen mit dem Review-Branch seiner bestandenen Runde** zusammen (`agents/t12` und `agents/t12-review-2`, bei Stufe 2/3 auch den Konformitäts-Branch), einen Branch nach dem anderen (einen Octopus-Merge lehnt die Push-Sperre ab), übernimmt die ADR-Verweise der gemergten Commits in die Merge-Nachricht, lässt die vollen Gates einmal laufen, **pusht `integration` nach `main`**; der Pre-Push-Hook prüft, dass jeder Commit Vorfahre eines `Verdict: pass`-Review-SHA ist, dessen Befunddatei im gepushten Stand liegt |
 | 7. Preview und Abnahme | Mensch | der Preview-Klon auf dem eigenen Rechner | folgt `main` automatisch; Befunde werden neue Tickets |
-| 8. Aufräumen | Controller, jeder Zyklus | alle Worker-Hosts | schließt das Terminal des Workers, gibt den Dispatch frei, entfernt den Worktree `t12/`, sobald sein Branch gemergt oder sicher auf origin ist, löscht gemergte `agents/t12*`-Branches, schließt das Issue oder setzt `Status: integrated` |
+| 8. Aufräumen | Controller, jeder Zyklus | alle Worker-Hosts | schließt das Terminal des Workers, gibt den Dispatch frei, entfernt den Worktree `t12/`, sobald sein Branch gemergt oder sicher auf origin ist, löscht gemergte `agents/t12*`-Branches. Den Ticket-Status setzt die Welle: Ihr letzter Branch setzt `Status: integrated`, oder der Controller schließt das Issue nach dem Push |
 
 ```mermaid
 gitGraph
