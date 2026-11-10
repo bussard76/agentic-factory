@@ -5,7 +5,7 @@ Five kinds of participants. The human talks to exactly one of them.
 | Role | Where it runs | Does | Never does |
 |---|---|---|---|
 | **Human** (the project owner) | wherever they are | sets goals and priorities, accepts on the preview (their own machine, their own environment; automated tests never use real data), decides level-3 architecture and everything that touches real external systems or real data | – |
-| **Front agent** | an agent session on the human's machine (Claude Code, Codex or Pi) | the only contact for the human. Takes wishes and test findings, turns them into tickets and specs, runs the outside-in stages, asks decisions one question at a time, reports the status as one table, writes the morning handover | steer workers itself; show the human the back-and-forth of the workers |
+| **Front agent** | an agent session on the human's machine (Claude Code, Codex or Pi), or on the server beside the Controller (see [orca.md](orca.md#front-agent-on-the-server)) | the only contact for the human. Takes wishes and test findings, turns them into tickets and specs, runs the outside-in stages, asks decisions one question at a time, reports the status as one table, writes the morning handover | steer workers itself; show the human the back-and-forth of the workers |
 | **Controller** | an agent session on the server, unattended | starts and steers every worker, schedules tests, reviews and waves, detects stuck workers, cleans up, writes `status.md` after every cycle, runs the auditor and retros | talk to the human directly; take level-3, ADR or product decisions (those go to the human as questions) |
 | **Workers** | one per task, each in its own worktree and terminal | see below | push to `main`; weaken tests |
 | **Reviewers and observers** | workers too, read-only | Tester, Architect, Auditor, Retro | change code |
@@ -45,7 +45,9 @@ Files in the controller directory on the server (default `~/controller/`):
 | `inbox.md` | Front agent | the human's answers and new orders, one dated line each; the Controller moves processed lines to `inbox-done.md` |
 | `events.md` | Front agent (transition only) | worker events relayed from the human's machine |
 | `journal.ndjson` | Controller | one JSON event per line, see [improvement.md](improvement.md) |
+| `front-events.log` | Controller, when the event happens | with the Front agent on the server: one line per event, `<date> FRONT-EVENT <KIND>: <one sentence>`, kinds `DONE`, `PUSHED`, `GATE-GREEN`, `GATE-RED`, `REVIEW`, `NEEDS-HUMAN`, `BLOCKED`, `IDLE`, `ANSWER`. Append-only; never archived, rotated or truncated, and the inbox archival must not touch it |
+| `client-tasks.log` (in `~/front-agent/<project>/` on the server) | Front agent on the server | work that only runs on the human's machine, one line `CLIENT-TASK <date> <what>`; a session there does it and answers by `orca orchestration send` |
 | `handover.md` | Front agent | what is in flight and queued when a Controller takes over |
 | `CONTROLLER.md` | the factory (`init`) | the Controller's handbook |
 
-Urgent answers can also be sent as text into the Controller's terminal; a file entry alone does not wake an idle agent.
+Urgent answers can also be sent as text into the Controller's terminal; a file entry alone does not wake an idle agent. With the Front agent on the server, orders and events go through Orca's own messages instead and the files are the record and the fallback (see [orca.md](orca.md#front-agent-on-the-server)).
