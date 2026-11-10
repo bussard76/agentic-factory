@@ -64,3 +64,13 @@ From one project's feature with six slices, built in parallel on a shared host, 
 | 30 | **The review preview belongs on the human's machine.** | Human statement | Not taken over: `preview` already exists, and when to offer it is a preference. |
 | 31 | **A surface is shaped faster with the human watching.** A feature passed its full suite and two reviews, and the human rejected its look on first sight. The same problems and several new interactions then took about an hour with the Front agent changing the code directly, against a day through the normal flow. | One project, one session, human statement | Proposed: design lane in `outside-in.md`. One project so far. |
 | 32 | **Green reviews passed a surface that did not match its signed-off screens.** No step compared the two. | Review files, the signed-off screens | Proposed: comparison in `review-protocol.md`; a missing signed-off control or flow fails the review, other differences are listed under "Differs from design" for acceptance. |
+
+## The Front agent on the server (2026-11-10)
+
+| # | Learning | Evidence | Status |
+|---|---|---|---|
+| 33 | **A message sent is not a message seen.** Orca's wake did not reach a Front agent in Claude Code: 56 Controller messages sat unread for about three hours, including a question for the human. The human noticed only by asking for the status. | Orca mailbox (`check --peek`), event log timestamps | Applied: watch in `orca.md`. Measured with one agent and one Orca version; recheck after Orca updates. |
+| 34 | **Apply the recorded decisions before escalating.** The Controller spent about 35 minutes on a test-matrix question and then escalated it, although the task's own abort criterion and an earlier recorded decision of the human on the acceptable baseline already settled it. | Event log, task text | Applied: `CONTROLLER.md` |
+| 35 | **`agentic-factory update --help` ran the update** instead of printing help, in the project's main checkout. | Session log | Open: #38 (same defect as `start --help`, #24) |
+| 36 | **`start` on the Controller's own host tried to reach that host over ssh** under an alias it could not resolve, so the Controller bundle and heartbeat were not installed; and it scheduled the status watch for a Front agent on the human's machine although the Front agent ran on the server. | `start` output, crontab | Open: #39; partly listed under "Not covered yet" in `orca.md` |
+
