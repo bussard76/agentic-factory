@@ -54,6 +54,8 @@ New features are built **from the outside in**. Nothing is built until the surfa
 
 Stages 1–3 happen with the human during the day; the Controller builds only what is signed off. Defects in already agreed behaviour go straight to the build. Design exports land in `design/<feature>/` in the repo so workers never need the design tool.
 
+**Design lane:** when the human asks for it, the Front agent shapes one surface directly on a branch while the human reviews on a separate port. Look first; tests, review and gate follow as a hardening ticket for the Controller, and the branch reaches `main` only through them. Details: [outside-in.md](outside-in.md#the-design-lane-shaping-the-real-surface-together).
+
 ## The life of a task
 
 ```mermaid
