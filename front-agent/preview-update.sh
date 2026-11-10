@@ -24,6 +24,17 @@ if [ -n "$ENV_FILE" ] && { [ ! -f "$ENV_FILE" ] || [ ! -r "$ENV_FILE" ]; }; then
   echo "$(date '+%F %T') not starting the preview: env file $ENV_FILE is missing or unreadable"
   exit 0
 fi
+# A line that cannot be set would leave its variable out, so the same fallback applies: nothing starts.
+if [ -n "$ENV_FILE" ]; then
+  n=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1)); case "$line" in ""|\#*) continue;; esac; line="${line#export }"
+    if ! [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+      echo "$(date '+%F %T') not starting the preview: line $n of the env file $ENV_FILE is not NAME=value"
+      exit 0
+    fi
+  done < "$ENV_FILE"
+fi
 
 cd "$W" || { echo "preview worktree $W missing"; exit 1; }
 git fetch -q origin || exit 0
@@ -36,7 +47,9 @@ git checkout -q --detach "$new" && git clean -fdq -e .preview-sha -e .env
 [ -f "$ENV_LINK" ] && ln -sfn "$ENV_LINK" .env
 if [ -n "$INSTALL_CMD" ] && ! bash -c "$INSTALL_CMD" > "/tmp/${PROJECT}-preview-install.log" 2>&1; then echo "install failed, see /tmp/${PROJECT}-preview-install.log"; exit 1; fi
 # The env file may hold unquoted values with spaces, so read it line by line instead of sourcing it.
-( if [ -f "$ENV_FILE" ]; then while IFS= read -r line; do case "$line" in ""|\#*) continue;; esac; export "${line%%=*}=${line#*=}"; done < "$ENV_FILE"; fi
+( if [ -n "$ENV_FILE" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do case "$line" in ""|\#*) continue;; esac; line="${line#export }"; export "${line%%=*}=${line#*=}" || exit 1; done < "$ENV_FILE" || exit 1
+  fi
   export PORT="$PORT" WEB_PORT="$PORT"
   exec nohup bash -c "$START_CMD" > "$LOG" 2>&1 ) &
 echo $! > "$PID"; echo "$new" > .preview-sha

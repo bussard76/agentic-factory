@@ -95,7 +95,7 @@ Every ticket, whether a GitHub issue or a task file, becomes exactly one branch 
 | 5b. `pass` | Architect (level 2/3 only) | `agents/t12-conformance` from the passed SHA | coarse boundary check, `T12-architecture-conformance.md` |
 | 6. Wave | Controller | worktree `<workspaces>/<project>/coordinator-integration/`, branch `integration` reset to `origin/main` | merges each passed task branch **together with the review branch of its passing round** (`agents/t12` and `agents/t12-review-2`, plus the conformance branch for level 2/3), one branch at a time (an octopus merge is rejected by the push gate), carrying the merged commits' ADR references into the merge message, runs the full gates once, **pushes `integration` to `main`**; the pre-push hook verifies that every commit is an ancestor of a `Verdict: pass` review SHA found in the pushed tree |
 | 7. Preview and acceptance | human | the preview clone on the human's machine | follows `main` automatically; findings become new tickets |
-| 8. Cleanup | Controller, every cycle | all worker hosts | closes the worker's terminal, releases the dispatch, removes worktree `t12/` once its branch is merged or safely on origin, deletes merged `agents/t12*` branches, closes the issue or sets `Status: integrated` |
+| 8. Cleanup | Controller, every cycle | all worker hosts | closes the worker's terminal, releases the dispatch, removes worktree `t12/` once its branch is merged or safely on origin, deletes merged `agents/t12*` branches. The ticket status is the wave's job: its last branch sets `Status: integrated`, or the Controller closes the issue after the push |
 
 ```mermaid
 gitGraph

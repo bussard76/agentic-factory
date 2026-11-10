@@ -32,7 +32,9 @@ function preview(envFile) {
   const start = `printf '%s' "\${PREVIEW_TEST_VALUE:-unset}" > "${record}"; exec sleep 30`;
   const pidFile = `/tmp/${project}-preview.pid`;
   const run = (env = {}) => spawnSync("bash", [script], { encoding: "utf8", env: { ...process.env, HOME: home, PREVIEW_WORKTREE: worktree, PREVIEW_START: start, ...env } });
-  const seen = () => { for (let i = 0; i < 100 && !fs.existsSync(record); i++) pause(50); return fs.existsSync(record) ? fs.readFileSync(record, "utf8") : null; };
+  // The start command creates the record before it writes to it, so wait for content, not for the file.
+  const read = () => (fs.existsSync(record) ? fs.readFileSync(record, "utf8") : "");
+  const seen = () => { for (let i = 0; i < 100 && !read(); i++) pause(50); return fs.existsSync(record) ? read() : null; };
   const pid = () => (fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, "utf8")) : null);
   const done = () => {
     const p = pid();
@@ -59,6 +61,30 @@ test("a preview env file with an absolute path is found", () => {
   envFileAt(file);
   assert.equal(p.run({ PREVIEW_ENV_FILE: file }).status, 0);
   assert.equal(p.seen(), "from-file");
+  p.done();
+});
+
+test("a preview env file line written as export NAME=value is set", () => {
+  const p = preview("~/x/preview.env");
+  const file = path.join(p.home, "x/preview.env");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, "export PREVIEW_TEST_VALUE=exported\n");
+  assert.equal(p.run().status, 0);
+  assert.equal(p.seen(), "exported");
+  p.done();
+});
+
+test("a preview env file with a line that cannot be set starts nothing, and names the line", () => {
+  const p = preview("~/x/preview.env");
+  const file = path.join(p.home, "x/preview.env");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, "PREVIEW_TEST_VALUE=fine\nnot a setting\n");
+  const r = p.run();
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /not starting the preview: line 2 of the env file .* is not NAME=value/);
+  pause(300);
+  assert.equal(fs.existsSync(p.record), false);
+  assert.equal(p.pid(), null);
   p.done();
 });
 
