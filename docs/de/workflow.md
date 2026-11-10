@@ -180,7 +180,7 @@ Der Rhythmus ist eine Einstellung (`rhythm.mode`), keine Regel:
 - **Eigener Zeitplan:** Ruhezeiten legen fest, wann der Controller neue Arbeit starten darf.
 - **Status auf Nachfrage:** eine Tabelle mit Aufgabe, wer daran arbeitet (Rolle, Modell), Stand, nächster Schritt und ob der Mensch gebraucht wird. Darunter, was neu auf `main` ist, und offene Abnahmen.
 - **Fragen an den Menschen:** immer eine auf einmal, mit Optionen und Empfehlung.
-- **Schnittstelle Front-Agent ↔ Controller:** das Controller-Verzeichnis auf dem Server. `status.md` schreibt der Controller, `inbox.md` der Front-Agent, `CONTROLLER.md` ist das Betriebshandbuch.
+- **Schnittstelle Front-Agent ↔ Controller:** das Controller-Verzeichnis auf dem Server. `status.md` schreibt der Controller, `inbox.md` der Front-Agent, `CONTROLLER.md` ist das Betriebshandbuch. **Alternative (erprobt im ersten Projekt, noch nicht von `agentic-factory start` unterstützt):** Der Front-Agent läuft ebenfalls auf dem Server, im selben Orca wie der Controller. Im Orca-Client entsteht ein Baum: Front-Agent oben, darunter der Controller, darunter Integration und Worker. Aufträge und Antworten gehen nativ mit `orca orchestration send` (Orca stellt sie in die Warteschlange und weckt den Empfänger), Ereignisse stehen zusätzlich als eine Zeile je Ereignis in `front-events.log` (nur anhängen, nie archiviert). Was nur auf dem Rechner des Menschen geht, erledigt ein Client-Worker über `client-tasks.log`; der Server wird nicht mit dem Rechner des Menschen gekoppelt. Einzelheiten: `docs/orca.md`.
 
 ## Der Zyklus des Controllers
 

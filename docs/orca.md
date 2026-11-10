@@ -20,7 +20,7 @@
 3. Register the repo on the server and note its id.
 4. Put `orcaEnvironment` and `orcaRepoId` into that host's entry in `factory.config.json` → `hosts.workers[]`. Every Controller script reads them.
 
-The Controller itself runs **on the server**, in an Orca terminal, so it survives the client being closed and talks to workers locally. The Front agent on the human's machine only reads `status.md` over SSH and writes `inbox.md`.
+The Controller itself runs **on the server**, in an Orca terminal, so it survives the client being closed and talks to workers locally. The Front agent on the human's machine only reads `status.md` over SSH and writes `inbox.md`. The Front agent can also run on the server, see [Front agent on the server](#front-agent-on-the-server).
 
 ## Naming
 
@@ -59,6 +59,27 @@ Every sidebar entry (worktree display name) and every terminal, which Orca shows
 - An entry with no known role, such as the checkout on a worker-only host, is reported by `names.mjs` and left as it is.
 - Orca does not mark a terminal's name as automatic, so only those two patterns count as automatic. Any other name stays until someone renames it. A human who names a terminal exactly `Setup` gets it corrected.
 - A human who names an entry exactly like its folder gets it corrected, because that looks like Orca's own name.
+
+## Front agent on the server
+
+An alternative to the Front agent on the human's machine. **Status: piloted in the first project, not yet supported by `agentic-factory start`** (see "Not covered" below). Decided by the project owner of that project, 2026-11-10.
+
+**Why.** With the Front agent on the human's machine and the Controller on the server, the two live in two Orcas and exchange work through files and a nudging script. In the first project this showed as the human noticing that the two were out of step:
+- an order was swallowed by the inbox archival and overlooked;
+- the heartbeat log had 686 "busy, not woken" against 854 "woke": an order waits until the Controller's turn ends and has no queue of its own;
+- nothing woke the Front agent; it polled every two to three minutes, and a watcher that expired went unnoticed.
+
+Orca's own messages are event driven: `orca orchestration send` queues a message and wakes the recipient at the end of its turn (measured 18 s, Controller idle). That works only inside **one** Orca. Measured across two Orcas (Orca 1.4.246 on the server, 1.4.255 on the client): a message from the client to a server terminal arrives; the server cannot answer to a client terminal (`terminal_not_found`); the client cannot read a server mailbox (`consumer_fenced`); creating a Run needs a terminal on that server (`stable_pane_required`). So both agents have to be in the same Orca.
+
+**Setup.**
+- The Front agent runs in an Orca terminal on the server, in its own worktree, and starts from a handover file (`front-agent/FRONT_AGENT.md` rendered for the project, plus the state). The human reaches it through the Orca client, where the server is a saved environment. Start it with `orca worktree create --environment <env> --repo id:<repoId> --name <project>-front --no-parent --agent <agent> --surface terminal --prompt "…"`.
+- **Tree, collapsible in the client:** Front agent (root) → Controller → Integration and all workers. Re-parent with `orca worktree set --worktree <selector> --parent-worktree <selector>`. Workers the Front agent starts hang under it. Never start factory work with `--no-parent`, it becomes a second root. Naming rules above still apply.
+- **Orders and answers:** `orca orchestration send --to <terminal handle> --subject … --body …` in both directions. Nobody polls and nobody runs watch scripts on Orca mail: a plain `check` takes the mail away from Orca's wake.
+- **Events from the Controller:** `front-events.log` (see [roles.md](roles.md#interfaces-between-front-agent-and-controller)), written when the event happens, plus a `send` to the Front agent's terminal. `inbox.md` and `status.md` stay as fallback and record.
+
+**Work that only runs on the human's machine** (the native app and its packaging, the preview there, native checks, design tools, files that only exist there) goes to a **client worker**: the Front agent appends `CLIENT-TASK <date> <what>` to a `client-tasks.log` next to its handover file; a session on the human's machine waits for new lines, does the work and answers with `orca orchestration send` to the Front agent (client to server works). The server is **not** paired to the client: that would give the server control over the human's machine, and in a company that needs the IT department's consent. Consequence, accepted: client tasks wait while the machine is off.
+
+**Not covered yet.** `agentic-factory start`, `statuswatch.mjs` and `doctor` still assume the Front agent on the human's machine (`hosts.frontAgent`). A `hosts.frontAgent.location: server` setting, the worktree creation and the re-parenting in `start`, and a check of the tree in `doctor` are follow-up work. The Front agent has no direct access to files and design tools that exist only on the human's machine; those stages go through the client worker or the human. The Front agent starts from its handover file, not from the earlier session's context.
 
 ## Status watch
 
