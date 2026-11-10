@@ -45,7 +45,8 @@ Files in the controller directory on the server (default `~/controller/`):
 | `inbox.md` | Front agent | the human's answers and new orders, one dated line each; the Controller moves processed lines to `inbox-done.md` |
 | `events.md` | Front agent (transition only) | worker events relayed from the human's machine |
 | `journal.ndjson` | Controller | one JSON event per line, see [improvement.md](improvement.md) |
-| `front-events.log` | Controller, when the event happens | with the Front agent on the server: one line per event, `<date> FRONT-EVENT <KIND>: <one sentence>`, kinds `DONE`, `PUSHED`, `GATE-GREEN`, `GATE-RED`, `REVIEW`, `NEEDS-<HUMAN>`, `BLOCKED`, `IDLE`, `ANSWER`. Append-only; never archived, rotated or truncated, and the inbox archival must not touch it |
+| `front-events.log` | Controller, when the event happens | with the Front agent on the server: one line per event, `<date> FRONT-EVENT <KIND>: <one sentence>`, kinds `DONE`, `PUSHED`, `GATE-GREEN`, `GATE-RED`, `REVIEW`, `NEEDS-HUMAN`, `BLOCKED`, `IDLE`, `ANSWER`. Append-only; never archived, rotated or truncated, and the inbox archival must not touch it |
+| `client-tasks.log` (in `~/front-agent/<project>/` on the server) | Front agent on the server | work that only runs on the human's machine, one line `CLIENT-TASK <date> <what>`; a session there does it and answers by `orca orchestration send` |
 | `handover.md` | Front agent | what is in flight and queued when a Controller takes over |
 | `CONTROLLER.md` | the factory (`init`) | the Controller's handbook |
 
