@@ -173,6 +173,34 @@ console.log(JSON.stringify({ ok: true, result: a[1] === "worker-start" ? { dispa
   p.done();
 });
 
+test("start.mjs pins a Pi worker of a role in agents.piRoleModels, and only that one", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-pimodel-"));
+  const ctl = path.join(dir, "ctl");
+  fs.mkdirSync(ctl);
+  for (const f of ["start.mjs", "lib.mjs", "journal.mjs", "names.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
+  fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca", default: "pi", models: { small: "s", default: "tier-model", large: "l" }, piRoleModels: { Developer: "litellm/gpt-6-luna" } }, commands: {}, capacity: { gate: {} }, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local", orcaRepoId: "r" }] } }));
+  fs.writeFileSync(path.join(dir, "spec.txt"), "do it\n");
+  const log = path.join(dir, "calls.log");
+  const fake = path.join(dir, "fake-orca.mjs");
+  fs.writeFileSync(fake, `#!/usr/bin/env node
+import fs from "node:fs";
+const a = process.argv.slice(2);
+if (a[1] === "worker-start") fs.writeFileSync(${JSON.stringify(log)}, JSON.stringify(a));
+console.log(JSON.stringify({ ok: true, result: a[1] === "worker-start" ? { dispatchId: "d", terminal: "term_x" } : { worktrees: [] } }));`);
+  fs.chmodSync(fake, 0o755);
+  const model = (role, ...extra) => {
+    const r = spawnSync("node", [path.join(ctl, "start.mjs"), `T1 · Worker ${role}`, path.join(dir, "spec.txt"), "t1", "--force", ...extra], { encoding: "utf8", env: { ...process.env, ORCA_CLI_COMMAND: fake } });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const a = JSON.parse(fs.readFileSync(log, "utf8"));
+    return a[a.indexOf("--model") + 1];
+  };
+  assert.equal(model("Developer"), "litellm/gpt-6-luna", "Pi in a listed role");
+  assert.equal(model("Tester"), "tier-model", "Pi in a role that is not listed keeps its tier");
+  assert.equal(model("Developer", "--agent", "codex"), "tier-model", "another agent in a listed role keeps its tier");
+  assert.equal(model("Developer", "--model", "x/y"), "x/y", "an explicit --model wins");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("a wave without a review fails before the long gates run", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-precheck-"));
   const git = (cwd, ...a) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...a], { cwd, encoding: "utf8" });

@@ -89,6 +89,8 @@
       },
       "quotaThresholdPercent": 10
     },
+    "piRoleModels": {},
+    "$piRoleModels": "Optional, e.g. { \"Developer\": \"litellm/gpt-6-luna\" }: a Pi worker of a listed role starts pinned to that provider/model instead of its tier's model. Other roles and other agents keep their tier. An explicit --model still wins.",
     "calibration": "auto",
     "$calibration": "The model names are examples of what the agent CLI offers; init asks for the available ones. auto: calibrate-models.mjs moves a role one tier down when its pass rate is high and rounds are low, one tier up when failures cluster; manual: it only recommends."
   },

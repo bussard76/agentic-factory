@@ -123,9 +123,21 @@ test("a finished wave wakes the Controller once", () => {
   h.done();
 });
 
+test("a Controller terminal that pi renamed to its cwd is still found and woken", () => {
+  for (const piTitle of ["π - ~/ctl", "⠋ π - ~/ctl", "Pi - /home/x/ctl"]) {
+    const h = setup({ state: { terminals: [{ handle: "term_other", title: "π - ~/ctl-other" }, { handle: "term_pi", title: piTitle }] } });
+    h.beat();
+    assert.match(h.beat(), /woke term_pi/, piTitle);
+    h.done();
+  }
+  const h = setup({ state: { terminals: [{ handle: "term_x", title: "π - ~/other-ctl" }] } });
+  assert.match(h.beat(), /nothing woken/, "another directory's pi terminal is not this Controller");
+  h.done();
+});
+
 test("no Controller terminal: nothing is woken and it says so", () => {
   const h = setup({ state: { terminals: [] } });
-  assert.match(h.beat(), /no terminal titled "p · Controller", nothing woken/);
+  assert.match(h.beat(), /no terminal titled "p · Controller" or "π - …\/ctl", nothing woken/);
   assert.equal(h.sent().length, 0);
   h.done();
 });

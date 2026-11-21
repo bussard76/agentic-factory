@@ -68,6 +68,8 @@ Three tiers, named in `factory.config.json` → `agents.models`:
 
 **The tiers are starting values too.** The model names in the config are whatever the agent CLI offers; `init` asks for them. `controller/calibrate-models.mjs` reads the journal (pass rate and review rounds per role and model over a window) and moves a role one tier down when its pass rate is high and rounds are low, one tier up when failures cluster. With `agents.calibration: auto` it writes `model-tiers.json`, which `start.mjs` uses when no `--tier` is given; with `manual` it only recommends. Every change is a `decision` event the audit can verify.
 
+**Pinning Pi workers per role.** Pi reaches several providers, so a tier name alone does not say which one runs. `agents.piRoleModels` maps a role to a `provider/model`, for example `{ "Developer": "litellm/gpt-6-luna" }`. A Pi worker of a listed role starts with that model (Orca passes `--model provider/id` on to pi); other roles, and Codex or Claude workers, keep their tier's model. An explicit `--model` on `start.mjs` still wins.
+
 ## Quota fallback
 
 When the default agent CLI's weekly quota drops below `agents.fallback.quotaThresholdPercent` (10 % by default), every **new** worker starts with the fallback agent and the mapped model tier. Running workers finish as they are. The ladder applies the same way on the fallback. The Controller records each quota reading and the switch in `status.md` and the journal, and switches back after the reset.
