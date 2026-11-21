@@ -6,6 +6,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { findControllerTerminal } from "./controller-terminal.mjs";
 import { HOSTS, HUMAN, MAIN, ORCA, PROJECT, PROJECT_DIR, STEERING, config, file, hostNamed, orcaEnvArgsOn, worktreeRefOn } from "./lib.mjs";
 
 const IDLE_WAIT_MS = 15_000;
@@ -57,12 +58,8 @@ for (const host of HOSTS) {
   catch (error) { terminalsByHost[host.name] = null; log(`terminal list failed on ${host.name}: ${short(error)}`); }
 }
 const allTerminals = Object.values(terminalsByHost).flatMap((t) => t ?? []);
-// Some agent CLIs overwrite the Orca title with their own: pi shows "π - <cwd>" or "Pi - <cwd>". The cwd is this Controller
-// directory, so a title of that form ending in its folder name is the Controller too.
-const folder = path.basename(file(".")).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const agentTitle = new RegExp(`^(\\S+ )?(Pi|π) - (.*/)?${folder}/?$`);
-const controllerTerminals = terminalsByHost[config.hosts?.controller?.host ?? "local"] ?? [];
-const terminal = controllerTerminals.find((t) => t.title === title) ?? controllerTerminals.find((t) => agentTitle.test(t.title ?? ""));
+// This script runs in the Controller directory, so its folder name is the one an agent CLI like pi puts in the title.
+const terminal = findControllerTerminal(terminalsByHost[config.hosts?.controller?.host ?? "local"], title, file("."));
 
 // A wave runs in its own terminal, is no worker and sends no message, so its end has to be read from the terminal.
 const readWave = () => {

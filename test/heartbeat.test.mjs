@@ -13,7 +13,7 @@ function setup({ state = {} } = {}) {
   const ctl = path.join(dir, "ctl"), project = path.join(dir, "p");
   fs.mkdirSync(path.join(ctl, "steering"), { recursive: true });
   fs.mkdirSync(path.join(project, "docs/tasks"), { recursive: true });
-  for (const f of ["heartbeat.mjs", "lib.mjs", "steering/tasks.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
+  for (const f of ["heartbeat.mjs", "controller-terminal.mjs", "lib.mjs", "steering/tasks.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
   fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main", humanName: "Alex" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local", projectDir: project, orcaRepoId: "r" }] } }));
   const fake = path.join(dir, "fake-orca.mjs");
   const stateFile = path.join(dir, "state.json");
