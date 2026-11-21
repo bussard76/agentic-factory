@@ -6,6 +6,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { findControllerTerminal } from "./controller-terminal.mjs";
 import { HOSTS, HUMAN, MAIN, ORCA, PROJECT, PROJECT_DIR, STEERING, config, file, hostNamed, orcaEnvArgsOn, worktreeRefOn } from "./lib.mjs";
 
 const IDLE_WAIT_MS = 15_000;
@@ -57,7 +58,8 @@ for (const host of HOSTS) {
   catch (error) { terminalsByHost[host.name] = null; log(`terminal list failed on ${host.name}: ${short(error)}`); }
 }
 const allTerminals = Object.values(terminalsByHost).flatMap((t) => t ?? []);
-const terminal = (terminalsByHost[config.hosts?.controller?.host ?? "local"] ?? []).find((t) => t.title === title);
+// This script runs in the Controller directory, so its folder name is the one an agent CLI like pi puts in the title.
+const terminal = findControllerTerminal(terminalsByHost[config.hosts?.controller?.host ?? "local"], title, file("."));
 
 // A wave runs in its own terminal, is no worker and sends no message, so its end has to be read from the terminal.
 const readWave = () => {
@@ -110,7 +112,7 @@ try {
   if (!terminal) showNotice(say("Controller is not running: run `agentic-factory start`", "Controller läuft nicht: bitte `agentic-factory start` ausführen"), "in-review", true);
   else updateNotice();
 } catch (error) { log(`notice failed: ${short(error)}`); } // A display problem must not stop the wake below.
-if (!terminal) { log(`no terminal titled "${title}", nothing woken`); process.exit(0); }
+if (!terminal) { log(`no terminal titled "${title}" or "π - …/${path.basename(file("."))}", nothing woken`); process.exit(0); }
 
 // Every minute: react to a worker's message at once. A message stays unseen until a wake succeeded.
 // Workers are remembered: a Controller cycle may drop a worker from workers.json before its message was counted.

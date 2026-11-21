@@ -130,6 +130,10 @@ test("agent entry questions, answers, status and start in an isolated home", asy
     const withOrca = () => spawnSync("node", [CLI, "status", "--json"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
     assert.equal(JSON.parse(withOrca().stdout).setup.controller.terminal, false);
     writeOrca(`${config.project.name} · Controller`); assert.equal(JSON.parse(withOrca().stdout).setup.controller.terminal, true);
+    // pi overwrites the title with "π - <cwd>": the Controller directory's folder name still identifies it, another folder does not.
+    const ctlFolder = (config.hosts.controller.controllerDir ?? "~/controller").split("/").pop();
+    writeOrca(`π - ~/${ctlFolder}`); assert.equal(JSON.parse(withOrca().stdout).setup.controller.terminal, true, "pi title");
+    writeOrca(`π - ~/${ctlFolder}-other`); assert.equal(JSON.parse(withOrca().stdout).setup.controller.terminal, false, "another folder's pi title");
     const calls = path.join(base, "calls");
     fs.writeFileSync(fakeOrca, `#!/bin/sh\nif [ "$1" = terminal ] && [ "$2" = create ]; then printf '%s\\n' "$@" > '${calls}.orca'; printf '%s\\n' '{"ok":true}'; else printf '%s\\n' '{"result":{"terminals":[]}}'; fi\n`, { mode: 0o755 });
     fs.writeFileSync(path.join(bin, "rsync"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });

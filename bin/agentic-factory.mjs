@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
+import { findControllerTerminal } from "../controller/controller-terminal.mjs";
 import { heartbeatCronScript, statusWatchCronScript, statusWatchLabel, statusWatchPlist } from "./heartbeat-cron.mjs";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
@@ -799,7 +800,7 @@ const hasControllerTerminal = (c) => {
   const host = c.hosts.workers.find((h) => h.name === c.hosts.controller.host);
   const where = host?.kind === "remote" && host.orcaEnvironment ? ["--environment", host.orcaEnvironment] : [];
   if (process.env.FACTORY_SKIP_ORCA === "1") return false;
-  try { const terminals = JSON.parse(sh(ORCA_BIN, ["terminal", "list", ...where, "--json"])).result?.terminals; return Array.isArray(terminals) && terminals.some((t) => t.title === title); } catch { return false; }
+  try { const terminals = JSON.parse(sh(ORCA_BIN, ["terminal", "list", ...where, "--json"])).result?.terminals; return Boolean(findControllerTerminal(terminals, title, c.hosts.controller.controllerDir ?? "~/controller")); } catch { return false; }
 };
 const agentCommand = (agent, prompt, args) => `${agent}${args ? ` ${args}` : ""} ${JSON.stringify(prompt)}`;
 

@@ -16,7 +16,8 @@ const spec = fs.readFileSync(specFile, "utf8").trim();
 const agent = opt("--agent", quotaFallback() ? FALLBACK.agent : config.agents?.default ?? "codex");
 const role = name.split(" · Worker ")[1] ?? "Developer";
 const tier = opt("--tier", readJson("model-tiers.json", {})[role] ?? "default");   // calibrated per role, see calibrate-models.mjs
-const model = opt("--model", modelFor(tier, agent));
+// A Pi worker whose role is listed in agents.piRoleModels starts pinned to that provider/model; Orca passes it on to pi as is.
+const model = opt("--model", (agent === "pi" && config.agents?.piRoleModels?.[role]) || modelFor(tier, agent));
 const effort = opt("--effort", "high");
 const worktree = opt("--worktree", "new");
 const dir = worktree === "new" ? slug(key) : worktree;
