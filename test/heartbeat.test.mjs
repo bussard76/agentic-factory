@@ -124,7 +124,7 @@ test("a finished wave wakes the Controller once", () => {
 });
 
 test("a Controller terminal that pi renamed to its cwd is still found and woken", () => {
-  for (const piTitle of ["π - ~/ctl", "⠋ π - ~/ctl", "Pi - /home/x/ctl"]) {
+  for (const piTitle of ["π - ctl", "⠋ π - ctl", "π - ~/ctl", "Pi - /home/x/ctl"]) {
     const h = setup({ state: { terminals: [{ handle: "term_other", title: "π - ~/ctl-other" }, { handle: "term_pi", title: piTitle }] } });
     h.beat();
     assert.match(h.beat(), /woke term_pi/, piTitle);
