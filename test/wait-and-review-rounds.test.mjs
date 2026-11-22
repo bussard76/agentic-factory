@@ -37,8 +37,11 @@ console.log(typeof next === "string" ? next : JSON.stringify(next));
   return { ...r, calls: log };
 }
 
+// The shape of a worker_done in the concise --json view, recorded from the current Orca (ids replaced): payload is an object, no deliveryId.
+const RECORDED = { ok: true, result: { messages: [{ id: "msg_1", type: "worker_done", from: "structworker_x", to: "run:run_x", subject: "T1 done", handled: false, body: "pushed", payload: { taskId: "task_1", dispatchId: "ctx_1" } }] } };
+
 test("wait.mjs reads the dispatch id from an object payload (current Orca) and needs no deliveryId", () => {
-  const r = waitWith([{ ok: true, result: { messages: [{ id: "msg_1", type: "worker_done", subject: "T1 done", body: "pushed", payload: { taskId: "task_1", dispatchId: "ctx_1" } }] } }]);
+  const r = waitWith([RECORDED]);
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /^# msg_1 worker_done T1 done ctx_1 \| pushed$/m);
   assert.doesNotMatch(r.stdout, /delivery undefined/);
@@ -81,7 +84,7 @@ test("mkspec refuses a review round beyond reviews.maxRounds and names reeval", 
   assert.notEqual(r.status, 0);
   assert.equal(r.stdout, "", "no spec path printed");
   assert.match(r.stderr, /round 3 is beyond reviews\.maxRounds \(2\)/);
-  assert.match(r.stderr, /mkspec\.mjs reeval T1 docs\/tasks\/T1\.md agents\/t1 abc agents\/t1-review-2:docs\/reviews\/T1-review-2\.md/);
+  assert.match(r.stderr, /mkspec\.mjs reeval T1 docs\/tasks\/T1\.md agents\/t1 "<the 'Reviewed commit' in docs\/reviews\/T1-review-2\.md, not a later head>" agents\/t1-review-2:docs\/reviews\/T1-review-2\.md/);
   assert.doesNotMatch(r.stderr, /at .*mkspec\.mjs:\d+/, "a message, not a stack trace");
   assert.ok(!fs.existsSync(path.join(dir, "specs/t1-test.txt")), "no spec written");
   assert.notEqual(spec(dir, "test", "T1", "docs/tasks/T1.md", "agents/t1", "abc", "--round", "x").status, 0);
@@ -97,7 +100,8 @@ test("from round 2 the Tester re-checks the previous findings and the rework dif
   assert.equal(r.status, 0, r.stderr);
   const two = fs.readFileSync(r.stdout.trim(), "utf8");
   assert.match(two, /round-1 findings docs\/reviews\/T1-review-1\.md \(git show origin\/agents\/t1-review-1:docs\/reviews\/T1-review-1\.md\)/);
-  assert.match(two, /the diff from that file's 'Reviewed commit' to the reviewed head/);
+  assert.match(two, /git log --no-merges -p <that commit>\.\.<reviewed head>/);
+  assert.match(two, /git show --remerge-diff <merge>\), not the code merged in from main/);
   assert.match(two, /new finding only for a functional defect or a safety problem/);
   assert.doesNotMatch(two, /Review the whole diff/);
   assert.match(two, /gate bash -c 'npm run verify' once/, "the full gate still runs");

@@ -31,7 +31,7 @@ if (RUNNER === "orca") {
       if (delivery) console.log("delivery", delivery, "(ack it with: orca orchestration check --ack <delivery> --json)");
       for (const m of real) {
         try { console.log("#", m.id, m.type, m.subject ?? "", dispatchOf(m.payload), "|", m.body ?? ""); }
-        catch { console.log("#", String(m.id), String(m.type), "(unprintable message)"); }
+        catch { let raw; try { raw = JSON.stringify(m); } catch { raw = `${m.id} ${m.type}`; } console.log("# raw", raw); }
       }
       process.exit(0);
     }

@@ -8,7 +8,7 @@ Nobody accepts their own work. Every task branch is reviewed by an **independent
 2. The Controller starts a Tester on the branch with the review protocol and the spec.
 3. The Tester records the full 40-character SHA it reviewed, runs the full gates itself on **current `main` plus the branch**, checks the changed flows in the browser where the change is flow-relevant, and writes `docs/reviews/<task>-review-<round>.md` with findings by severity and `Verdict: pass|fail`. It commits only that file.
 4. On `fail` the Controller starts a rework in the same worktree with the findings unchanged. After the second failure the next attempt runs one model higher.
-5. A new round gets a fresh Tester that knows only the previous findings file. From round 2 it re-checks only those findings and the diff since the last reviewed commit, and raises a new finding only for a functional defect or a safety problem; the full gates still run.
+5. A new round gets a fresh Tester that knows only the previous findings file. From round 2 it re-checks only those findings and the task's own changes since the last reviewed commit, and raises a new finding only for a functional defect or a safety problem; the full gates still run.
 6. After the configured number of rounds (`reviews.maxRounds`, two by default) a working feature is integrated. `mkspec test` refuses a later round and points to the final functional re-evaluation (`mkspec reeval`). Open points become debt plus an acceptance item for the human on the preview.
 7. Level-2 and level-3 tasks also get an Architect's conformance check: a coarse boundary check (no new port, contract, store or data flow without a recorded approval, no forbidden imports), not a hunt for edge cases.
 

@@ -20,7 +20,7 @@ Missing or weak tests, coverage gaps, edge cases, security, load and style are *
 
 **An assumption is no decision:** hold work only to a decision with {{HUMAN}}'s quoted statement and a date. Report an `Assumption:` that matters as a question.
 
-**Always checked, in every round:** code quality (`ponytail-review` on the full diff in round 1, on the diff since the last reviewed commit in later rounds; `CODING_STANDARDS.md`) and architecture conformance (the stated level; every new export, dependency, data flow and import against the spec and the architecture docs). A wrong level or an unannounced architectural change is a `blocker`. Quality findings are `minor` unless trivial to fix now. **Not in daily rounds:** load tests, dependency audits and deep security hunting; they belong to the hardening phase and the release gate.
+**Always checked, in every round:** code quality (`ponytail-review` on the full diff in round 1, on the task's own changes since the last reviewed commit in later rounds; `CODING_STANDARDS.md`) and architecture conformance (the stated level; every new export, dependency, data flow and import against the spec and the architecture docs). A wrong level or an unannounced architectural change is a `blocker`. Quality findings are `minor` unless trivial to fix now. **Not in daily rounds:** load tests, dependency audits and deep security hunting; they belong to the hardening phase and the release gate.
 
 ## Later rounds
 
@@ -29,7 +29,7 @@ Rounds are bounded: `mkspec test` refuses a round beyond {{MAX_ROUNDS}}. After t
 From round 2 the Tester does not review the whole task again. It re-checks:
 
 - every `blocker` and `major` of the previous round's findings file: fixed or not, with the test that proves it;
-- the diff from that file's `Reviewed commit` to the new head, against the acceptance items it touches, with `ponytail-review` on that diff.
+- the task's own changes since that file's `Reviewed commit` (`git log --no-merges -p <reviewed commit>..<new head>`, plus the conflict resolutions of the merge commits in that range, `git show --remerge-diff <merge>`), not the code merged in from `{{MAIN}}`; against the acceptance items they touch, with `ponytail-review` on them.
 
 A new finding is raised only for a functional defect or a safety problem: a change that could reach a real external system, data loss, a secret or real data. Anything else it notices is a debt candidate. The full gates still run on current `{{MAIN}}` plus the branch, and the new head gets its own `Reviewed commit`, so product code keeps its independent review before every push.
 
