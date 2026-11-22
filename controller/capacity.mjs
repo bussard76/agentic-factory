@@ -11,10 +11,12 @@ const host = argHost(process.argv);
 const CAP = host.capacity;
 const argValue = (name) => { const i = process.argv.indexOf(name); return i >= 0 ? process.argv[i + 1] : undefined; };
 const setSuite = argValue("--set-suite"), setBy = argValue("--by");
-if (process.argv.includes("--set-suite") && !(/^[1-9]\d*$/.test(setSuite ?? "") && setBy?.trim() && !setBy.startsWith("--"))) {
-  console.error('usage: node capacity.mjs --set-suite <n ≥ 1> --by "<what the human said>"'); process.exit(1);
-}
 const CAL = { mode: "auto", startSuite: 2, startReadonly: 2, step: 1, raiseAfterQuietMinutes: 30, maxSuite: 12, maxReadonly: 8, ...(CAP.calibration ?? {}) };
+// A cap set by hand stays within the largest cap the config allows, so a typo cannot switch the cap off for hours.
+const SET_MAX = Math.max(CAL.maxSuite, CAP.suiteWorkersMax ?? 0);
+if (process.argv.includes("--set-suite") && !(/^[1-9]\d*$/.test(setSuite ?? "") && Number(setSuite) <= SET_MAX && setBy?.trim() && !setBy.startsWith("--"))) {
+  console.error(`usage: node capacity.mjs --set-suite <n from 1 to ${SET_MAX}> --by "<what the human said>"`); process.exit(1);
+}
 
 // --- measure (one shell round trip: PSI, memory, load, threads, gate queue, busy processes with cwd) ---------------
 const probe = onHost(host, `
@@ -70,7 +72,7 @@ if (setSuite) {
   state.history.push({ ts: state.quietSince, dir: "set", suiteMax: state.suiteMax, why: `set by ${setBy}` });
   journal("decision", "controller", { host: host.name, note: `capacity suiteMax set → ${state.suiteMax} by hand`, by: setBy });
 }
-if (CAL.mode === "auto") {
+if (CAL.mode === "auto" && !setSuite) {   // the run that sets the cap by hand makes no automatic step as well
   const now = Date.now(), nowIso = new Date().toISOString();
   const change = (field, dir, why) => { state.history.push({ ts: nowIso, dir, [field]: state[field], why }); journal("decision", "controller", { host: host.name, note: `capacity ${field} ${dir} → ${state[field]} (${why})` }); };
   if (hot) {
@@ -100,7 +102,7 @@ writeJson(`gate-slots.${host.name}.json`, slots);
 if (host.kind === "local") writeJson("gate-slots.json", slots);
 else onHost(host, `mkdir -p ${CONTROLLER_HOME} && printf '%s' '${JSON.stringify(slots)}' > ${CONTROLLER_HOME}/gate-slots.json`);
 
-// capOnly: something waits, and only a cap holds it back, no pressure. The Controller can then ask the human to raise it.
+// capOnly: a pool waits, and only its cap holds it back (suite or read-only), no pressure. The Controller can then ask the human to raise it.
 const waiting = suiteVerdict === "wait" || roVerdict === "wait";
 const verdict = { host: host.name, suite: suiteVerdict, readonly: roVerdict, capOnly: waiting && !hot, ...(waiting ? { measureAgainAt: new Date(Date.now() + 60e3).toISOString() } : {}), caps: { suite: state.suiteMax, readonly: state.readonlyMax, calibration: CAL.mode }, gateUnitSlots: slots.unit, gateE2eSlots: slots.e2e, reason: [...reasons, ...notes].join("; ") || "capacity available",
   measured: { cpuAvg10: cpu, memAvg10: mem, ioAvg10: io, load1, threads, availGb: Number(availGb.toFixed(1)), suite, readonly, queue, foreign: Number(foreign.toFixed(1)), recentTimeouts, quota, history: state.history.slice(-5) } };

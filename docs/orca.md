@@ -114,7 +114,7 @@ Some agent tools limit which paths a session may read. When `start` sets up a lo
 
 `controller/heartbeat.mjs` wakes the Controller from outside, so noticing finished work does not depend on the Controller itself. `agentic-factory start` adds one cron line per Controller directory on the Controller's host and leaves the rest of the crontab alone. Set `hosts.controller.heartbeat` to `false` to opt out.
 
-- **Every minute:** a new worker message, a finished wave or an inbox entry wakes the Controller. At each tenth minute it also checks running workers and ready tickets, and an unreadable source counts as work. A worker whose dispatch Orca reports settled is no work, even while its record waits in `workers.json` for cleanup.
+- **Every minute:** a new worker message, a finished wave or an inbox entry wakes the Controller. At each tenth minute it also checks running workers and ready tickets, and an unreadable source counts as work. A worker whose dispatch Orca reports settled wakes the Controller once, when the heartbeat first sees it settled (a failed or stopped worker may send no message), and is no work after that, even while its record waits in `workers.json` for cleanup. Orca is asked about workers at most once per run, and for the sidebar at most every 10 minutes (`heartbeat.workers.json`).
 - **Busy Controller:** a timeout on "idle" counts as busy. The signal stays pending until a wake succeeded, and every attempt goes to `heartbeat.log`. After 5 minutes an inbox entry reaches the running session as a one-line pointer, once.
 - **Waiting for the human:** if `status.md` lists anything under "Needs <human>" and nothing else is pending, it does not wake the Controller. Otherwise an idle Controller is woken about hourly.
 - **Without a model:** it writes what the Controller is doing into the comment and status of the project's sidebar entry, and marks a finished worker's entry at once.
@@ -127,7 +127,7 @@ It only sends text into the terminal titled `<project> · Controller`. It never 
 - **Nudge a stalled worker:** `orca terminal send --terminal <handle> --text "…" --enter`. A reply to an escalation alone does not wake an idle worker; always send the text into its terminal too.
 - **Read a terminal:** `orca terminal read --terminal <handle> --screen --json`; `stallwatch.mjs` classifies the screen as working, idle, at capacity or gone.
 - **Run a script on the server:** `runscript.mjs` creates a terminal in the integration worktree with the script inlined (no shell quoting of long content).
-- **Clean up:** `cleanup.mjs` closes idle terminals of finished worktrees and removes them with `orca worktree rm --force`; dispatches are released with `worker-release` or `worker-abandon`.
+- **Clean up:** `cleanup.mjs` releases workers whose dispatch Orca reports `succeeded`, `failed` or `stopped` with `worker-release` (Orca closes their terminal where it owns it) and removes merged worktrees with `orca worktree rm`. It closes no worker terminal itself, and keeps a worktree in which any terminal other than the released worker's own is open. Finished workers that Orca keeps open (`retainedReason: user_requested`) are kept and named in the output; release them with `worker-release` when nobody needs them. Orca calls are bounded: three `worker-list` pages and ten `worker-show` calls per run, 20 seconds each; anything unanswered counts as busy.
 
 ## Skills: required on every Controller and Front-agent host
 
