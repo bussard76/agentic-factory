@@ -106,7 +106,7 @@ test("mkspec refuses a review round beyond reviews.maxRounds and names reeval on
   assert.notEqual(r.status, 0);
   assert.equal(r.stdout, "", "no spec path printed");
   assert.match(r.stderr, /review round 3 is beyond reviews\.maxRounds \(2\)/);
-  assert.match(r.stderr, /The verdict of round 2 could not be read .*If round 2 failed, there is no rework and no further round/);
+  assert.match(r.stderr, /The verdict of round 2 could not be read: .*If round 2 failed, there is no rework and no further round/);
   assert.doesNotMatch(r.stderr, /fatal:/, "git's own error stays out of the message");
   assert.match(r.stderr, /mkspec\.mjs reeval T1 docs\/tasks\/T1\.md agents\/t1 "<the 'Reviewed commit' in docs\/reviews\/T1-review-2\.md>" agents\/t1-review-2:docs\/reviews\/T1-review-2\.md/);
   assert.match(r.stderr, /must not move past it/);
@@ -221,47 +221,99 @@ test("wait.mjs prints the CLI's stderr when a check fails", () => {
   assert.match(r.stdout, /orca check failed \(.*\), retrying in 30 s\nError: connection lost; replay with --retry-request req_42/);
 });
 
-// A project checkout whose origin holds review branches with the given verdicts, as the Controller's `git pull` leaves it.
-function projectWithVerdicts(verdicts) {
-  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "af-verdicts-"));
-  const g = (...a) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...a], { cwd: repo, encoding: "utf8" });
-  g("init", "-q", "-b", "main");
-  for (const [n, verdict] of Object.entries(verdicts)) {
-    fs.mkdirSync(path.join(repo, "docs/reviews"), { recursive: true });
-    fs.writeFileSync(path.join(repo, `docs/reviews/T1-review-${n}.md`), `# T1 review, round ${n}\n\nVerdict: ${verdict}\nReviewed commit: ${"a".repeat(40)}\n`);
-    g("add", "."); g("commit", "-qm", `review ${n}`);
-    g("update-ref", `refs/remotes/origin/agents/t1-review-${n}`, "HEAD");
-  }
-  return repo;
-}
+test("the failure line keeps the CLI's last stderr lines and drops --wait keepalives", () => {
+  const keepalives = Array.from({ length: 60 }, (_, i) => JSON.stringify({ _keepalive: true, at: i, pad: "x".repeat(60) })).join("\n");
+  const r = waitWith([{ fail: `${keepalives}\nError: response lost; replay with --retry-request req_abc123\n` }], "0.0005");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /--retry-request req_abc123/);
+  assert.doesNotMatch(r.stdout, /_keepalive/);
+});
 
-test("beyond the limit, a re-check after a passing round is allowed with --after-pass; the refusal says what happened", () => {
-  const repo = projectWithVerdicts({ 2: "pass", 3: "fail" });
-  const dir = controllerDir({ reviews: { maxRounds: 2 }, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local", projectDir: repo }] } });
-  // Round 2 passed, then e.g. the conformance review failed: no flag gives a refusal that says round 2 PASSED.
-  let r = spec(dir, "rework", "T1", "2", "docs/tasks/T1.md", "agents/t1", "agents/t1-conformance:docs/reviews/T1-architecture-conformance.md");
-  assert.notEqual(r.status, 0);
-  assert.match(r.stderr, /Round 2 passed \(docs\/reviews\/T1-review-2\.md on origin\/agents\/t1-review-2 says Verdict: pass\)/);
-  assert.match(r.stderr, /--after-pass "<what happened>"/);
-  assert.doesNotMatch(r.stderr, /failed \(|Round 2 failed/);
-  r = spec(dir, "rework", "T1", "2", "docs/tasks/T1.md", "agents/t1", "agents/t1-conformance:docs/reviews/T1-architecture-conformance.md", "--after-pass", "the conformance review failed");
+// A bare origin with review branches, and the Controller's project clone of it.
+function originWithReviews(files) {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "af-verdicts-"));
+  const origin = path.join(base, "origin.git"), work = path.join(base, "work"), project = path.join(base, "project");
+  const g = (cwd, ...a) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...a], { cwd, encoding: "utf8" });
+  g(base, "init", "-q", "--bare", origin); g(base, "init", "-q", "-b", "main", work);
+  g(work, "commit", "-q", "--allow-empty", "-m", "base"); g(work, "remote", "add", "origin", origin); g(work, "push", "-q", "origin", "main");
+  const push = (n, content) => {
+    g(work, "checkout", "-q", "-B", `agents/t1-review-${n}`, "main");
+    fs.mkdirSync(path.join(work, "docs/reviews"), { recursive: true }); fs.writeFileSync(path.join(work, `docs/reviews/T1-review-${n}.md`), content);
+    g(work, "add", "."); g(work, "commit", "-qm", `review ${n}`); g(work, "push", "-q", "-f", "origin", `agents/t1-review-${n}`);
+  };
+  for (const [n, content] of Object.entries(files)) push(n, content);
+  g(base, "clone", "-q", origin, project);
+  const dir = controllerDir({ reviews: { maxRounds: 2 }, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local", projectDir: project }] } });
+  return { dir, push, inWork: (...a) => g(work, ...a), inProject: (...a) => g(project, ...a), done: () => { fs.rmSync(base, { recursive: true, force: true }); fs.rmSync(dir, { recursive: true, force: true }); } };
+}
+const findings = (n, verdict) => `# T1 review, round ${n}\n\nVerdict: ${verdict}\nReviewed commit: ${"a".repeat(40)}\n`;
+const CONF = "agents/t1-conformance:docs/reviews/T1-architecture-conformance.md";
+
+test("beyond the limit, a rework or test is allowed only after a round that passed; the refusal says what happened", () => {
+  const o = originWithReviews({ 2: findings(2, "pass"), 3: findings(3, "fail") });
+  // Round 2 passed, then the conformance review failed: a rework and a round 3 are allowed, no flag needed.
+  let r = spec(o.dir, "rework", "T1", "2", "docs/tasks/T1.md", "agents/t1", CONF);
   assert.equal(r.status, 0, r.stderr);
-  assert.match(fs.readFileSync(r.stdout.trim(), "utf8"), /This rework follows round 2, which passed: the conformance review failed\./);
-  r = spec(dir, "test", ...TASK, "def", "--round", "3", "--after-pass", "the conformance review failed");
+  assert.match(fs.readFileSync(r.stdout.trim(), "utf8"), /Read docs\/reviews\/T1-architecture-conformance\.md \(git show origin\/agents\/t1-conformance:/);
+  r = spec(o.dir, "test", ...TASK, "def", "--round", "3", "--reason", "the conformance review failed");
   assert.equal(r.status, 0, r.stderr);
-  const three = fs.readFileSync(r.stdout.trim(), "utf8");
-  assert.match(three, /This round re-checks the task after round 2 passed: the conformance review failed\./);
-  assert.match(three, /round-2 findings docs\/reviews\/T1-review-2\.md/);
-  // Round 3 failed: --after-pass cannot reopen it; the refusal says it failed and names reeval on round 3.
-  r = spec(dir, "rework", "T1", "3", "docs/tasks/T1.md", "agents/t1", "agents/t1-review-3:docs/reviews/T1-review-3.md", "--after-pass", "try again");
+  assert.match(fs.readFileSync(r.stdout.trim(), "utf8"), /\nReason for this round: the conformance review failed\n/);
+  // Round 3 failed: refused, says it failed, names reeval on round 3.
+  r = spec(o.dir, "rework", "T1", "3", "docs/tasks/T1.md", "agents/t1", "agents/t1-review-3:docs/reviews/T1-review-3.md");
   assert.notEqual(r.status, 0);
-  assert.match(r.stderr, /with --after-pass\. .*Round 3 failed \(docs\/reviews\/T1-review-3\.md on origin\/agents\/t1-review-3 says Verdict: fail\)/);
+  assert.match(r.stderr, /Round 3 failed \(docs\/reviews\/T1-review-3\.md on origin\/agents\/t1-review-3 says Verdict: fail\)/);
   assert.match(r.stderr, /reeval T1 docs\/tasks\/T1\.md agents\/t1 "<the 'Reviewed commit' in docs\/reviews\/T1-review-3\.md>" agents\/t1-review-3:docs\/reviews\/T1-review-3\.md/);
-  // No findings file for round 4 on origin: the refusal says the verdict could not be read.
-  r = spec(dir, "test", ...TASK, "def", "--round", "5", "--after-pass", "x");
+  // No round 4 on origin: unreadable, refused.
+  r = spec(o.dir, "test", ...TASK, "def", "--round", "5");
   assert.notEqual(r.status, 0);
-  assert.match(r.stderr, /The verdict of round 4 could not be read/);
-  fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(repo, { recursive: true, force: true });
+  assert.match(r.stderr, /The verdict of round 4 could not be read: fetching origin\/agents\/t1-review-4 failed/);
+  o.done();
+});
+
+test("the verdict is fetched from origin first: a stale or removed remote branch never reads as pass", () => {
+  const o = originWithReviews({ 2: findings(2, "pass") });
+  assert.equal(o.inProject("rev-parse", "--verify", "-q", "origin/agents/t1-review-2").status, 0, "the clone holds the passing ref");
+  o.push(2, findings(2, "fail"));   // origin moved on; the clone's ref still says pass
+  let r = spec(o.dir, "rework", "T1", "2", "docs/tasks/T1.md", "agents/t1", CONF);
+  assert.notEqual(r.status, 0, "stale local ref must not count");
+  assert.match(r.stderr, /Round 2 failed/);
+  o.push(2, findings(2, "pass")); o.inProject("fetch", "-q", "origin");
+  o.inWork("push", "-q", "origin", "--delete", "agents/t1-review-2");   // removed on origin, still in the clone
+  assert.equal(o.inProject("rev-parse", "--verify", "-q", "origin/agents/t1-review-2").status, 0);
+  r = spec(o.dir, "rework", "T1", "2", "docs/tasks/T1.md", "agents/t1", CONF);
+  assert.notEqual(r.status, 0, "a removed branch must not count");
+  assert.match(r.stderr, /could not be read: fetching origin\/agents\/t1-review-2 failed/);
+  o.done();
+});
+
+test("only exactly one line 'Verdict: pass' counts as pass", () => {
+  const cases = {
+    "template line before the real fail": "# T1 review\n\nVerdict: pass | fail\nVerdict: fail\n",
+    "quoted pass before the real fail": "# T1 review\n\nVerdict: fail\n\n> Verdict: pass\n",
+    "an amended pass after the real fail": "# T1 review\n\nVerdict: fail\n\nVerdict: pass\n",
+    "a bold verdict": "# T1 review\n\n**Verdict:** pass\n",
+  };
+  for (const [name, content] of Object.entries(cases)) {
+    const o = originWithReviews({ 2: content });
+    const r = spec(o.dir, "rework", "T1", "2", "docs/tasks/T1.md", "agents/t1", CONF);
+    assert.notEqual(r.status, 0, name);
+    o.done();
+  }
+});
+
+test("a rework without a findings file names what failed and no file that does not exist", () => {
+  const o = originWithReviews({ 2: findings(2, "pass") });
+  const r = spec(o.dir, "rework", "T1", "2", "docs/tasks/T1.md", "agents/t1", "--reason", "wave red: the login flow spec fails on the merged tree (wave log)");
+  assert.equal(r.status, 0, r.stderr);
+  const text = fs.readFileSync(r.stdout.trim(), "utf8");
+  assert.match(text, /\nWhat failed: wave red: the login flow spec fails on the merged tree \(wave log\)\n/);
+  assert.match(text, /There is no findings file: fix what failed/);
+  assert.match(text, /Read docs\/tasks\/T1\.md, /);
+  assert.doesNotMatch(text, /undefined|Fix the functional findings|every blocker and major/);
+  const none = spec(o.dir, "rework", "T1", "1", "docs/tasks/T1.md", "agents/t1");
+  assert.notEqual(none.status, 0);
+  assert.match(none.stderr, /A rework needs a findings file \(<review-branch>:<file>\) or --reason/);
+  o.done();
 });
 
 test("an octopus merge is skipped by --remerge-diff, so the spec falls back to git show --cc, which shows its changes", () => {
@@ -290,5 +342,5 @@ test("no installed doc keeps the old rework rule", () => {
     const t = fs.readFileSync(path.join(ROOT, f), "utf8");
     assert.doesNotMatch(t, /Tester failed → rework in the same worktree with the findings unchanged; after two failures one tier higher|Second failure: one tier higher|a question to the human after the round limit|nach der Rundengrenze Frage an den Menschen/, f);
   }
-  assert.match(fs.readFileSync(path.join(ROOT, "templates/docs/coordinator.md"), "utf8"), /After the last round fails: no rework, `mkspec reeval`.*--after-pass/);
+  assert.match(fs.readFileSync(path.join(ROOT, "templates/docs/coordinator.md"), "utf8"), /After the last round fails: no rework, `mkspec reeval`.*Verdict: pass/);
 });

@@ -15,7 +15,7 @@
 // <task-ref> is the task file path (orca-tasks mode) or "#<issue>" (github-issues mode).
 import fs from "node:fs";
 import path from "node:path";
-import { BRANCH_PREFIX, CMDS, HUMAN, MAIN, PROJECT, PROJECT_DIR, STEERING, config, file, trySh } from "../lib.mjs";
+import { BRANCH_PREFIX, CMDS, HUMAN, MAIN, PROJECT, PROJECT_DIR, STEERING, config, file, sh, trySh } from "../lib.mjs";
 
 const MAINTAINED = config.architecture?.mode === "architect";
 // gate starts a program without a shell, so a command with shell syntax only runs through bash.
@@ -30,26 +30,25 @@ const roundsSetting = config.reviews?.maxRounds ?? 2;
 const maxRounds = Number(roundsSetting);
 if (!/^\s*\d+\s*$/.test(String(roundsSetting)) || maxRounds < 1) refuse(`reviews.maxRounds in factory.config.json must be a whole number of at least 1, got ${JSON.stringify(roundsSetting)}.`);
 const wholeFrom1 = (flag, v) => { const n = Number(v); if (!Number.isInteger(n) || n < 1) refuse(`${flag} needs a whole number from 1, got '${v}'.`); return n; };
-// The limit is on FAILED review rounds. Beyond it, a step is allowed only as a re-check after a passing round
-// (--after-pass "<reason>": a failed conformance review, a red wave, a merge conflict). The verdict is read from the
-// findings file on origin in the project checkout; "" when it cannot be read.
+// The limit is on FAILED review rounds: beyond it, a further rework or test is allowed only when the round before it
+// passed. Its findings file is read from origin after a fresh fetch; a failed fetch, a missing file, or anything but
+// exactly one line that reads "Verdict: pass" or "Verdict: fail" counts as unreadable and refuses. A guardrail for a
+// Controller that follows CONTROLLER.md, not an enforcement against a hostile one (round numbers are the caller's).
 const reviewRef = (T, n) => ({ branch: `${BRANCH_PREFIX}${T.toLowerCase()}-review-${n}`, file: `docs/reviews/${T}-review-${n}.md` });
-const verdictOf = (T, n) => { const r = reviewRef(T, n); return trySh("git", ["-C", PROJECT_DIR, "show", `origin/${r.branch}:${r.file}`], { stdio: ["ignore", "pipe", "ignore"] }).match(/^Verdict:\s*(pass|fail)\b/im)?.[1]?.toLowerCase() ?? ""; };
-const afterPass = opt("--after-pass");
-// `last` is the round whose verdict decides: the round a rework follows, or the round before a new review round.
-const beyondLimit = (what, last, T = "<T>", ref = "<task-ref>", branch = "<branch>") => {
-  const r = reviewRef(T, last), v = verdictOf(T, last);
-  const reeval = `the final functional re-evaluation of the commit round ${last} reviewed: node templates/mkspec.mjs reeval ${T} ${ref} ${branch} "<the 'Reviewed commit' in ${r.file}>" ${r.branch}:${r.file}. Its pass integrates exactly that commit, so the task branch must not move past it. A failing re-evaluation, or more rounds (a higher reviews.maxRounds), goes to "Needs ${HUMAN}"`;
-  const again = `rerun the same command with --after-pass "<what happened>"`;
-  const head = `Refused: ${what}. reviews.maxRounds is ${maxRounds} and limits failed review rounds (CONTROLLER.md, "Tester failed").`;
-  if (v === "fail") return `${head} Round ${last} failed (${r.file} on origin/${r.branch} says Verdict: fail), so there is no rework and no further review round. Next: ${reeval}.`;
-  if (v === "pass") return `${head} Round ${last} passed (${r.file} on origin/${r.branch} says Verdict: pass). A fix after a pass (a failed conformance review, a red wave, a merge conflict) is a re-check, not another failed round: ${again}.`;
-  return `${head} The verdict of round ${last} could not be read (git show origin/${r.branch}:${r.file} in the project checkout; run git fetch there). If round ${last} failed, there is no rework and no further round; next: ${reeval}. If it passed and the task needs a fix for another reason, ${again}.`;
+const verdictOf = (T, n) => {
+  const r = reviewRef(T, n), quiet = { stdio: ["ignore", "pipe", "ignore"] };
+  try { sh("git", ["-C", PROJECT_DIR, "fetch", "-q", "origin", `+refs/heads/${r.branch}:refs/remotes/origin/${r.branch}`], quiet); } catch { return ""; }
+  const lines = trySh("git", ["-C", PROJECT_DIR, "show", `origin/${r.branch}:${r.file}`], quiet).split("\n").filter((l) => l.startsWith("Verdict:"));
+  return lines.length === 1 ? (lines[0].match(/^Verdict: (pass|fail)\s*$/)?.[1] ?? "") : "";
 };
-// Allows a step beyond the limit only after a passing round; refuses with what actually happened otherwise.
-const checkLimit = (beyond, what, last, T, ref, branch) => {
+const reason = opt("--reason");
+// `last` is the round whose verdict decides: the round a rework follows, or the round before a new review round.
+const checkLimit = (beyond, what, last, T = "<T>", ref = "<task-ref>", branch = "<branch>") => {
   if (!beyond) return;
-  if (afterPass === undefined || verdictOf(T, last) !== "pass") refuse(beyondLimit(afterPass === undefined ? what : `${what} with --after-pass`, last, T, ref, branch));
+  const r = reviewRef(T, last), v = verdictOf(T, last);
+  if (v === "pass") return;
+  const reeval = `node templates/mkspec.mjs reeval ${T} ${ref} ${branch} "<the 'Reviewed commit' in ${r.file}>" ${r.branch}:${r.file}`;
+  refuse(`Refused: ${what}. reviews.maxRounds is ${maxRounds} and limits failed review rounds: beyond it a rework or test is allowed only after a round that passed (CONTROLLER.md, "Tester failed"). ${v === "fail" ? `Round ${last} failed (${r.file} on origin/${r.branch} says Verdict: fail).` : `The verdict of round ${last} could not be read: fetching origin/${r.branch} failed, ${r.file} is missing there, or it has not exactly one line that reads 'Verdict: pass' or 'Verdict: fail'.`} If round ${last} failed, there is no rework and no further round; next is the final functional re-evaluation of the commit it reviewed: ${reeval}. Its pass integrates exactly that commit, so the task branch must not move past it. Anything else, or more rounds (a higher reviews.maxRounds), goes to "Needs ${HUMAN}".`);
 };
 const taskWhere = (ref) => (STEERING === "github-issues" ? `GitHub issue ${ref} (gh issue view ${ref.replace("#", "")})` : `docs/tasks/${path.basename(ref)}`);
 const reportFor = (ref) => `docs/reports/${STEERING === "github-issues" ? `issue-${ref.replace("#", "")}` : path.basename(ref, ".md")}.md`;
@@ -80,17 +79,18 @@ ${REPLY_DEV}`;
   rework() {
     const [T, nArg, ref, branch, rvs] = pos; const rv = split(rvs); const level = opt("--level", "1"); const extra = opt("--extra", "");
     const n = wholeFrom1("the rework number", nArg);
+    if (!rv.branch && !reason) refuse(`A rework needs a findings file (<review-branch>:<file>) or --reason "<what failed>" (a red wave, a merge conflict).`);
     checkLimit(n >= maxRounds, `rework ${n} would need review round ${n + 1}, beyond reviews.maxRounds (${maxRounds})`, n, T, ref, branch);
-    return `You are the Developer for ${T}, REWORK ${n}, in this existing worktree on branch ${branch}.${afterPass !== undefined ? `\nThis rework follows round ${n}, which passed: ${afterPass}. Fix that; the review file below names it.` : ""}
+    return `You are the Developer for ${T}, REWORK ${n}, in this existing worktree on branch ${branch}.${reason ? `\nWhat failed: ${reason}` : ""}
 Steps:
-1. git fetch origin. Confirm you are on ${branch} at origin/${branch}. Read ${rv.file} (git show origin/${rv.branch}:${rv.file}), ${taskWhere(ref)}, {{AGENTS_READ}} and the worker rules in docs/coordinator.md.
-2. Fix the functional findings exactly as the review states (debt candidates are not part of the rework), each test-first: write the review's proving test through the public entry point, see it fail, then fix. Small commits, push after each finding.${extra ? " " + extra : ""}
+1. git fetch origin. Confirm you are on ${branch} at origin/${branch}. Read ${rv.branch ? `${rv.file} (git show origin/${rv.branch}:${rv.file}), ` : ""}${taskWhere(ref)}, {{AGENTS_READ}} and the worker rules in docs/coordinator.md.
+${rv.branch ? "2. Fix the functional findings exactly as the review states (debt candidates are not part of the rework), each test-first: write the review's proving test through the public entry point, see it fail, then fix. Small commits, push after each finding." : `2. There is no findings file: fix what failed (above; for a red wave its log, for a merge conflict merge origin/${MAIN} and resolve it). A defect gets a failing test through the public entry point first. Small commits, push after each fix.`}${extra ? " " + extra : ""}
 3. Stay level ${level}. If a fix needs more: stop and escalate instead of deciding.
 4. ${DEV_CHECKS} ${FLAKES}
 5. Add a "Rework ${n}" section to ${reportFor(ref)} naming the test that proves each fix.
 6. Last step: merge origin/${MAIN}, rerun the affected suites, push ${branch}.
 ${RULES}
-Done when: every blocker and major fixed with a failing-first test, targeted checks green, branch pushed.
+Done when: ${rv.branch ? "every blocker and major fixed with a failing-first test" : "what failed is fixed"}, targeted checks green, branch pushed.
 ${REPLY_DEV}`;
   },
   test() {
@@ -102,7 +102,7 @@ ${REPLY_DEV}`;
     const scope = prev
       ? `2. Re-check, round ${round}. <A> is the 'Reviewed commit' in the round-${prev} findings ${prevFile} (git show origin/${prevBranch}:${prevFile}); <head> is the full SHA you review. Review only (a) every blocker and major in ${prevFile}: fixed or not, with the test that proves it; and (b) the task's own changes since <A>: the commits of git log --no-merges -p <A>..<head> ^origin/${MAIN} (^origin/${MAIN} leaves out every commit that came in from ${MAIN}), and for each merge commit of git log --merges --format=%H <A>..<head> ^origin/${MAIN} what the merge itself changed (git show --remerge-diff <merge>; if that errors, as on git before 2.36, or prints 'Skipping remerge-diff for octopus merges', use git show --cc <merge> instead and review every file it shows). If git merge-base --is-ancestor <A> <head> fails (the branch was rebased or rewritten), (b) is instead the whole diff against its merge-base with origin/${MAIN}, as in round 1; (a) stays. Apply every round-1 check to these changes: the acceptance items they touch, 'ponytail-review' on them, and: ${CHECKS.replace(/^Check /, "check ")} Raise a new blocker or major only for a functional defect, a safety problem (a change that could reach a real external system, data loss, a secret, real data) or a wrong level or unannounced architectural change in these changes; anything else is a minor or a debt candidate. Code outside these changes was reviewed in an earlier round and is not reviewed again; the full gates below still run on the whole tree.`
       : `2. Review the whole diff against its merge-base with origin/${MAIN} against every Result and Observable acceptance item. Run 'ponytail-review' on the full diff. ${CHECKS}`;
-    return `You are the INDEPENDENT REVIEWER (Worker Tester, round ${round}) for ${T} on origin/${branch} (fetch; state the full SHA, expected ${sha} or later).${afterPass !== undefined ? `\nThis round re-checks the task after round ${prev} passed: ${afterPass}.` : ""}
+    return `You are the INDEPENDENT REVIEWER (Worker Tester, round ${round}) for ${T} on origin/${branch} (fetch; state the full SHA, expected ${sha} or later).${reason ? `\nReason for this round: ${reason}` : ""}
 Steps:
 1. Read docs/review-protocol.md, ${taskWhere(ref)}${rv.file ? `, the passing architecture spec review ${rv.file} (origin/${rv.branch}; its binding instructions are part of the spec)` : ""} and the report on the branch.
 ${scope}

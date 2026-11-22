@@ -30,7 +30,7 @@ if (RUNNER === "orca") {
     try { j = orcaJson(["orchestration", "check", "--wait", "--types", "worker_done,escalation,question", "--timeout-ms", "900000", "--full", ...(ack ? ["--ack", ack] : [])]); }   // --full: the whole body, not a 200-character preview
     catch (e) {
       // The CLI's own stderr says why, and may name a --retry-request id for a lost response (debt F53).
-      const err = clean(String(e.stderr ?? "")).trim().slice(0, 2000);
+      const err = clean(String(e.stderr ?? "").split("\n").filter((l) => !l.includes('"_keepalive"')).join("\n")).trim().slice(-2000);   // --wait writes keepalives to stderr
       console.log(`orca check failed (${String(e.message).split("\n")[0].slice(0, 120)}), retrying in 30 s${err ? `\n${err}` : ""}`); await pause(); continue;
     }
     ack = undefined;
