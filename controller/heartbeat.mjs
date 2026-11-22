@@ -116,11 +116,11 @@ const showNotice = (text, status, unread) => {
   log(`notice: ${text}`);
 };
 const updateNotice = () => {
-  const { running, unknown } = workerCounts(readJson("workers.json", {}));
-  const active = running + unknown;
   const open = needsHuman();
   if (readText("inbox.md").trim()) return showNotice(say("Working: instruction from the inbox", "Arbeitet: Auftrag aus der Inbox"), "in-progress", false);
   if (open.length) return showNotice(`${say("Waiting for you", "Wartet auf dich")}: ${open[0].slice(2, 200)}`, "in-review", true);
+  const { running, unknown } = workerCounts(readJson("workers.json", {}));
+  const active = running + unknown;
   if (wave.state === "running") return showNotice(say(`Working: wave running, ${active} workers`, `Arbeitet: Wave läuft, ${active} Worker`), "in-progress", false);
   if (wave.state === "finished") return showNotice(say(`Working: wave finished (${wave.result}), waking the Controller`, `Arbeitet: Wave fertig (${wave.result}), Controller wird geweckt`), "in-progress", true);
   const ready = readyTickets().length;

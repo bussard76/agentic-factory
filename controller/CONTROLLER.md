@@ -77,7 +77,7 @@ You run one cycle per wake-up and keep no timer of your own. Two things wake you
 The reasons are in `docs/learnings.md` of the factory.
 
 - **Every long-running activity has a completion signal that reaches you:** workers, waves, gates and audits. Start the watcher in the same step as the activity, for example `wavewait.mjs` for a wave.
-- **Read before you remove.** Read a finished worker's message before cleanup forgets the worker.
+- **Read before you remove.** Read a finished worker's message before you act on its worktree. Cleanup forgets a worker as soon as Orca reports its dispatch settled; its message stays in `orca orchestration check`.
 - **Idle means nothing approved is waiting,** not only that no worker runs. If the next step is already approved, take it. After a wave, fill free capacity in the same cycle.
 - **With the Front agent on the server:** when an event happens (a task done, a push to `{{MAIN}}`, a gate green or red, a review verdict, a new "Needs {{HUMAN}}" item, a block, idle, an answer), append one line `<date> FRONT-EVENT <KIND>: <one sentence>` to `{{CONTROLLER_DIR}}/front-events.log` and `orca orchestration send` the same line to the Front agent's terminal. Never archive, rotate or truncate that file. Without a Front agent on the server, skip this.{{FRONT_BOT_EVENTS}}
 - **While you only wait for {{HUMAN}},** say so in `status.md` under "Needs {{HUMAN}}" and spend no model time on empty cycles until the inbox changes or a watcher reports.

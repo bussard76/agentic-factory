@@ -11,13 +11,13 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
 const FILES = ["cleanup.mjs", "capacity.mjs", "heartbeat.mjs", "controller-terminal.mjs", "lib.mjs", "journal.mjs", "names.mjs", "steering/tasks.mjs"];
 
 // dispatches: id → worker-list row fields; worker-show answers for the same ids, and dispatch_not_found for the rest.
-function setup({ dispatches = {}, terminals = [], workers = {}, listed = true } = {}) {
+function setup({ dispatches = {}, terminals = [], workers = {}, listed = true, capacity = { gate: {} } } = {}) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-finished-")));
   const ctl = path.join(dir, "ctl"), project = path.join(dir, "p"), ws = path.join(dir, "ws");
   fs.mkdirSync(path.join(ctl, "steering"), { recursive: true });
   fs.mkdirSync(path.join(project, "docs/tasks"), { recursive: true });
   for (const f of FILES) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
-  fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main", humanName: "Alex" }, agents: { runner: "orca" }, commands: {}, capacity: { gate: {} }, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local", projectDir: project, workspacesDir: ws, orcaRepoId: "r" }] } }));
+  fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main", humanName: "Alex" }, agents: { runner: "orca" }, commands: {}, capacity, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local", projectDir: project, workspacesDir: ws, orcaRepoId: "r" }] } }));
   fs.writeFileSync(path.join(ctl, "workers.json"), JSON.stringify(workers));
   const state = path.join(dir, "state.json"), log = path.join(dir, "calls.log"), fake = path.join(dir, "fake-orca.mjs");
   fs.writeFileSync(state, JSON.stringify({ dispatches, terminals, listed }));
@@ -51,8 +51,12 @@ test("workerStatus: a settled dispatch is finished, a ready one running, an unan
   process.env.FACTORY_CONFIG = path.join(h.ctl, "factory.config.json");
   const { workerStatus } = await import(path.join(h.ctl, "lib.mjs"));
   const dispatches = { a: { state: "succeeded" }, b: { state: "failed" }, c: { state: "stopped" }, d: { state: "abandoned" }, e: { state: "ready" }, f: { state: "gone" }, g: { state: "some-new-state" } };
-  for (const id of ["a", "b", "c", "d", "f"]) assert.equal(workerStatus({ dispatch: id, terminal: "t" }, { dispatches, terminals: new Set(["t"]) }), "finished", id);
+  for (const id of ["a", "b", "c", "d"]) assert.equal(workerStatus({ dispatch: id, terminal: "t" }, { dispatches, terminals: new Set(["t"]) }), "finished", id);
   assert.equal(workerStatus({ dispatch: "e" }, { dispatches }), "running");
+  // A dispatch Orca no longer knows: a terminal still listed may still work; a missing one or none is finished.
+  assert.equal(workerStatus({ dispatch: "f", terminal: "t" }, { dispatches, terminals: new Set(["t"]) }), "running");
+  assert.equal(workerStatus({ dispatch: "f", terminal: "t" }, { dispatches, terminals: new Set() }), "finished");
+  assert.equal(workerStatus({ dispatch: "f" }, { dispatches }), "finished");
   assert.equal(workerStatus({ dispatch: "g" }, { dispatches }), "running", "an unrecognised state is not finished");
   assert.equal(workerStatus({ dispatch: "x", terminal: "t" }, { dispatches, terminals: new Set() }), "unknown", "no answer is never finished");
   // Records without a dispatch keep the old rules.
@@ -149,7 +153,9 @@ test("capacity counts running workers only; finished ones at their prompt free t
 });
 
 test("capacity: --set-suite needs a number and a quote, is journaled, and a wait says when to measure again and whether only the cap holds", () => {
-  const h = setup({ workers: { a: rec("A · Worker Developer", "ctx_a", "term_a", "/w/a") }, dispatches: { ctx_a: { state: "ready" } } });
+  // No pressure can count on this machine, so only the cap can hold the start back.
+  const capacity = { gate: {}, availableMemoryMinGb: 0, gateQueueMax: 99, pressure: { cpuAvg10MaxPercent: 100, memoryAvg10MaxPercent: 100 } };
+  const h = setup({ capacity, workers: { a: rec("A · Worker Developer", "ctx_a", "term_a", "/w/a") }, dispatches: { ctx_a: { state: "ready" } } });
   assert.notEqual(h.run("capacity.mjs", "--set-suite", "3").status, 0, "--by is required");
   assert.notEqual(h.run("capacity.mjs", "--set-suite", "0", "--by", "x").status, 0, "n ≥ 1");
   const r = h.run("capacity.mjs", "--set-suite", "1", "--by", "Alex: one at a time today");
@@ -157,8 +163,7 @@ test("capacity: --set-suite needs a number and a quote, is journaled, and a wait
   const v = JSON.parse(r.stdout);
   assert.equal(v.caps.suite, 1);
   assert.equal(v.suite, "wait");
-  assert.equal(typeof v.capOnly, "boolean");
-  if (!/pressure|memory|gate queue|load|timeouts/.test(v.reason)) assert.equal(v.capOnly, true, "nothing but the cap holds it");
+  assert.equal(v.capOnly, true, `nothing but the cap holds it: ${v.reason}`);
   assert.ok(Date.parse(v.measureAgainAt) - Date.now() > 30e3, "measure again in about a minute");
   const journal = fs.readFileSync(path.join(h.ctl, "journal.ndjson"), "utf8");
   assert.match(journal, /"type":"decision".*capacity suiteMax set → 1 by hand.*"by":"Alex: one at a time today"/);

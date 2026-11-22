@@ -81,14 +81,17 @@ export const orcaJson = (args, h) => {
 export const SETTLED_STATES = new Set(["succeeded", "failed", "stopped", "abandoned"]);
 /**
  * "finished", "running" or "unknown" for one workers.json record. `dispatches` comes from dispatchStates(): id →
- * { state, keptOpen }, where state "gone" means Orca no longer knows the dispatch; an id missing from it is unknown.
+ * { state, keptOpen }, where state "gone" means Orca no longer knows the dispatch (then the terminal decides, as for
+ * records without a dispatch); an id missing from it is unknown.
  * `terminals` is a Set of listed terminal handles or null when the list failed. Unknown never counts as finished.
  */
 export function workerStatus(w, { dispatches = {}, terminals = null, pidAlive = () => false } = {}) {
   if (w.dispatch) {
     const state = dispatches[w.dispatch]?.state;
     if (!state) return "unknown";
-    return state === "gone" || SETTLED_STATES.has(state) ? "finished" : "running";
+    if (state !== "gone") return SETTLED_STATES.has(state) ? "finished" : "running";
+    // Orca no longer knows the dispatch (a reset, another server): a terminal still listed may still be working.
+    if (!w.terminal) return "finished";
   }
   if (w.terminal) return terminals ? (terminals.has(w.terminal) ? "running" : "finished") : "unknown";   // records from before dispatches
   if (w.pid) return pidAlive(w.pid) ? "running" : "finished";
@@ -96,7 +99,7 @@ export function workerStatus(w, { dispatches = {}, terminals = null, pidAlive = 
 }
 /** Orca's answer to a call, parsed even when it exits non-zero (an error answer carries its code); null without JSON. */
 const orcaAnswer = (args, h) => {
-  const r = spawnSync(ORCA, [...args, ...(h ? orcaEnvArgsOn(h) : []), "--json"], { encoding: "utf8", maxBuffer: 1 << 26 });
+  const r = spawnSync(ORCA, [...args, ...(h ? orcaEnvArgsOn(h) : []), "--json"], { encoding: "utf8", maxBuffer: 1 << 26, timeout: 60_000 });
   try { return JSON.parse(String(r.stdout ?? "").split("\n").filter((l) => l.trim() && !l.includes('"_keepalive"')).join("\n")); } catch { return null; }
 };
 /**
@@ -111,7 +114,7 @@ export function dispatchStates(ids, h) {
     const r = orcaAnswer(["orchestration", "worker-list", "--full", "--limit", "100", ...(cursor ? ["--cursor", cursor] : [])], h);
     if (!r?.ok) break;
     for (const x of r.result?.workers ?? []) if (want.includes(x.dispatchId)) out[x.dispatchId] = { state: x.workerState ?? x.state, keptOpen: x.resource?.retainedReason === "user_requested" };
-    cursor = r.result?.nextCursor;
+    cursor = r.result?.nextCursor ?? r.result?.page?.nextCursor;
     if (!cursor) break;
   }
   for (const id of want.filter((id) => !out[id])) {
