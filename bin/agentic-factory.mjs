@@ -42,6 +42,7 @@ function validateAnswers() {
   for (const [id, value] of Object.entries(presetAnswers)) {
     if (!validAnswerIds.includes(id)) { console.error(`--answers: unknown id "${id}"; valid ids: ${validAnswerIds.join(", ")}`); process.exit(1); }
     if (["preview.port", "reviews.maxRounds"].includes(id) && !/^\d+$/.test(String(value ?? "").trim())) { console.error(`--answers: "${id}" must be a number`); process.exit(1); }
+    if (id === "reviews.maxRounds" && Number(value) < 1) { console.error(`--answers: "${id}" must be at least 1`); process.exit(1); }
     if (["project.name", "hosts.remote.name", "hosts.remote.ssh"].includes(id) && (value == null || !String(value).trim())) { console.error(`--answers: "${id}" must not be empty`); process.exit(1); }
     const choices = { "project.language": ["en", "de"], "rhythm.mode": ["day-plan-night-build", "continuous", "custom"], "steering.mode": ["github-issues", "orca-tasks"], "agents.default": ["codex", "claude", "pi"], "hosts.where": ["local", "both", "remote"], "capacity.calibration": ["auto", "manual"], "agents.calibration": ["auto", "manual"], "preview.enabled": ["yes", "no"], "design.tool": ["figma", "pencil", "none"], "rules.confirm": ["yes", "no"], "skills.installNow": ["yes", "no"] }[id];
     const normalized = typeof value === "boolean" ? (value ? "yes" : "no") : String(value ?? "");

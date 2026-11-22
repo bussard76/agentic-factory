@@ -20,18 +20,20 @@ Missing or weak tests, coverage gaps, edge cases, security, load and style are *
 
 **An assumption is no decision:** hold work only to a decision with {{HUMAN}}'s quoted statement and a date. Report an `Assumption:` that matters as a question.
 
-**Always checked, in every round:** code quality (`ponytail-review` on the full diff in round 1, on the task's own changes since the last reviewed commit in later rounds; `CODING_STANDARDS.md`) and architecture conformance (the stated level; every new export, dependency, data flow and import against the spec and the architecture docs). A wrong level or an unannounced architectural change is a `blocker`. Quality findings are `minor` unless trivial to fix now. **Not in daily rounds:** load tests, dependency audits and deep security hunting; they belong to the hardening phase and the release gate.
+**Always checked, in every round** (from round 2 on the changes that round re-checks, see "Later rounds"): code quality (`ponytail-review` on the full diff in round 1, on the task's own changes since the last reviewed commit in later rounds; `CODING_STANDARDS.md`) and architecture conformance (the stated level; every new export, dependency, data flow and import against the spec and the architecture docs). A wrong level or an unannounced architectural change is a `blocker`. Quality findings are `minor` unless trivial to fix now. **Not in daily rounds:** load tests, dependency audits and deep security hunting; they belong to the hardening phase and the release gate.
 
 ## Later rounds
 
-Rounds are bounded: `mkspec test` refuses a round beyond {{MAX_ROUNDS}}. After that the Controller starts the final functional re-evaluation (`mkspec reeval`) as `CONTROLLER.md` says under "Tester failed"; more rounds need a higher `reviews.maxRounds`, which is {{HUMAN}}'s decision.
+**Rounds are bounded at {{MAX_ROUNDS}}.** A round that fails while rounds are left gets a rework and a new round. After round {{MAX_ROUNDS}} fails there is no rework and no further round (`mkspec` refuses both). The Controller runs the final functional re-evaluation (`mkspec reeval`) on the commit that round reviewed, as `CONTROLLER.md` says under "Tester failed". On `pass` exactly that commit is integrated. The task branch must not move past it, because the push gate accepts nothing after a reviewed commit except `docs/reviews/`. A failing re-evaluation, or more rounds (a higher `reviews.maxRounds`, a whole number of at least 1), is {{HUMAN}}'s decision.
 
-From round 2 the Tester does not review the whole task again. It re-checks:
+**From round 2 the Tester narrows what it reviews, not which checks it applies.** Let A be the previous findings file's `Reviewed commit` and the head be the SHA under review. It reviews:
 
 - every `blocker` and `major` of the previous round's findings file: fixed or not, with the test that proves it;
-- the task's own changes since that file's `Reviewed commit` (`git log --no-merges -p <reviewed commit>..<new head>`, plus the conflict resolutions of the merge commits in that range, `git show --remerge-diff <merge>`), not the code merged in from `{{MAIN}}`; against the acceptance items they touch, with `ponytail-review` on them.
+- the task's own changes since A: the commits of `git log --no-merges -p A..<head> ^origin/{{MAIN}}` (`^origin/{{MAIN}}` leaves out every commit that came in from `{{MAIN}}`), and for each merge commit of `git log --merges A..<head> ^origin/{{MAIN}}` what the merge itself changed (`git show --remerge-diff <merge>`).
 
-A new finding is raised only for a functional defect or a safety problem: a change that could reach a real external system, data loss, a secret or real data. Anything else it notices is a debt candidate. The full gates still run on current `{{MAIN}}` plus the branch, and the new head gets its own `Reviewed commit`, so product code keeps its independent review before every push.
+If A is not an ancestor of the head (the branch was rebased or rewritten), the round reviews the whole diff, as round 1 does.
+
+Every check of round 1 and every item under "Always checked" applies to these changes. A new `blocker` or `major` is raised only for a functional defect, a safety problem (a change that could reach a real external system, data loss, a secret, real data), or a wrong level or unannounced architectural change in these changes; anything else is a `minor` or a debt candidate. Code outside these changes was reviewed in an earlier round and is not reviewed again. The full gates still run on current `{{MAIN}}` plus the branch, and the new head gets its own `Reviewed commit`, so product code keeps its independent review before every push.
 
 ## Reviewer rules
 

@@ -17,7 +17,7 @@ function controllerDir(config) {
 }
 
 // The fake Orca answers each `orchestration check` with the next batch from batches.json and logs its arguments.
-function waitWith(batches) {
+function waitWith(batches, hours = "0.002") {
   const dir = controllerDir();
   const fake = path.join(dir, "fake-orca.mjs"), calls = path.join(dir, "calls.log"), state = path.join(dir, "batches.json");
   fs.writeFileSync(state, JSON.stringify(batches));
@@ -31,7 +31,7 @@ fs.writeFileSync(${JSON.stringify(state)}, JSON.stringify(b));
 console.log(typeof next === "string" ? next : JSON.stringify(next));
 `);
   fs.chmodSync(fake, 0o755);
-  const r = spawnSync("node", ["wait.mjs", "--hours", "0.002"], { cwd: dir, encoding: "utf8", timeout: 20_000, env: { ...process.env, ORCA_CLI_COMMAND: fake, FACTORY_CONFIG: "" } });
+  const r = spawnSync("node", ["wait.mjs", "--hours", hours], { cwd: dir, encoding: "utf8", timeout: 20_000, env: { ...process.env, ORCA_CLI_COMMAND: fake, FACTORY_CONFIG: "" } });
   const log = fs.readFileSync(calls, "utf8").trim().split("\n").map((l) => JSON.parse(l));
   fs.rmSync(dir, { recursive: true, force: true });
   return { ...r, calls: log };
@@ -63,51 +63,128 @@ test("wait.mjs reads a string payload, survives a malformed or missing one, and 
   assert.equal(r.stderr, "");
 });
 
-test("wait.mjs keeps waiting past a heartbeat-only batch and a broken response, acks only a delivery it was given", () => {
+test("wait.mjs keeps waiting past a heartbeat-only batch, acks only a delivery it was given", () => {
   const r = waitWith([
     { ok: true, result: { messages: [{ id: "h", type: "heartbeat" }] } },
     { ok: true, result: { deliveryId: "d_old", messages: [{ id: "h2", type: "heartbeat" }] } },
-    { ok: true, result: { messages: "not a list" } },
     { ok: true, result: { messages: [{ id: "msg_9", type: "worker_done", subject: "late", payload: { dispatchId: "ctx_9" } }] } },
   ]);
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /^# msg_9 worker_done late ctx_9 \|/m);
   const acks = r.calls.map((a) => (a.includes("--ack") ? a[a.indexOf("--ack") + 1] : null));
-  assert.deepEqual(acks, [null, null, "d_old", null], "only the batch that came with a deliveryId is acked, on the next check");
+  assert.deepEqual(acks, [null, null, "d_old"], "only the batch that came with a deliveryId is acked, on the next check");
+  assert.ok(r.calls.every((a) => a.includes("--full")), "the whole body, not the 200-character preview");
+});
+
+test("wait.mjs pauses on ok:false or a result without a message list instead of spinning, and logs it raw", () => {
+  for (const bad of [{ ok: false, error: { message: "boom" } }, { ok: true, result: [] }, { ok: true, result: { messages: "not a list" } }]) {
+    const t0 = Date.now();
+    const r = waitWith([bad, bad, bad, bad, bad], "0.0005");   // 1.8 s window
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /orca check returned no message list, retrying in 30 s: \{/);
+    assert.match(r.stdout, /no event after 0\.0005h/);
+    assert.equal(r.calls.length, 1, "one call, then a pause that ends with the window");
+    assert.ok(Date.now() - t0 < 10_000, "the pause never outlasts the window");
+  }
+});
+
+test("wait.mjs logs a message without an id or type raw instead of printing undefined", () => {
+  const r = waitWith([{ ok: true, result: { messages: [{}, { id: "msg_1", type: "question", subject: "q", body: "x".repeat(300) }] } }]);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /^# raw \{\}$/m);
+  assert.doesNotMatch(r.stdout, /undefined/);
+  assert.match(r.stdout, new RegExp(`^# msg_1 question q {2}\\| x{300}$`, "m"), "a long body is printed whole");
 });
 
 const spec = (dir, ...args) => spawnSync("node", ["templates/mkspec.mjs", ...args], { cwd: dir, encoding: "utf8", env: { ...process.env, FACTORY_CONFIG: "" } });
+const TASK = ["T1", "docs/tasks/T1.md", "agents/t1"];
 
-test("mkspec refuses a review round beyond reviews.maxRounds and names reeval", () => {
+test("mkspec refuses a review round beyond reviews.maxRounds and names reeval on that round's reviewed commit", () => {
   const dir = controllerDir({ reviews: { maxRounds: 2 } });
-  const r = spec(dir, "test", "T1", "docs/tasks/T1.md", "agents/t1", "abc", "--round", "3");
+  const r = spec(dir, "test", ...TASK, "abc", "--round", "3");
   assert.notEqual(r.status, 0);
   assert.equal(r.stdout, "", "no spec path printed");
-  assert.match(r.stderr, /round 3 is beyond reviews\.maxRounds \(2\)/);
-  assert.match(r.stderr, /mkspec\.mjs reeval T1 docs\/tasks\/T1\.md agents\/t1 "<the 'Reviewed commit' in docs\/reviews\/T1-review-2\.md, not a later head>" agents\/t1-review-2:docs\/reviews\/T1-review-2\.md/);
+  assert.match(r.stderr, /review round 3 is beyond reviews\.maxRounds \(2\)/);
+  assert.match(r.stderr, /there is no rework and no further review round/);
+  assert.match(r.stderr, /mkspec\.mjs reeval T1 docs\/tasks\/T1\.md agents\/t1 "<the 'Reviewed commit' in docs\/reviews\/T1-review-2\.md>" agents\/t1-review-2:docs\/reviews\/T1-review-2\.md/);
+  assert.match(r.stderr, /must not move past it/);
+  assert.match(r.stderr, /"Needs Alex"/);
   assert.doesNotMatch(r.stderr, /at .*mkspec\.mjs:\d+/, "a message, not a stack trace");
   assert.ok(!fs.existsSync(path.join(dir, "specs/t1-test.txt")), "no spec written");
-  assert.notEqual(spec(dir, "test", "T1", "docs/tasks/T1.md", "agents/t1", "abc", "--round", "x").status, 0);
+  for (const bad of ["x", "0", "-1", "1.5"]) assert.notEqual(spec(dir, "test", ...TASK, "abc", "--round", bad).status, 0, bad);
+  const padded = spec(dir, "test", ...TASK, "abc", "--round", "02");
+  assert.equal(padded.status, 0, "accepted as before");
+  assert.match(fs.readFileSync(padded.stdout.trim(), "utf8"), /docs\/reviews\/T1-review-2\.md/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("from round 2 the Tester re-checks the previous findings and the rework diff; round 1 reviews the whole diff", () => {
+test("mkspec refuses a rework after the last round, so a failed task never gets an unreviewable head", () => {
+  const dir = controllerDir({ reviews: { maxRounds: 2 } });
+  const ok = spec(dir, "rework", "T1", "1", "docs/tasks/T1.md", "agents/t1", "agents/t1-review-1:docs/reviews/T1-review-1.md");
+  assert.equal(ok.status, 0, ok.stderr);
+  const r = spec(dir, "rework", "T1", "2", "docs/tasks/T1.md", "agents/t1", "agents/t1-review-2:docs/reviews/T1-review-2.md");
+  assert.notEqual(r.status, 0);
+  assert.equal(r.stdout, "");
+  assert.match(r.stderr, /rework 2 would need review round 3/);
+  assert.match(r.stderr, /mkspec\.mjs reeval T1 docs\/tasks\/T1\.md agents\/t1 "<the 'Reviewed commit' in docs\/reviews\/T1-review-2\.md>"/);
+  assert.notEqual(spec(dir, "rework", "T1", "x", "docs/tasks/T1.md", "agents/t1", "b:f").status, 0);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("reviews.maxRounds must be a whole number of at least 1; a numeric string still works", () => {
+  for (const bad of [0, -1, 2.5, "abc", ""]) {
+    const dir = controllerDir({ reviews: { maxRounds: bad } });
+    const r = spec(dir, "test", ...TASK, "abc");
+    assert.notEqual(r.status, 0, JSON.stringify(bad));
+    assert.match(r.stderr, /reviews\.maxRounds in factory\.config\.json must be a whole number of at least 1/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  const dir = controllerDir({ reviews: { maxRounds: "3" } });
+  assert.equal(spec(dir, "test", ...TASK, "abc", "--round", "3").status, 0);
+  assert.notEqual(spec(dir, "test", ...TASK, "abc", "--round", "4").status, 0);
+  fs.rmSync(dir, { recursive: true, force: true });
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), "af-init-rounds-"));
+  fs.writeFileSync(path.join(proj, "a.json"), JSON.stringify({ "reviews.maxRounds": "0" }));
+  const init = spawnSync("node", [path.join(ROOT, "bin/agentic-factory.mjs"), "init", "--answers", "a.json"], { cwd: proj, encoding: "utf8", env: { ...process.env, HOME: proj, FACTORY_SKIP_ORCA: "1" } });
+  assert.notEqual(init.status, 0);
+  assert.match(init.stderr, /"reviews\.maxRounds" must be at least 1/);
+  fs.rmSync(proj, { recursive: true, force: true });
+});
+
+test("from round 2 the Tester narrows what it reviews, not which checks; round 1 is unchanged", () => {
   const dir = controllerDir({ reviews: { maxRounds: 3 } });
-  const one = fs.readFileSync(spec(dir, "test", "T1", "docs/tasks/T1.md", "agents/t1", "abc").stdout.trim(), "utf8");
-  assert.match(one, /Review the whole diff against its merge-base with origin\/main/);
-  assert.match(one, /Run 'ponytail-review' on the full diff/);
-  const r = spec(dir, "test", "T1", "docs/tasks/T1.md", "agents/t1", "def", "--round", "2");
+  const one = fs.readFileSync(spec(dir, "test", ...TASK, "abc").stdout.trim(), "utf8");
+  assert.match(one, /2\. Review the whole diff against its merge-base with origin\/main against every Result and Observable acceptance item\. Run 'ponytail-review' on the full diff\. Check the level is kept, tests go through public entry points and fail without the implementation, untrusted content is escaped, invented data only, no secrets, no changes to real external systems\.\n/);
+  const r = spec(dir, "test", ...TASK, "def", "--round", "2");
   assert.equal(r.status, 0, r.stderr);
   const two = fs.readFileSync(r.stdout.trim(), "utf8");
-  assert.match(two, /round-1 findings docs\/reviews\/T1-review-1\.md \(git show origin\/agents\/t1-review-1:docs\/reviews\/T1-review-1\.md\)/);
-  assert.match(two, /git log --no-merges -p <that commit>\.\.<reviewed head>/);
-  assert.match(two, /git show --remerge-diff <merge>\), not the code merged in from main/);
-  assert.match(two, /new finding only for a functional defect or a safety problem/);
-  assert.doesNotMatch(two, /Review the whole diff/);
+  assert.match(two, /<A> is the 'Reviewed commit' in the round-1 findings docs\/reviews\/T1-review-1\.md \(git show origin\/agents\/t1-review-1:docs\/reviews\/T1-review-1\.md\); <head> is the full SHA you review/);
+  assert.match(two, /If git merge-base --is-ancestor <A> <head> fails .* review as in round 1: the whole diff/);
+  assert.match(two, /git log --no-merges -p <A>\.\.<head> \^origin\/main/);
+  assert.match(two, /git log --merges --format=%H <A>\.\.<head> \^origin\/main .*git show --remerge-diff <merge>/);
+  assert.match(two, /check the level is kept, tests go through public entry points and fail without the implementation, untrusted content is escaped/, "round-1 checks stay");
+  assert.match(two, /wrong level or unannounced architectural change in these changes/);
   assert.match(two, /gate bash -c 'npm run verify' once/, "the full gate still runs");
   assert.match(two, /docs\/reviews\/T1-review-2\.md/);
-  assert.equal(spec(dir, "test", "T1", "docs/tasks/T1.md", "agents/t1", "def", "--round", "3").status, 0, "round 3 is allowed with maxRounds 3");
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("the round-2 commands keep main's commits out and spot a rewritten branch", () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "af-scope-"));
+  const g = (...a) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...a], { cwd: repo, encoding: "utf8" });
+  const commit = (file, msg) => { fs.writeFileSync(path.join(repo, file), msg); g("add", file); g("commit", "-qm", msg); };
+  g("init", "-q", "-b", "main"); commit("base", "base");
+  g("checkout", "-qb", "task"); commit("t1", "task round 1");
+  const A = g("rev-parse", "HEAD").stdout.trim();
+  g("checkout", "-q", "main"); commit("m1", "main commit 1"); commit("m2", "main commit 2");
+  g("checkout", "-q", "task"); g("merge", "-q", "--no-edit", "main"); commit("t2", "task rework");
+  const own = g("log", "--no-merges", "--format=%s", `${A}..HEAD`, "^main").stdout.trim().split("\n");
+  assert.deepEqual(own, ["task rework"], "commits that came in from main are left out");
+  assert.equal(g("log", "--merges", "--format=%H", `${A}..HEAD`, "^main").stdout.trim().split("\n").length, 1, "the task's own merge is still checked");
+  assert.equal(g("merge-base", "--is-ancestor", A, "HEAD").status, 0);
+  g("checkout", "-qb", "rewritten", "main"); commit("t1", "task round 1, rebased");
+  assert.notEqual(g("merge-base", "--is-ancestor", A, "HEAD").status, 0, "a rebased branch falls back to the full round-1 scope");
+  fs.rmSync(repo, { recursive: true, force: true });
 });
 
 test("CONTROLLER.md and the review protocol state the same round rule and the event-driven loop", () => {
@@ -115,10 +192,15 @@ test("CONTROLLER.md and the review protocol state the same round rule and the ev
   const protocol = fs.readFileSync(path.join(ROOT, "templates/docs/review-protocol.md"), "utf8");
   assert.doesNotMatch(ctl, /every 10 minutes/);
   assert.match(ctl, /do not poll workers yourself/);
+  assert.doesNotMatch(ctl, /Second failure: one tier higher/, "no tier-up rework that a refused round could never test");
   for (const doc of [ctl, protocol]) {
-    assert.match(doc, /refuses a round beyond \{\{MAX_ROUNDS\}\}/);
+    assert.match(doc, /no rework and no further round/);
     assert.match(doc, /mkspec reeval/);
-    assert.match(doc, /functional defect or a safety problem/);
+    assert.match(doc, /must not move past/);
+    assert.match(doc, /narrows what it reviews, not which checks it applies/);
+    assert.match(doc, /functional defect, a safety problem/);
+    assert.match(doc, /wrong level or unannounced architectural change/);
     assert.match(doc, /independent review/);
   }
+  assert.match(protocol, /\*\*Always checked, in every round\*\* \(from round 2 on the changes that round re-checks/);
 });
