@@ -100,7 +100,7 @@ export function workerStatus(w, { dispatches = {}, terminals = null, pidAlive = 
   return "unknown";   // nothing to check it by: never treated as finished
 }
 // Bounds on Orca calls per dispatchStates() run. Anything not answered within them is unknown (busy), never finished.
-export const ORCA_CALL_TIMEOUT_MS = 20_000, LIST_PAGES_MAX = 3, SHOW_CALLS_MAX = 10;
+export const ORCA_CALL_TIMEOUT_MS = 20_000, LIST_PAGES_MAX = 3, SHOW_CALLS_MAX = 10, DISPATCH_DEADLINE_MS = 60_000;
 /** Orca's answer to a call, parsed even when it exits non-zero (an error answer carries its code); null without JSON or on timeout. */
 export const orcaCall = (args, h) => {
   const r = spawnSync(ORCA, [...args, ...(h ? orcaEnvArgsOn(h) : []), "--json"], { encoding: "utf8", maxBuffer: 1 << 26, timeout: ORCA_CALL_TIMEOUT_MS });
@@ -110,28 +110,34 @@ export const orcaCall = (args, h) => {
 const dispatchInfo = (state, resource) => ({ state, keptOpen: resource?.retainedReason === "user_requested", owned: resource?.ownershipState === "owned" });
 /**
  * Dispatch state for the given ids on host h: at most LIST_PAGES_MAX pages of worker-list (newest first, stops once every
- * id is seen), then worker-show for at most SHOW_CALLS_MAX of the rest. A failed or slow call stops that path; ids left
- * unanswered are absent from the result, which workerStatus reads as unknown. keptOpen: Orca retains the worker's
+ * id is seen), then worker-show for at most SHOW_CALLS_MAX of the rest, least recently asked first (dispatch-asked.json),
+ * so ids that never leave cannot starve the others. All calls together stop after DISPATCH_DEADLINE_MS, and a failed or
+ * slow call stops that path; ids left unanswered are absent from the result, which workerStatus reads as unknown. keptOpen: Orca retains the worker's
  * terminal with retainedReason "user_requested" (worker-keep-open, and possibly Orca's default for workers in a new
  * worktree); owned: Orca owns the worker's terminal and may close it.
  */
 export function dispatchStates(ids, h) {
-  const want = [...new Set(ids.filter(Boolean))], out = {};
+  const want = [...new Set(ids.filter(Boolean))], out = {}, until = Date.now() + DISPATCH_DEADLINE_MS;
   const missing = () => want.some((id) => !out[id]);
   let cursor;
-  for (let page = 0; page < LIST_PAGES_MAX && missing(); page++) {
+  for (let page = 0; page < LIST_PAGES_MAX && missing() && Date.now() < until; page++) {
     const r = orcaCall(["orchestration", "worker-list", "--full", "--limit", "100", ...(cursor ? ["--cursor", cursor] : [])], h);
     if (!r?.ok) break;
     for (const x of r.result?.workers ?? []) if (want.includes(x.dispatchId)) out[x.dispatchId] = dispatchInfo(x.workerState ?? x.state, x.resource);
     cursor = r.result?.nextCursor ?? r.result?.page?.nextCursor;
     if (!cursor) break;
   }
-  for (const id of want.filter((id) => !out[id]).slice(0, SHOW_CALLS_MAX)) {
+  const asked = readJson("dispatch-asked.json", {}), key = (id) => `${h?.name ?? "local"} ${id}`;
+  const rest = want.filter((id) => !out[id]).sort((a, b) => (asked[key(a)] ?? 0) - (asked[key(b)] ?? 0));
+  for (const id of rest.slice(0, SHOW_CALLS_MAX)) {
+    if (Date.now() >= until) break;
+    asked[key(id)] = Date.now();
     const r = orcaCall(["orchestration", "worker-show", "--dispatch", id, "--full"], h);
     if (r?.ok && (r.result?.worker?.state ?? r.result?.state)) out[id] = dispatchInfo(r.result.worker?.state ?? r.result.state, r.result.terminalResource);
     else if (r?.error?.code === "dispatch_not_found") out[id] = { state: "gone" };
     else if (!r) break;   // slow or broken Orca: the rest stays unknown
   }
+  if (rest.length) { const live = new Set(want.map(key)); try { writeJson("dispatch-asked.json", Object.fromEntries(Object.entries(asked).filter(([k]) => live.has(k) || !k.startsWith(`${h?.name ?? "local"} `)))); } catch { /* best effort */ } }
   return out;
 }
 

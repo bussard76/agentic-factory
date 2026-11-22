@@ -178,7 +178,7 @@ test("cleanup releases only what Orca reports settled and is safe to let go, and
   const calls = h.calls();
   const releasedIds = calls.filter((c) => c.includes("worker-release")).map((c) => c.split(" ")[3]).sort();
   assert.deepEqual(releasedIds, ["ctx_done", "ctx_human", "ctx_old"]);
-  assert.ok(!calls.some((c) => c.startsWith("terminal close")), "cleanup closes no worker terminal itself");
+  assert.deepEqual(calls.filter((c) => c.startsWith("terminal close")).map((c) => c.split(" ")[3]), ["term_done_setup"], "only the released dispatch's own setup terminal, before its worktree goes");
   assert.ok(!calls.some((c) => c.includes("worker-abandon")), "no abandon fallback");
   assert.deepEqual(calls.filter((c) => c.startsWith("worktree rm ")).map((c) => c.split(" ")[3].split("/").pop()), ["t1"]);
   assert.deepEqual(Object.keys(h.readWorkers()).sort(), ["busy", "dirty", "first", "follow", "gone", "open", "rework", "unpushed"]);
@@ -189,6 +189,38 @@ test("cleanup releases only what Orca reports settled and is safe to let go, and
   const again = h.run("cleanup.mjs");
   assert.equal(again.status, 0, again.stderr);
   assert.deepEqual(h.calls().filter((c) => c.startsWith("worktree rm ")).map((c) => c.split(" ")[3].split("/").pop()), ["t9"]);
+  assert.deepEqual(h.calls().filter((c) => c.startsWith("terminal close")).map((c) => c.split(" ")[3]), ["term_9_setup"]);
+  h.done();
+});
+
+test("cleanup matches a record's worktree by directory name when the record holds another path to it", () => {
+  const h = setup();
+  h.repo("t1", "t2");   // git reports the real path; the records hold a path through a symlink, as a configured ~/… path would differ
+  const link = path.join(h.dir, "link"); fs.symlinkSync(h.ws, link);
+  h.setWorkers({ a: rec("T1 · Worker Developer", "ctx_a", "structworker_a", path.join(link, "p", "t1")), b: rec("T2 · Worker Developer", "ctx_b", "structworker_b", path.join(link, "p", "t2")) });
+  h.patch((s) => { s.dispatches = { ctx_a: { state: "ready" }, ctx_b: { state: "succeeded" } }; });
+  fs.writeFileSync(path.join(h.wt("t2"), "wip.txt"), "x");
+  const r = h.run("cleanup.mjs", "--dry");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /kept t1: worker "T1 · Worker Developer" running/, "a running structured worker holds its worktree");
+  assert.match(r.stdout, /kept t2: worker "T2 · Worker Developer" finished with uncommitted or untracked changes/);
+  // A record whose worktree git does not list, but which still exists, is not released either.
+  h.setWorkers({ c: rec("T3 · Worker Developer", "ctx_c", "structworker_c", path.join(h.dir, "elsewhere")) });
+  fs.mkdirSync(path.join(h.dir, "elsewhere"));
+  h.patch((s) => { s.dispatches = { ctx_c: { state: "succeeded" } }; });
+  const o = h.run("cleanup.mjs");
+  assert.ok(!h.calls().some((c) => c.includes("worker-release")), o.stdout);
+  assert.deepEqual(Object.keys(h.readWorkers()), ["c"]);
+  h.done();
+});
+
+test("dispatchStates asks the least recently asked ids first, so ids that never leave cannot starve the others", () => {
+  const ids = Array.from({ length: 12 }, (_, i) => `ctx_${i}`);
+  const h = setup({ dispatches: Object.fromEntries(ids.map((id) => [id, { state: "ready" }])), filler: 400 });
+  const first = libCall(h, `lib.dispatchStates(${JSON.stringify(ids)}, undefined)`);
+  assert.equal(Object.keys(first).length, 10);
+  const second = libCall(h, `lib.dispatchStates(${JSON.stringify(ids)}, undefined)`);
+  for (const id of ids.filter((id) => !first[id])) assert.ok(second[id], `${id} is answered on the next run`);
   h.done();
 });
 

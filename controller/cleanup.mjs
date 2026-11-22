@@ -11,6 +11,7 @@
 // worktree in which any other terminal is still open. --dry changes nothing: no fetch, no journal, no removals, no releases.
 // Usage: node cleanup.mjs [--on <host>|--all] [--dry] [--pushed] [--prune-remote]
 import fs from "node:fs";
+import path from "node:path";
 import { BRANCH_PREFIX, HOSTS, dispatchStates, file, orcaCall, holdsWorktree, isHelperTerminal, sh, MAIN, ORCA, RUNNER, argHost, journal, onHost, orcaEnvArgsOn, projectDirOn, readJson, trySh, workerStatus, workspacesOn, worktreeRefOn, writeJson } from "./lib.mjs";
 
 const dry = process.argv.includes("--dry"), allowPushed = process.argv.includes("--pushed");
@@ -23,6 +24,11 @@ const failedReleases = [], forget = [];
 // Setup terminals of released dispatches, remembered until their worktree is gone: handle → worktree path. Only these
 // may be stopped with a worktree removal; any other terminal open in a worktree keeps it.
 const releasedTerms = readJson("released-terminals.json", {});
+// Worktrees are matched by directory name: a record may hold a configured path (~/…, or through a symlink) and git the
+// real one. Everything is under this project's workspaces directory, and a clash with another project's name errs to busy.
+const dirOf = (p) => (p ? path.basename(String(p)) : "");
+const RELEASES_MAX = 10;   // per host and run; the rest keep their records and are released in a later cycle
+let releases = 0;
 const terminalsOf = (host) => {   // null when the state is unknown; one call per host, reused below
   if (RUNNER !== "orca") return [];
   try { const t = JSON.parse(trySh(ORCA, ["terminal", "list", ...orcaEnvArgsOn(host), "--json"]) || "null")?.result?.terminals; return Array.isArray(t) ? t : null; } catch { return null; }
@@ -42,9 +48,10 @@ for (const host of hosts) {
     const local = w.branch ? g("rev-parse", "-q", "--verify", w.branch) : "", remote = w.branch ? g("rev-parse", "-q", "--verify", `origin/${w.branch}`) : "";
     w.pushed = Boolean(local) && local === remote;
   }
-  const wtAt = new Map(wts.map((w) => [w.path, w]));
+  const wtAt = new Map(wts.map((w) => [dirOf(w.path), w]));
   // Worker state from Orca's dispatches. Only a settled dispatch is finished; running and unknown workers hold their worktree.
   const mine = Object.entries(workers).filter(([, w]) => (w.host ?? "local") === host.name);
+  releases = 0;
   const dispatches = RUNNER === "orca" ? dispatchStates(mine.map(([, w]) => w.dispatch), host) : {};
   const listed = new Set(terms.filter((t) => t.status !== "exited").map((t) => t.handle));
   const status = new Map(mine.map(([k, w]) => [k, workerStatus(w, { dispatches, terminals: listed, pidAlive: alive })]));
@@ -52,14 +59,18 @@ for (const host of hosts) {
   const releasedAgents = new Set();
   const busy = new Map();   // worktree path → why it is kept
   for (const [k, w] of mine) {
-    const name = w.name ?? k, d = dispatches[w.dispatch] ?? {}, wt = wtAt.get(w.worktree);
-    const hold = (why) => { if (w.worktree && !busy.has(w.worktree)) busy.set(w.worktree, `worker "${name}" ${why}`); };
+    const name = w.name ?? k, d = dispatches[w.dispatch] ?? {}, wt = wtAt.get(dirOf(w.worktree));
+    const hold = (why) => { if (w.worktree && !busy.has(dirOf(w.worktree))) busy.set(dirOf(w.worktree), `worker "${name}" ${why}`); };
     if (status.get(k) !== "finished") { hold(status.get(k) === "unknown" ? "state unknown" : d.state === "abandoned" ? "abandoned, may still run" : "running"); continue; }
     if (d.keptOpen) { hold(`finished, but Orca keeps it open (user_requested); release it with \`orca orchestration worker-release --dispatch ${w.dispatch}\` when nobody needs it`); continue; }
     if (w.terminal && heldTerminals.has(w.terminal)) { hold("finished, but its terminal is used by a running worker"); continue; }
+    // A worktree git does not list may still exist under another path: its work cannot be checked, so it is not released.
+    if (!wt && w.worktree && onHost(host, `test -e ${q(w.worktree.replace(/^~\//, ""))} && echo yes`).trim() === "yes") { hold("finished, but its worktree is not in git's worktree list; not released"); continue; }
     if (wt?.dirty) { hold("finished with uncommitted or untracked changes; not released"); continue; }
     if (wt && !wt.merged && !wt.pushed) { hold("finished with commits that are not on origin; not released"); continue; }
+    if (d.state === "gone") { hold(`finished? Orca no longer knows dispatch ${w.dispatch}; remove its record by hand once nothing runs there`); continue; }
     if (!w.dispatch) { forget.push(k); continue; }   // a record without a dispatch has nothing to release
+    if (++releases > RELEASES_MAX) { hold("finished; released in a later cycle (at most 10 per run)"); continue; }
     // The dispatch's setup terminals, from Orca's record of what it created, before the release settles it.
     const shown = orcaCall(["orchestration", "worker-show", "--dispatch", w.dispatch, "--full"], host);
     const setup = (shown?.result?.worker?.effects ?? []).filter((e) => e.kind === "terminal" && e.role === "setup" && e.id && !heldTerminals.has(e.id)).map((e) => e.id);
@@ -70,9 +81,9 @@ for (const host of hosts) {
       released++; forget.push(k);
     }
     if (w.terminal && d.owned) releasedAgents.add(w.terminal);
-    for (const id of setup) if (w.worktree) releasedTerms[id] = w.worktree;
+    for (const id of setup) if (w.worktree) releasedTerms[id] = dirOf(w.worktree);
   }
-  for (const t of terms) if (holdsWorktree(t.title) && t.status !== "exited" && !releasedAgents.has(t.handle) && t.worktreePath && !busy.has(t.worktreePath)) busy.set(t.worktreePath, `terminal "${t.title}" open`);
+  for (const t of terms) if (holdsWorktree(t.title) && t.status !== "exited" && !releasedAgents.has(t.handle) && t.worktreePath && !busy.has(dirOf(t.worktreePath))) busy.set(dirOf(t.worktreePath), `terminal "${t.title}" open`);
   // Finished wave terminals pile up in the integration worktree. The newest stays: wavewait and the heartbeat read its result.
   // A shared host lists every project's terminals, and only this repository's own worktree tells them apart. Its path comes
   // from git, because a remote host's configured path can start with ~.
@@ -90,8 +101,9 @@ for (const host of hosts) {
     const name = w.path.split("/").pop();
     const { dirty, merged, pushed } = w;
     // Only the released dispatch's own terminals may go with the worktree. Any other open terminal keeps it.
-    const other = terms.filter((t) => t.worktreePath === w.path && t.status !== "exited" && !releasedAgents.has(t.handle) && releasedTerms[t.handle] !== w.path);
-    const why = name === "coordinator-integration" ? "integration worktree" : busy.get(w.path)
+    const inside = terms.filter((t) => dirOf(t.worktreePath) === name && t.status !== "exited");
+    const other = inside.filter((t) => !releasedAgents.has(t.handle) && releasedTerms[t.handle] !== name);
+    const why = name === "coordinator-integration" ? "integration worktree" : busy.get(name)
       ?? (dirty ? "uncommitted or untracked changes" : !(merged || (allowPushed && pushed))
         ? (pushed ? `pushed, not merged into origin/${MAIN} (removed only with --pushed)` : `${w.branch ? `branch ${w.branch}` : "no branch"}, not merged into origin/${MAIN}`)
         : other.length ? `terminal "${other[0].title}" open in it${other.length > 1 ? ` (and ${other.length - 1} more)` : ""}` : "");
@@ -99,6 +111,10 @@ for (const host of hosts) {
     if (dry) { console.log(`[${host.name}] would remove ${name} (${merged ? "merged" : "pushed"})`); removed++; continue; }
     try {
       if (RUNNER === "orca") {
+        // The released dispatch's own setup terminals go first; a failed close keeps the worktree.
+        for (const t of inside.filter((t) => releasedTerms[t.handle] === name)) {
+          if (!orcaCall(["terminal", "close", "--terminal", t.handle], host)?.ok) throw new Error(`closing its setup terminal "${t.title}" failed`);
+        }
         const r = trySh(ORCA, ["worktree", "rm", "--worktree", worktreeRefOn(host, name), ...orcaEnvArgsOn(host), "--json"]);
         if (!/"ok": *true/.test(r)) throw new Error("orca worktree rm failed");
       } else {
