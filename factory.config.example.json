@@ -63,6 +63,12 @@
       }
     ],
     "frontAgent": {
+      "kind": "terminal",
+      "$kind": "terminal (default): the Front agent is an agent session in a terminal, woken by statuswatch.mjs; orca-bot: an Orca bot on this machine is the Front agent, woken by one Orca automation with a precheck (botwatch.mjs). One bot can serve several projects: name the same bot in each.",
+      "bot": "",
+      "$bot": "orca-bot only: the bot's name as `orca bot list` shows it. Create the bot in Orca first; start creates its watch automation.",
+      "staleMinutes": 25,
+      "$staleMinutes": "orca-bot only: the bot's watch wakes it once when the Controller's status.md gets older than this.",
       "preview": {
         "enabled": true,
         "port": 8180,
@@ -90,7 +96,7 @@
       "quotaThresholdPercent": 10
     },
     "piRoleModels": {},
-    "$piRoleModels": "Optional, e.g. { \"Developer\": \"litellm/gpt-6-luna\" }: a Pi worker of a listed role starts pinned to that provider/model instead of its tier's model. Other roles and other agents keep their tier. An explicit --model still wins.",
+    "$piRoleModels": "Optional, e.g. { \"Developer\": \"provider/model-id\" }: a Pi worker of a listed role starts pinned to that provider/model instead of its tier's model. Other roles and other agents keep their tier. An explicit --model still wins.",
     "calibration": "auto",
     "$calibration": "The model names are examples of what the agent CLI offers; init asks for the available ones. auto: calibrate-models.mjs moves a role one tier down when its pass rate is high and rounds are low, one tier up when failures cluster; manual: it only recommends."
   },

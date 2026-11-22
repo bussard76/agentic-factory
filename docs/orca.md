@@ -89,6 +89,27 @@ Orca's own messages are event driven: `orca orchestration send` queues a message
 
 `status` and `doctor` say when it stopped or cannot reach the terminal, and open questions stay visible either way. Set `hosts.frontAgent.statusWatch` to `false` where nobody works in front. Under WSL, check that the cron service runs.
 
+## Front agent as an Orca bot
+
+An Orca bot can be the Front agent instead of a terminal session: `hosts.frontAgent.kind: "orca-bot"` and `hosts.frontAgent.bot: "<bot name>"` (the name `orca bot list` shows). The default stays `"terminal"`, and a config without `kind` works exactly as before. A bot brings an owner chat, items with explicit "needs you" questions, a memory that survives restarts, and wake-ups through Orca instead of text typed into a terminal.
+
+**What `start` does with a bot:**
+
+- It does not schedule `statuswatch.mjs`; a status watch scheduled earlier by launchd is removed.
+- It copies `botwatch.mjs` into the bot's watch directory `~/front-agent/.bots/<bot>/`, adds the project to `projects.json` there, and creates **one** automation for the bot: every 5 minutes, `--runs-in chat --results-to chat`, with `botwatch.sh` as its precheck. The precheck exits 0, and so wakes the bot, only when in a watched project's `status.md` "Needs <human>", "Needs front agent" or "Problems" changed, when `status.md` is older than `hosts.frontAgent.staleMinutes` (default 25) or missing, or when its host cannot be reached. A lasting problem wakes the bot once, when it starts. It reads local Controllers directly and remote ones over ssh, keeps one state line per project in `botwatch.state`, and writes what woke the bot into `wake.md`, which the automation's prompt tells the bot to read.
+- The bot's rules are `~/front-agent/<project>/FRONT_BOT.md`: the Front agent's rules for a bot. Give the bot's SOUL.md the line "For each agentic-factory project, follow ~/front-agent/<project>/FRONT_BOT.md". Open questions go on items with `--status needs-you --ask … --option …` and always also as plain text in the chat, because quick-reply buttons are not shown in every Orca view. A bot does not write product code: design-lane work goes through a worker.
+- `start` cannot create the bot: Orca creates a bot only when its owner accepts it. Create it in Orca first; until then `start` fails that step and `status` says so in `next`.
+
+**One bot, several projects.** Two projects may name the same bot. The second `start` adds its project to the same `projects.json` and finds the existing automation (`orca automations list`), so there is still one automation and one precheck for all of them.
+
+**The Controller with a bot.** On every front event it appends the line to `front-events.log` as with the Front agent on the server and, when it runs on the same machine as the bot, sends it with `orca orchestration send --to "bot:<name>"`: `--type question` for a new "Needs <human>" item or a block, `--type status` for everything else. `inbox.md` stays the record of orders. **Limit:** `bot:` only reaches bots on the same machine, and a server cannot send to a client (`terminal_not_found`, see "Front agent on the server"). A Controller on a remote host therefore does not send; the bot watches its `status.md` over ssh and sends orders as text into its terminal (`--environment <env>`) and through `inbox.md`.
+
+**Checks.** With a bot, `status --json` reports `setup.frontAgent` (`bot`, `botExists`, `watchAutomation`) and `doctor` checks the bot in `orca bot list` and its automation in `orca automations list` instead of the status watch.
+
+## Read access for the Controller
+
+Some agent tools limit which paths a session may read. When `start` sets up a local Controller, it grants read access to the project, the Controller's project directory and the project's worker workspaces, for each such tool it finds on the machine: lean-ctx (`allow_paths` in `~/.lean-ctx/config.toml`) and pi's context-mode package (`permissions.allow: ["Read(<path>/**)"]` in `<controllerDir>/.claude/settings.local.json`). A tool that is not installed is skipped, and a grant that cannot be written is reported and never fails `start`. Another tool is added as one more entry in `bin/read-grants.mjs`. A Controller on a remote host gets no grants from `start`; add them there by hand.
+
 ## Heartbeat
 
 `controller/heartbeat.mjs` wakes the Controller from outside, so noticing finished work does not depend on the Controller itself. `agentic-factory start` adds one cron line per Controller directory on the Controller's host and leaves the rest of the crontab alone. Set `hosts.controller.heartbeat` to `false` to opt out.

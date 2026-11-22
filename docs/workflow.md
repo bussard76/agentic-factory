@@ -32,7 +32,7 @@ flowchart LR
 | Role | Who / where | Does | Never does |
 |---|---|---|---|
 | **Human** | the owner | goals and priorities, accepts on the preview (their own machine, their own environment; automated tests never use real data), decides level-3 architecture and everything that touches real external systems or real data | – |
-| **Front agent** | agent session on the human's machine | the only contact for the human. Takes wishes and test findings, turns them into tickets and specs, runs the outside-in stages, asks decisions one at a time, reports the status as a table, writes the morning handover | steer workers itself; burden the human with the workers' back-and-forth |
+| **Front agent** | agent session on the human's machine, or an Orca bot there (`hosts.frontAgent.kind: orca-bot`) | the only contact for the human. Takes wishes and test findings, turns them into tickets and specs, runs the outside-in stages, asks decisions one at a time, reports the status as a table, writes the morning handover | steer workers itself; burden the human with the workers' back-and-forth |
 | **Controller** | agent session on the server, unattended | starts and steers all workers, schedules tests, reviews and waves, detects stuck workers, cleans up, writes a status after every cycle | talk to the human directly; take level-3, ADR or product decisions |
 | **Developer** | worker (Codex, Claude Code or Pi) | builds exactly one task, test-first, on its own branch | push to `main`, weaken tests |
 | **Tester** | worker, never the Developer of the task | checks independently against the spec, runs the full suites, writes findings with a verdict | change code |
@@ -178,6 +178,7 @@ The rhythm is a setting (`rhythm.mode`), not a rule:
 - **Custom:** quiet hours define when the Controller may start new work.
 - **Status on request:** one table with task, who works on it (role, model), state, next step and whether the human is needed. Below it, what is new on `main` and open acceptance items.
 - **Questions to the human:** always one at a time, with options and a recommendation.
+- **A bot as Front agent:** with `hosts.frontAgent.kind: orca-bot`, an Orca bot is the Front agent. One automation per bot wakes it only when a Controller's `status.md` has news for it (a precheck), it asks open questions as "needs you" items and as plain text in its chat, and code work goes through workers. One bot can serve several projects. Details: `docs/orca.md`, "Front agent as an Orca bot".
 
 ## The Controller's cycle
 
