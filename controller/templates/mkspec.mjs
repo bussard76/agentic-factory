@@ -15,7 +15,7 @@
 // <task-ref> is the task file path (orca-tasks mode) or "#<issue>" (github-issues mode).
 import fs from "node:fs";
 import path from "node:path";
-import { BRANCH_PREFIX, CMDS, HUMAN, MAIN, PROJECT, STEERING, config, file } from "../lib.mjs";
+import { BRANCH_PREFIX, CMDS, HUMAN, MAIN, PROJECT, PROJECT_DIR, STEERING, config, file, trySh } from "../lib.mjs";
 
 const MAINTAINED = config.architecture?.mode === "architect";
 // gate starts a program without a shell, so a command with shell syntax only runs through bash.
@@ -30,10 +30,26 @@ const roundsSetting = config.reviews?.maxRounds ?? 2;
 const maxRounds = Number(roundsSetting);
 if (!/^\s*\d+\s*$/.test(String(roundsSetting)) || maxRounds < 1) refuse(`reviews.maxRounds in factory.config.json must be a whole number of at least 1, got ${JSON.stringify(roundsSetting)}.`);
 const wholeFrom1 = (flag, v) => { const n = Number(v); if (!Number.isInteger(n) || n < 1) refuse(`${flag} needs a whole number from 1, got '${v}'.`); return n; };
-// After the last round there is no rework and no further round; the existing next step is reeval on that round's commit.
-const afterLimit = (what, T = "<T>", ref = "<task-ref>", branch = "<branch>") => {
-  const last = `docs/reviews/${T}-review-${maxRounds}.md`;
-  return `Refused: ${what}. reviews.maxRounds is ${maxRounds}: after round ${maxRounds} has failed there is no rework and no further review round (CONTROLLER.md, "Tester failed"). Next: the final functional re-evaluation of the commit that round reviewed: node templates/mkspec.mjs reeval ${T} ${ref} ${branch} "<the 'Reviewed commit' in ${last}>" ${BRANCH_PREFIX}${T.toLowerCase()}-review-${maxRounds}:${last}. Its pass integrates exactly that commit, so the task branch must not move past it. A failing re-evaluation, or more rounds (a higher reviews.maxRounds), goes to "Needs ${HUMAN}".`;
+// The limit is on FAILED review rounds. Beyond it, a step is allowed only as a re-check after a passing round
+// (--after-pass "<reason>": a failed conformance review, a red wave, a merge conflict). The verdict is read from the
+// findings file on origin in the project checkout; "" when it cannot be read.
+const reviewRef = (T, n) => ({ branch: `${BRANCH_PREFIX}${T.toLowerCase()}-review-${n}`, file: `docs/reviews/${T}-review-${n}.md` });
+const verdictOf = (T, n) => { const r = reviewRef(T, n); return trySh("git", ["-C", PROJECT_DIR, "show", `origin/${r.branch}:${r.file}`], { stdio: ["ignore", "pipe", "ignore"] }).match(/^Verdict:\s*(pass|fail)\b/im)?.[1]?.toLowerCase() ?? ""; };
+const afterPass = opt("--after-pass");
+// `last` is the round whose verdict decides: the round a rework follows, or the round before a new review round.
+const beyondLimit = (what, last, T = "<T>", ref = "<task-ref>", branch = "<branch>") => {
+  const r = reviewRef(T, last), v = verdictOf(T, last);
+  const reeval = `the final functional re-evaluation of the commit round ${last} reviewed: node templates/mkspec.mjs reeval ${T} ${ref} ${branch} "<the 'Reviewed commit' in ${r.file}>" ${r.branch}:${r.file}. Its pass integrates exactly that commit, so the task branch must not move past it. A failing re-evaluation, or more rounds (a higher reviews.maxRounds), goes to "Needs ${HUMAN}"`;
+  const again = `rerun the same command with --after-pass "<what happened>"`;
+  const head = `Refused: ${what}. reviews.maxRounds is ${maxRounds} and limits failed review rounds (CONTROLLER.md, "Tester failed").`;
+  if (v === "fail") return `${head} Round ${last} failed (${r.file} on origin/${r.branch} says Verdict: fail), so there is no rework and no further review round. Next: ${reeval}.`;
+  if (v === "pass") return `${head} Round ${last} passed (${r.file} on origin/${r.branch} says Verdict: pass). A fix after a pass (a failed conformance review, a red wave, a merge conflict) is a re-check, not another failed round: ${again}.`;
+  return `${head} The verdict of round ${last} could not be read (git show origin/${r.branch}:${r.file} in the project checkout; run git fetch there). If round ${last} failed, there is no rework and no further round; next: ${reeval}. If it passed and the task needs a fix for another reason, ${again}.`;
+};
+// Allows a step beyond the limit only after a passing round; refuses with what actually happened otherwise.
+const checkLimit = (beyond, what, last, T, ref, branch) => {
+  if (!beyond) return;
+  if (afterPass === undefined || verdictOf(T, last) !== "pass") refuse(beyondLimit(afterPass === undefined ? what : `${what} with --after-pass`, last, T, ref, branch));
 };
 const taskWhere = (ref) => (STEERING === "github-issues" ? `GitHub issue ${ref} (gh issue view ${ref.replace("#", "")})` : `docs/tasks/${path.basename(ref)}`);
 const reportFor = (ref) => `docs/reports/${STEERING === "github-issues" ? `issue-${ref.replace("#", "")}` : path.basename(ref, ".md")}.md`;
@@ -64,8 +80,8 @@ ${REPLY_DEV}`;
   rework() {
     const [T, nArg, ref, branch, rvs] = pos; const rv = split(rvs); const level = opt("--level", "1"); const extra = opt("--extra", "");
     const n = wholeFrom1("the rework number", nArg);
-    if (n >= maxRounds) refuse(afterLimit(`rework ${n} would need review round ${n + 1}`, T, ref, branch));
-    return `You are the Developer for ${T}, REWORK ${n}, in this existing worktree on branch ${branch}.
+    checkLimit(n >= maxRounds, `rework ${n} would need review round ${n + 1}, beyond reviews.maxRounds (${maxRounds})`, n, T, ref, branch);
+    return `You are the Developer for ${T}, REWORK ${n}, in this existing worktree on branch ${branch}.${afterPass !== undefined ? `\nThis rework follows round ${n}, which passed: ${afterPass}. Fix that; the review file below names it.` : ""}
 Steps:
 1. git fetch origin. Confirm you are on ${branch} at origin/${branch}. Read ${rv.file} (git show origin/${rv.branch}:${rv.file}), ${taskWhere(ref)}, {{AGENTS_READ}} and the worker rules in docs/coordinator.md.
 2. Fix the functional findings exactly as the review states (debt candidates are not part of the rework), each test-first: write the review's proving test through the public entry point, see it fail, then fix. Small commits, push after each finding.${extra ? " " + extra : ""}
@@ -79,14 +95,14 @@ ${REPLY_DEV}`;
   },
   test() {
     const [T, ref, branch, sha] = pos; const round = wholeFrom1("--round", opt("--round", "1")); const rv = split(opt("--review"));
-    if (round > maxRounds) refuse(afterLimit(`review round ${round} is beyond reviews.maxRounds (${maxRounds})`, T, ref, branch));
+    checkLimit(round > maxRounds, `review round ${round} is beyond reviews.maxRounds (${maxRounds})`, round - 1, T, ref, branch);
     // From round 2 the Tester narrows WHAT it reviews (previous findings, the task's own changes since the last reviewed
     // commit), not WHICH checks it applies (#46, #47).
     const prev = round - 1, prevFile = `docs/reviews/${T}-review-${prev}.md`, prevBranch = `${BRANCH_PREFIX}${T.toLowerCase()}-review-${prev}`;
     const scope = prev
-      ? `2. Re-check, round ${round}. <A> is the 'Reviewed commit' in the round-${prev} findings ${prevFile} (git show origin/${prevBranch}:${prevFile}); <head> is the full SHA you review. If git merge-base --is-ancestor <A> <head> fails (the branch was rebased or rewritten), review as in round 1: the whole diff against its merge-base with origin/${MAIN}. Otherwise review only (a) every blocker and major in ${prevFile}: fixed or not, with the test that proves it; and (b) the task's own changes since <A>: the commits of git log --no-merges -p <A>..<head> ^origin/${MAIN} (^origin/${MAIN} leaves out every commit that came in from ${MAIN}), and for each merge commit of git log --merges --format=%H <A>..<head> ^origin/${MAIN} what the merge itself changed (git show --remerge-diff <merge>). Apply every round-1 check to these changes: the acceptance items they touch, 'ponytail-review' on them, and: ${CHECKS.replace(/^Check /, "check ")} Raise a new blocker or major only for a functional defect, a safety problem (a change that could reach a real external system, data loss, a secret, real data) or a wrong level or unannounced architectural change in these changes; anything else is a minor or a debt candidate. Code outside these changes was reviewed in an earlier round and is not reviewed again; the full gates below still run on the whole tree.`
+      ? `2. Re-check, round ${round}. <A> is the 'Reviewed commit' in the round-${prev} findings ${prevFile} (git show origin/${prevBranch}:${prevFile}); <head> is the full SHA you review. Review only (a) every blocker and major in ${prevFile}: fixed or not, with the test that proves it; and (b) the task's own changes since <A>: the commits of git log --no-merges -p <A>..<head> ^origin/${MAIN} (^origin/${MAIN} leaves out every commit that came in from ${MAIN}), and for each merge commit of git log --merges --format=%H <A>..<head> ^origin/${MAIN} what the merge itself changed (git show --remerge-diff <merge>; if that errors, as on git before 2.36, or prints 'Skipping remerge-diff for octopus merges', use git show --cc <merge> instead and review every file it shows). If git merge-base --is-ancestor <A> <head> fails (the branch was rebased or rewritten), (b) is instead the whole diff against its merge-base with origin/${MAIN}, as in round 1; (a) stays. Apply every round-1 check to these changes: the acceptance items they touch, 'ponytail-review' on them, and: ${CHECKS.replace(/^Check /, "check ")} Raise a new blocker or major only for a functional defect, a safety problem (a change that could reach a real external system, data loss, a secret, real data) or a wrong level or unannounced architectural change in these changes; anything else is a minor or a debt candidate. Code outside these changes was reviewed in an earlier round and is not reviewed again; the full gates below still run on the whole tree.`
       : `2. Review the whole diff against its merge-base with origin/${MAIN} against every Result and Observable acceptance item. Run 'ponytail-review' on the full diff. ${CHECKS}`;
-    return `You are the INDEPENDENT REVIEWER (Worker Tester, round ${round}) for ${T} on origin/${branch} (fetch; state the full SHA, expected ${sha} or later).
+    return `You are the INDEPENDENT REVIEWER (Worker Tester, round ${round}) for ${T} on origin/${branch} (fetch; state the full SHA, expected ${sha} or later).${afterPass !== undefined ? `\nThis round re-checks the task after round ${prev} passed: ${afterPass}.` : ""}
 Steps:
 1. Read docs/review-protocol.md, ${taskWhere(ref)}${rv.file ? `, the passing architecture spec review ${rv.file} (origin/${rv.branch}; its binding instructions are part of the spec)` : ""} and the report on the branch.
 ${scope}

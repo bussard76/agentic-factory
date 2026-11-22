@@ -26,12 +26,14 @@ Missing or weak tests, coverage gaps, edge cases, security, load and style are *
 
 **Rounds are bounded at {{MAX_ROUNDS}}.** A round that fails while rounds are left gets a rework and a new round. After round {{MAX_ROUNDS}} fails there is no rework and no further round (`mkspec` refuses both). The Controller runs the final functional re-evaluation (`mkspec reeval`) on the commit that round reviewed, as `CONTROLLER.md` says under "Tester failed". On `pass` exactly that commit is integrated. The task branch must not move past it, because the push gate accepts nothing after a reviewed commit except `docs/reviews/`. A failing re-evaluation, or more rounds (a higher `reviews.maxRounds`, a whole number of at least 1), is {{HUMAN}}'s decision.
 
+**A fix after a pass is no failed round:** the limit counts failed review rounds. When the last round passed and the task then needs a fix (a failed conformance review, a red wave, a merge conflict), rework with `mkspec rework <T> <n> … --after-pass "<what happened>"` and re-check with `mkspec test --round <n+1> --after-pass "<what happened>"`; `mkspec` allows a step beyond the limit only when the round before it says `Verdict: pass` on origin, and its refusal says which verdict it found.
+
 **From round 2 the Tester narrows what it reviews, not which checks it applies.** Let A be the previous findings file's `Reviewed commit` and the head be the SHA under review. It reviews:
 
 - every `blocker` and `major` of the previous round's findings file: fixed or not, with the test that proves it;
-- the task's own changes since A: the commits of `git log --no-merges -p A..<head> ^origin/{{MAIN}}` (`^origin/{{MAIN}}` leaves out every commit that came in from `{{MAIN}}`), and for each merge commit of `git log --merges A..<head> ^origin/{{MAIN}}` what the merge itself changed (`git show --remerge-diff <merge>`).
+- the task's own changes since A: the commits of `git log --no-merges -p A..<head> ^origin/{{MAIN}}` (`^origin/{{MAIN}}` leaves out every commit that came in from `{{MAIN}}`), and for each merge commit of `git log --merges A..<head> ^origin/{{MAIN}}` what the merge itself changed (`git show --remerge-diff <merge>`). If that errors (git before 2.36) or skips the merge (an octopus merge prints `Skipping remerge-diff for octopus merges`), use `git show --cc <merge>` and review every file it shows.
 
-If A is not an ancestor of the head (the branch was rebased or rewritten), the round reviews the whole diff, as round 1 does.
+If A is not an ancestor of the head (the branch was rebased or rewritten), the second point becomes the whole diff, as in round 1; the first point stays.
 
 Every check of round 1 and every item under "Always checked" applies to these changes. A new `blocker` or `major` is raised only for a functional defect, a safety problem (a change that could reach a real external system, data loss, a secret, real data), or a wrong level or unannounced architectural change in these changes; anything else is a `minor` or a debt candidate. Code outside these changes was reviewed in an earlier round and is not reviewed again. The full gates still run on current `{{MAIN}}` plus the branch, and the new head gets its own `Reviewed commit`, so product code keeps its independent review before every push.
 

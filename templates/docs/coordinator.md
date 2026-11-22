@@ -53,7 +53,7 @@ The Controller runs `node capacity.mjs` before every start and follows its verdi
 ## Review loop
 
 1. Developer done → Tester (fresh context) on current `{{MAIN}}` plus the branch.
-2. Tester failed → rework in the same worktree with the findings unchanged; after two failures one tier higher.
+2. Tester failed → while rounds are left ({{MAX_ROUNDS}} at most), rework in the same worktree with the findings unchanged and a new round; with more than two rounds allowed, the rework after the second failure runs one tier higher. After the last round fails: no rework, `mkspec reeval` on the commit that round reviewed; a failing re-evaluation goes to {{HUMAN}}. A fix after a passing round (failed conformance, red wave, merge conflict) is no failed round: rework and re-check with `--after-pass "<what happened>"`.
 3. Tester passed → conformance review for level 2/3, else into the next wave.
 4. A wave starts when {{WAVE_PASSED}} passed tasks wait, one has waited {{WAVE_MINUTES}} minutes, or a task is on the critical path. The wave merges, runs the full gates once, and pushes to `{{MAIN}}`.
 5. A red wave: a known load flake gets one isolated rerun; three green isolated runs are the evidence. A real failure goes back to the task.
