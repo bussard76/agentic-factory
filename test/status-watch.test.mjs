@@ -50,6 +50,16 @@ test("a change reaches the Front agent's terminal, found by what Orca knows, wha
   h.done();
 });
 
+test("once a bot is the Front agent, a terminal watch left from before sends nothing", () => {
+  const h = setup({ terminals: (p) => [agentIn(p)] });
+  h.status("nothing"); h.run();
+  const file = path.join(h.watch, "factory.config.json"), c = JSON.parse(fs.readFileSync(file, "utf8"));
+  c.hosts.frontAgent = { kind: "orca-bot", bot: "front-bot" }; fs.writeFileSync(file, JSON.stringify(c));
+  h.status("a question"); h.run();
+  assert.equal(h.calls("send").length + h.calls("set").length, 0);
+  h.done();
+});
+
 test("a busy terminal is left alone: the alert waits, the sidebar shows it, and it arrives once", () => {
   const h = setup({ terminals: (p) => [agentIn(p)], idle: false });
   h.status("nothing"); h.run(); h.status("a question"); h.run();

@@ -230,8 +230,15 @@ test("start with a bot creates one automation with the precheck instead of the t
   assert.equal(m.creates().length, 1);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(watchDir, "projects.json"), "utf8")).map((p) => p.name), ["alpha", "beta"]);
   assert.equal(JSON.parse(beta.cli("status", "--json").stdout).setup.frontAgent.watchAutomation, true);
-  // The precheck as Orca runs it: a baseline, so the bot is not woken.
-  assert.equal(spawnSync("sh", [path.join(watchDir, "botwatch.sh")], { encoding: "utf8", env: { PATH: "/usr/bin:/bin", HOME: m.home } }).status, 1);
+  // The precheck as Orca runs it (through a shell, without this session's PATH): a baseline, then news for beta.
+  const precheck = () => spawnSync(arg("--precheck"), { shell: true, encoding: "utf8", env: { PATH: "/usr/bin:/bin", HOME: m.home } });
+  const status = path.join(m.home, "controller-beta/status.md");
+  fs.writeFileSync(status, "## Needs Hu\n- nothing\n## Problems\n");
+  assert.equal(precheck().status, 1, precheck().stderr);
+  fs.writeFileSync(status, "## Needs Hu\n- Q1: A or B?\n## Problems\n");
+  assert.equal(precheck().status, 0);
+  const wake = fs.readFileSync(path.join(watchDir, "wake.md"), "utf8");
+  assert.ok(wake.includes(`## beta\nRules: ${path.join(m.home, "front-agent/beta/FRONT_BOT.md")}\nProject: ${beta.dir}\n- NEEDS HU: - Q1: A or B?`), wake);
   m.done();
 });
 
@@ -254,5 +261,16 @@ test("a bot that Orca does not know fails start and shows in status and doctor; 
   assert.doesNotMatch(fs.readFileSync(path.join(t.dir, ".factory/controller/CONTROLLER.md"), "utf8"), /\{\{/);
   assert.equal(m.creates().length, 0);
   spawnSync("pkill", ["-f", path.join(m.home, "front-agent")]);
+  // A Controller on another host cannot reach the bot: its handbook says so and sends nothing.
+  const remote = m.project("epsilon", { kind: "orca-bot", bot: "front-bot" });
+  const file = path.join(remote.dir, "factory.config.json"), c = JSON.parse(fs.readFileSync(file, "utf8"));
+  c.hosts.workers.push({ name: "srv", kind: "remote", ssh: "srv", projectsDir: "~/projects", workspacesDir: "~/orca/workspaces" });
+  c.hosts.controller.host = "srv";
+  fs.writeFileSync(file, JSON.stringify(c, null, 2));
+  assert.equal(remote.cli("update").status, 0);
+  const handbook = fs.readFileSync(path.join(remote.dir, ".factory/controller/CONTROLLER.md"), "utf8");
+  assert.match(handbook, /Do not send it to the bot: `bot:` only reaches bots on the same machine/);
+  assert.doesNotMatch(handbook, /--to "bot:/);
+  assert.match(fs.readFileSync(path.join(remote.dir, ".factory/front-agent/FRONT_BOT.md"), "utf8"), /ssh srv cat ~\/controller-epsilon\/status\.md/);
   m.done();
 });

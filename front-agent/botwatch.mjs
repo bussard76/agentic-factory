@@ -109,7 +109,7 @@ function main() {
   writeState(here("botwatch.state"), state);
   if (!woke.length) return 1;
   const lines = [`# Watch ${new Date().toISOString()}`, ""];
-  for (const { project, reasons } of woke) lines.push(`## ${project.name}`, `Rules: ${path.join(project.dir, "FRONT_BOT.md")}`, ...reasons.map((r) => `- ${r}`), "");
+  for (const { project, reasons } of woke) lines.push(`## ${project.name}`, `Rules: ${path.join(project.dir, "FRONT_BOT.md")}`, ...(project.projectDir ? [`Project: ${project.projectDir}`] : []), ...reasons.map((r) => `- ${r}`), "");
   fs.writeFileSync(here("wake.md"), lines.join("\n"));
   console.log(lines.join("\n"));
   return 0;

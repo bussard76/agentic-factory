@@ -14,7 +14,7 @@ End your turn when you have nothing to do: Orca wakes you. Never poll and never 
 
 ## At every wake-up and session start
 
-1. In the project directory, run `{{FACTORY_CLI}} status --json`; read `{{CONTROLLER_DIR}}/status.md` ({{STATUS_READ}}).
+1. You run in your own folder, not in the project. The project's checkout is the `Project:` line in `wake.md`, or `projectDir` in `~/front-agent/{{PROJECT}}/front-agent.json`. Run `{{FACTORY_CLI}} status --json` there, and do all work on the project there. Read `{{CONTROLLER_DIR}}/status.md` ({{STATUS_READ}}).
 2. Compare with what {{HUMAN}} already knows: your open items and this chat. Report only what is new.
 3. Act on the phase as `FRONT_AGENT.md` describes ("At every session start"); the phase is a proposal, {{HUMAN}} decides.
 

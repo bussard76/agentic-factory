@@ -33,6 +33,8 @@ process.on("exit", () => fs.rmSync(LOCK, { recursive: true, force: true }));
 process.on("SIGTERM", () => process.exit(0));
 
 const cfg = loadConfig(HERE);
+// A bot took over (hosts.frontAgent.kind = orca-bot): a schedule left from before, for example a cron line, stays silent.
+if (cfg.hosts?.frontAgent?.kind === "orca-bot") process.exit(0);
 const host = controllerHost(cfg);
 const ctlDir = cfg.hosts.controller?.controllerDir ?? "~/controller";
 const WORKTREE_MAX = (host.capacity?.suiteWorkersMax ?? cfg.capacity?.suiteWorkersMax ?? 4) + (host.capacity?.readOnlyWorkersMax ?? cfg.capacity?.readOnlyWorkersMax ?? 4) + 2;

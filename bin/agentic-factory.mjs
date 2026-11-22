@@ -1020,7 +1020,7 @@ function armBotWatch(c, frontAgentDir) {
   let projects = [];
   try { projects = JSON.parse(fs.readFileSync(listFile, "utf8")); } catch {}
   if (!Array.isArray(projects)) projects = [];
-  projects = [...projects.filter((p) => p?.name !== c.project.name), { name: c.project.name, dir: frontAgentDir }];
+  projects = [...projects.filter((p) => p?.name !== c.project.name), { name: c.project.name, dir: frontAgentDir, projectDir: cwd }];
   fs.writeFileSync(listFile, JSON.stringify(projects, null, 2) + "\n");
   say(`Front agent bot "${name}": watches ${projects.map((p) => p.name).join(", ")} (${dir.replace(os.homedir(), "~")})`);
   if (process.env.FACTORY_SKIP_ORCA === "1" || c.agents.runner !== "orca") { say(`Bot watch: create the automation in Orca for the bot "${name}": every 5 minutes, precheck sh ${path.join(dir, "botwatch.sh")}`); return 0; }
