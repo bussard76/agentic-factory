@@ -23,6 +23,8 @@ Rules (thresholds in `factory.config.json` → `capacity`):
 
 - a new **suite worker** starts only when CPU pressure avg10 is below `cpuAvg10MaxPercent`, memory pressure avg10 below `memoryAvg10MaxPercent`, available memory above `availableMemoryMinGb`, the gate queue shorter than `gateQueueMax`, and the count below `suiteWorkersMax`
 - **read-only workers** (Architects, Auditors, spec reviews) are cheap and start unless memory is short, up to `readOnlyWorkersMax`
+- only **running** workers count: an Orca worker until Orca reports its dispatch settled, even if its agent still sits at the prompt after `worker_done`; a worker whose state cannot be read counts as running
+- a `wait` verdict carries `measureAgainAt` (one minute later) and `capOnly`: `true` when nothing but a cap holds the start back, no pressure
 - the **gate slot counts** rise and fall with pressure within the configured ranges; `gate` reads them from `gate-slots.json`
 - every worker terminal gets a memory and process limit (`capacity.worker`) where the runner supports it
 
@@ -49,6 +51,8 @@ With `capacity.calibration.mode: auto`, `capacity.mjs` keeps a state file per ho
 - every step is recorded in the state's history and in the journal; the nightly audit checks whether a step raised throughput or only waiting
 
 `manual` uses the configured caps as they are. `--reset` restarts the calibration.
+
+`--set-suite <n> --by "<quote>"` sets the suite cap by hand when the human asks for it. The quote and the new cap go into the journal as a `decision`. The calibration continues from there: the cap still rises while the host stays quiet and falls on pressure, but the step-down never goes below the start value, so a cap set below it stays until it is set again or reset.
 
 ## Hosts are optional and plural
 

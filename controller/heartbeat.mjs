@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { findControllerTerminal } from "./controller-terminal.mjs";
-import { HOSTS, HUMAN, MAIN, ORCA, PROJECT, PROJECT_DIR, STEERING, config, file, hostNamed, orcaEnvArgsOn, worktreeRefOn } from "./lib.mjs";
+import { HOSTS, HUMAN, MAIN, ORCA, PROJECT, PROJECT_DIR, STEERING, config, dispatchStates, file, hostNamed, orcaEnvArgsOn, workerStatus, worktreeRefOn } from "./lib.mjs";
 
 const IDLE_WAIT_MS = 15_000;
 const IDLE_WAKE_MS = 55 * 60_000; // Nothing to do: wake about hourly, a little under so a 60-minute tick is not missed.
@@ -42,8 +42,11 @@ const startedTickets = () => (STEERING === "github-issues"
 const pendingWork = () => {
   const reasons = [];
   if (readText("inbox.md").trim()) reasons.push("inbox");
+  // Only running workers are work. A finished worker's record waits for cleanup and must not wake the Controller.
   try {
-    if (Object.keys(JSON.parse(fs.readFileSync(file("workers.json"), "utf8"))).length) reasons.push("workers");
+    const { running, unknown } = workerCounts(JSON.parse(fs.readFileSync(file("workers.json"), "utf8")));
+    if (running) reasons.push("workers");
+    else if (unknown) reasons.push("workers unreadable");
   } catch (error) { if (error.code !== "ENOENT") reasons.push("workers unreadable"); }
   try {
     const ready = readyTickets();
@@ -57,7 +60,24 @@ for (const host of HOSTS) {
   try { terminalsByHost[host.name] = orca("terminal", "list", ...orcaEnvArgsOn(host)).result.terminals; }
   catch (error) { terminalsByHost[host.name] = null; log(`terminal list failed on ${host.name}: ${short(error)}`); }
 }
-const allTerminals = Object.values(terminalsByHost).flatMap((t) => t ?? []);
+// Running and unknown workers in a workers.json object, from Orca's dispatch state (lib.mjs workerStatus). Asked once per run.
+let counted;
+const workerCounts = (records) => {
+  if (counted) return counted;
+  counted = { running: 0, unknown: 0 };
+  const byHost = Object.groupBy(Object.values(records), (w) => w.host ?? "local");
+  for (const [hostName, list] of Object.entries(byHost)) {
+    let host;
+    try { host = hostNamed(hostName); } catch { counted.unknown += list.length; continue; }
+    const listed = terminalsByHost[host.name] ? new Set(terminalsByHost[host.name].map((t) => t.handle)) : null;
+    const dispatches = list.some((w) => w.dispatch) ? dispatchStates(list.map((w) => w.dispatch), host) : {};
+    for (const w of list) {
+      const status = workerStatus(w, { dispatches, terminals: listed, pidAlive: (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } } });
+      if (status !== "finished") counted[status]++;
+    }
+  }
+  return counted;
+};
 // This script runs in the Controller directory, so its folder name is the one an agent CLI like pi puts in the title.
 const terminal = findControllerTerminal(terminalsByHost[config.hosts?.controller?.host ?? "local"], title, file("."));
 
@@ -96,7 +116,8 @@ const showNotice = (text, status, unread) => {
   log(`notice: ${text}`);
 };
 const updateNotice = () => {
-  const active = Object.values(readJson("workers.json", {})).filter((w) => allTerminals.some((t) => t.handle === w.terminal)).length;
+  const { running, unknown } = workerCounts(readJson("workers.json", {}));
+  const active = running + unknown;
   const open = needsHuman();
   if (readText("inbox.md").trim()) return showNotice(say("Working: instruction from the inbox", "Arbeitet: Auftrag aus der Inbox"), "in-progress", false);
   if (open.length) return showNotice(`${say("Waiting for you", "Wartet auf dich")}: ${open[0].slice(2, 200)}`, "in-review", true);

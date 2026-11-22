@@ -114,7 +114,7 @@ Some agent tools limit which paths a session may read. When `start` sets up a lo
 
 `controller/heartbeat.mjs` wakes the Controller from outside, so noticing finished work does not depend on the Controller itself. `agentic-factory start` adds one cron line per Controller directory on the Controller's host and leaves the rest of the crontab alone. Set `hosts.controller.heartbeat` to `false` to opt out.
 
-- **Every minute:** a new worker message, a finished wave or an inbox entry wakes the Controller. At each tenth minute it also checks workers and ready tickets, and an unreadable source counts as work.
+- **Every minute:** a new worker message, a finished wave or an inbox entry wakes the Controller. At each tenth minute it also checks running workers and ready tickets, and an unreadable source counts as work. A worker whose dispatch Orca reports settled is no work, even while its record waits in `workers.json` for cleanup.
 - **Busy Controller:** a timeout on "idle" counts as busy. The signal stays pending until a wake succeeded, and every attempt goes to `heartbeat.log`. After 5 minutes an inbox entry reaches the running session as a one-line pointer, once.
 - **Waiting for the human:** if `status.md` lists anything under "Needs <human>" and nothing else is pending, it does not wake the Controller. Otherwise an idle Controller is woken about hourly.
 - **Without a model:** it writes what the Controller is doing into the comment and status of the project's sidebar entry, and marks a finished worker's entry at once.

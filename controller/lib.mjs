@@ -74,6 +74,54 @@ export const orcaJson = (args, h) => {
   return JSON.parse(raw.split("\n").filter((l) => !l.includes('"_keepalive"')).join("\n"));
 };
 
+// --- finished workers --------------------------------------------------------------------------
+// A worker is finished when Orca reports its dispatch settled, not when its terminal is gone: after worker_done the agent
+// can sit at its prompt for hours. Orca's terminal list cannot tell (it has no status field, and a structured chat worker
+// is not in it at all), so cleanup, capacity and the heartbeat all ask the dispatch through these two functions.
+export const SETTLED_STATES = new Set(["succeeded", "failed", "stopped", "abandoned"]);
+/**
+ * "finished", "running" or "unknown" for one workers.json record. `dispatches` comes from dispatchStates(): id →
+ * { state, keptOpen }, where state "gone" means Orca no longer knows the dispatch; an id missing from it is unknown.
+ * `terminals` is a Set of listed terminal handles or null when the list failed. Unknown never counts as finished.
+ */
+export function workerStatus(w, { dispatches = {}, terminals = null, pidAlive = () => false } = {}) {
+  if (w.dispatch) {
+    const state = dispatches[w.dispatch]?.state;
+    if (!state) return "unknown";
+    return state === "gone" || SETTLED_STATES.has(state) ? "finished" : "running";
+  }
+  if (w.terminal) return terminals ? (terminals.has(w.terminal) ? "running" : "finished") : "unknown";   // records from before dispatches
+  if (w.pid) return pidAlive(w.pid) ? "running" : "finished";
+  return "finished";
+}
+/** Orca's answer to a call, parsed even when it exits non-zero (an error answer carries its code); null without JSON. */
+const orcaAnswer = (args, h) => {
+  const r = spawnSync(ORCA, [...args, ...(h ? orcaEnvArgsOn(h) : []), "--json"], { encoding: "utf8", maxBuffer: 1 << 26 });
+  try { return JSON.parse(String(r.stdout ?? "").split("\n").filter((l) => l.trim() && !l.includes('"_keepalive"')).join("\n")); } catch { return null; }
+};
+/**
+ * Dispatch state for the given ids on host h: one paged worker-list (newest first, stops once every id is seen), then
+ * worker-show for the rest. keptOpen marks a worker someone kept open (worker-keep-open); cleanup leaves it alone.
+ */
+export function dispatchStates(ids, h) {
+  const want = [...new Set(ids.filter(Boolean))], out = {};
+  const missing = () => want.some((id) => !out[id]);
+  let cursor;
+  for (let page = 0; page < 10 && missing(); page++) {
+    const r = orcaAnswer(["orchestration", "worker-list", "--full", "--limit", "100", ...(cursor ? ["--cursor", cursor] : [])], h);
+    if (!r?.ok) break;
+    for (const x of r.result?.workers ?? []) if (want.includes(x.dispatchId)) out[x.dispatchId] = { state: x.workerState ?? x.state, keptOpen: x.resource?.retainedReason === "user_requested" };
+    cursor = r.result?.nextCursor;
+    if (!cursor) break;
+  }
+  for (const id of want.filter((id) => !out[id])) {
+    const r = orcaAnswer(["orchestration", "worker-show", "--dispatch", id, "--full"], h);
+    if (r?.ok && (r.result?.worker?.state ?? r.result?.state)) out[id] = { state: r.result.worker?.state ?? r.result.state, keptOpen: r.result.terminalResource?.retainedReason === "user_requested" };
+    else if (r?.error?.code === "dispatch_not_found") out[id] = { state: "gone" };
+  }
+  return out;
+}
+
 // --- misc --------------------------------------------------------------------------------------
 export const sh = (cmd, args, opts = {}) => execFileSync(cmd, args, { encoding: "utf8", maxBuffer: 1 << 26, ...opts });
 export const trySh = (cmd, args, opts = {}) => { try { return sh(cmd, args, opts); } catch { return ""; } };
