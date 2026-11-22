@@ -67,6 +67,7 @@ Your tools live in `~/front-agent/{{PROJECT}}`; you work in the project director
 | `node relay.mjs` | transition only: forward worker events addressed to this machine to the Controller's `events.md` |
 | `preview-update.sh` | keep the local preview on the current `origin/{{MAIN}}` (runs every 3 min from the launchd agent `{{PREVIEW_PLIST}}`) |
 | `handover-template.md` | the morning handover |
+| `FRONT_BOT.md`, `botwatch.mjs` | only with an Orca bot as the Front agent (`hosts.frontAgent.kind: orca-bot`): these rules for the bot, and the precheck of its watch automation |
 
 ## Commit pattern on this machine
 

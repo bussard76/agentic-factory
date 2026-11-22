@@ -8,6 +8,7 @@ import path from "node:path";
 import readline from "node:readline/promises";
 import { findControllerTerminal } from "../controller/controller-terminal.mjs";
 import { heartbeatCronScript, statusWatchCronScript, statusWatchLabel, statusWatchPlist } from "./heartbeat-cron.mjs";
+import { applyReadGrants } from "./read-grants.mjs";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
@@ -374,6 +375,12 @@ function templateVars(c) {
     PREVIEW_URL: c.hosts.frontAgent.preview.enabled ? `http://localhost:${c.hosts.frontAgent.preview.port}` : "n/a", PREVIEW_PORT: String(c.hosts.frontAgent.preview.port), PREVIEW_CMD: c.hosts.frontAgent.preview.command, PREVIEW_ENV_FILE: c.hosts.frontAgent.preview.envFile ?? "", INSTALL_CMD: c.commands.install ?? "",
     SSH_ALIAS: remote?.ssh ?? "local",
     CONTROLLER_LOCATION: ctl.kind === "local" ? `on this machine (\`${c.hosts.controller.controllerDir ?? "~/controller"}\`)` : `on the server \`${ctl.name}\` (ssh alias \`${ctl.ssh}\`, \`${c.hosts.controller.controllerDir ?? "~/controller"}\`)`,
+    STATUS_READ: ctl.kind === "local" ? "a file on this machine" : `on \`${ctl.name}\`: \`ssh ${ctl.ssh} cat ${c.hosts.controller.controllerDir ?? "~/controller"}/status.md\``,
+    FRONT_BOT: c.hosts.frontAgent?.bot || "<bot name>",
+    // Empty for the terminal Front agent, so its CONTROLLER.md stays as it was.
+    FRONT_BOT_EVENTS: frontKind(c) !== "orca-bot" ? "" : `\n- **With an Orca bot as the Front agent** (\`${c.hosts.frontAgent.bot || "<bot name>"}\`): on the same events, append the same line to \`${c.hosts.controller.controllerDir ?? "~/controller"}/front-events.log\`${ctl.kind === "local"
+      ? ` and send it to the bot: \`orca orchestration send --to "bot:${c.hosts.frontAgent.bot || "<bot name>"}" --type question --subject "<KIND>" --body "<the line>"\` for a new "Needs ${c.project.humanName}" item or a block, \`--type status\` for every other event. \`inbox.md\` stays the record of orders.`
+      : `. Do not send it to the bot: \`bot:\` only reaches bots on the same machine, and a server cannot send to a client. The bot reads your \`status.md\` over ssh every 5 minutes, so keep "Needs ${c.project.humanName}" and "Problems" there current; it sends orders through \`inbox.md\` and text into your terminal.`} A question the bot can answer from ${c.project.humanName}'s recorded decisions, without ${c.project.humanName}, goes into \`status.md\` under \`## Needs front agent\`.`,
     INBOX_CMD: ctl.kind === "local" ? `\`cat >> ${c.hosts.controller.controllerDir ?? "~/controller"}/inbox.md\`` : `\`ssh ${ctl.ssh} 'cat >> ${c.hosts.controller.controllerDir ?? "~/controller"}/inbox.md'\``,
     PREVIEW_PLIST: `de.${c.project.name}.preview`, PREVIEW_LABEL: `de.${c.project.name}.preview`, PREVIEW_SCRIPT: `${os.homedir()}/front-agent/${c.project.name}/preview-update.sh`, HOME: os.homedir(),
     FACTORY_CLI: `node ${path.join(ROOT, "bin/agentic-factory.mjs").replace(os.homedir(), "~")}`,
@@ -683,6 +690,16 @@ function doctor() {
   if (watchRequired(c) && readWatchProblem(c)) info(`status watch cannot reach the terminal: ${readWatchProblem(c)}`);
   // Under WSL the cron service does not always run, and then the schedule is there but nothing happens.
   if (watchRequired(c)) statusWatchRuns(c) ? ok("status watch running") : info(`status watch not running: without it, finished work and open questions do not reach the Front agent. Run start${/microsoft/i.test(os.release()) ? "; under WSL also check the cron service (sudo service cron start)" : ""}`);
+  if (!["terminal", "orca-bot"].includes(frontKind(c))) bad(`hosts.frontAgent.kind "${frontKind(c)}" (terminal or orca-bot)`);
+  if (frontKind(c) === "orca-bot") {
+    const b = botWatchStatus(c);
+    if (!b.bot) bad("hosts.frontAgent.bot (kind is orca-bot, but no bot is named)");
+    else if (process.env.FACTORY_SKIP_ORCA === "1" || c.agents.runner !== "orca") info(`Front agent bot ${b.bot}: not checked (no Orca here)`);
+    else {
+      b.botExists ? ok(`Front agent bot ${b.bot}`) : bad(`Front agent bot ${b.bot} (not in \`orca bot list\`: create it in Orca, then run start)`);
+      if (b.botExists) b.watchAutomation ? ok(`bot watch automation for ${b.bot}`) : bad(`bot watch automation for ${b.bot} (run start)`);
+    }
+  }
   for (const t of [c.agents.default, c.agents.fallback?.agent].filter(Boolean)) has(t) ? ok(`${t} CLI`) : info(`${t} CLI not on this machine`);
   if (c.agents.runner === "orca") has("orca") || has("orca-ide") ? ok("orca CLI") : bad("orca CLI (runner is orca)");
   // User-level skills: the Controller and Front agent sessions run outside the repo and need these on their host.
@@ -849,6 +866,8 @@ function collectStatus() {
     statusWatch: statusWatchRuns(c),
     controller: { host: ctl.host, statusAgeMin: ctl.ageMin, terminal: ctlTerminal, running: ctlTerminal || (ctl.ageMin !== null && ctl.ageMin <= 25) },
   };
+  // A bot Front agent: the bot and its watch automation instead of the terminal's status watch.
+  if (frontKind(c) === "orca-bot") { s.setup.frontAgent = { kind: "orca-bot", ...botWatchStatus(c) }; s.setup.statusWatch = s.setup.frontAgent.watchAutomation; }
   // The work: design exports, tickets by status, domain and architecture documents, open debt, open questions.
   const features = fs.existsSync("design") ? fs.readdirSync("design", { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) : [];
   const tickets = { total: 0, byStatus: {} };
@@ -881,6 +900,7 @@ function collectStatus() {
   // A hint, not a phase: a laptop that slept or a machine without cron must not hide open questions behind `start`.
   if (s.setup.frontAgentBundle && watchRequired(c) && !s.setup.statusWatch) s.next = `The status watch is not running, so finished work and open questions do not reach you: run \`start\`, and if that does not help, \`doctor\`. Then: ${s.next}`;
   else if (watchRequired(c) && readWatchProblem(c)) s.next = `The status watch runs but cannot reach your terminal (${readWatchProblem(c)}). Then: ${s.next}`;
+  else if (s.setup.frontAgent && process.env.FACTORY_SKIP_ORCA !== "1" && c.agents.runner === "orca" && !(s.setup.frontAgent.botExists && s.setup.frontAgent.watchAutomation)) s.next = `${s.setup.frontAgent.botExists ? `The bot "${s.setup.frontAgent.bot}" has no watch automation, so finished work and open questions do not wake it: run \`start\`` : `The Front agent bot "${s.setup.frontAgent.bot ?? "(hosts.frontAgent.bot is empty)"}" is not in \`orca bot list\`: create it in Orca, then run \`start\``}. Then: ${s.next}`;
   s.hints = [
     ...(!s.work.glossary ? ["the business terms are not written down yet (no GLOSSARY.md): capture them with domain-modeling while specifying"] : []),
     ...(c.architecture?.mode === undefined ? ["no decision on ARCHITECTURE.md yet: ask the human, then set architecture.mode to architect or off in factory.config.json and run update"] : []),
@@ -900,6 +920,7 @@ function status() {
     say(`${st.hooksArmed ? "OK     " : "MISSING"} hooks armed`);
     say(`${st.userSkills ? "OK     " : "MISSING"} user-level skills (orchestration, orca-cli)`);
     say(`${st.frontAgentBundle ? "OK     " : "MISSING"} Front agent bundle`);
+    if (st.frontAgent) say(`${st.frontAgent.botExists ? "OK     " : "MISSING"} Front agent bot ${st.frontAgent.bot ?? "(hosts.frontAgent.bot is empty)"}\n${st.frontAgent.watchAutomation ? "OK     " : "MISSING"} its watch automation`);
     say(`${st.controller.running ? "OK     " : "MISSING"} Controller on ${st.controller.host}${st.controller.statusAgeMin !== null ? ` (status.md ${st.controller.statusAgeMin} min old)` : ""}`);
     const w = s.work;
     say(`\nDesigned features: ${w.designedFeatures.length ? w.designedFeatures.join(", ") : "none"}`);
@@ -953,7 +974,66 @@ function scheduleStatusWatch(c, frontAgentDir) {
   }
   return r;
 }
-const watchRequired = (c) => c.agents.runner === "orca" && process.env.FACTORY_SKIP_ORCA !== "1" && c.hosts.frontAgent?.statusWatch !== false;
+// hosts.frontAgent.kind: "terminal" (the default) or "orca-bot". A bot is woken by an Orca automation, not by statuswatch.mjs.
+const frontKind = (c) => c?.hosts?.frontAgent?.kind ?? "terminal";
+const watchRequired = (c) => frontKind(c) === "terminal" && c.agents.runner === "orca" && process.env.FACTORY_SKIP_ORCA !== "1" && c.hosts.frontAgent?.statusWatch !== false;
+
+// --- the bot Front agent -----------------------------------------------------------------------------
+// One watch directory and one automation per bot, shared by every project that names the bot.
+const botSlug = (name) => `${String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "bot"}-${hash(String(name)).slice(0, 6)}`;
+const botWatchDir = (bot) => path.join(os.homedir(), "front-agent", ".bots", botSlug(bot));
+const botAutomationName = (bot) => `agentic-factory watch · ${bot}`;
+const orcaJson = (...a) => { try { return JSON.parse(sh(ORCA_BIN, [...a, "--json"], { timeout: 20000 })); } catch { return null; } };
+// The bot by name (as `orca bot list` shows it) and its watch automation; null where Orca could not be asked.
+function findBot(name) {
+  const bots = orcaJson("bot", "list")?.result?.bots;
+  if (!Array.isArray(bots)) return { reachable: false, bot: null };
+  return { reachable: true, bot: bots.find((b) => b.name === name) ?? bots.find((b) => String(b.name).toLowerCase() === String(name).toLowerCase()) ?? null };
+}
+function findBotAutomation(bot) {
+  const list = orcaJson("automations", "list")?.result?.automations;
+  if (!Array.isArray(list)) return undefined;
+  const dir = botWatchDir(bot.name);
+  return list.find((a) => a.bot?.botId === bot.id && (a.name === botAutomationName(bot.name) || String(a.precheck?.command ?? "").includes(dir))) ?? null;
+}
+function botWatchStatus(c) {
+  const name = c.hosts.frontAgent?.bot;
+  const out = { bot: name || null, botExists: false, watchAutomation: false };
+  if (!name || process.env.FACTORY_SKIP_ORCA === "1" || c.agents.runner !== "orca") return out;
+  const { bot } = findBot(name);
+  out.botExists = Boolean(bot);
+  out.watchAutomation = Boolean(bot && findBotAutomation(bot));
+  return out;
+}
+const botAutomationPrompt = (dir) => `agentic-factory watch: the precheck found news for one or more projects. Read ${path.join(dir, "wake.md")} first: it names each project, the rules file to follow and what changed (the watched projects are listed in ${path.join(dir, "projects.json")}). For each project named there, follow its rules file: read the Controller's status.md, put every new question for the human on an item as Needs you and also as plain text in this chat, answer "Needs front agent" items yourself only when recorded decisions cover them, and report problems in a few lines. Report only what is new.`;
+
+// start, for a bot: the watch directory with the precheck, this project in its list, and one automation for the bot.
+function armBotWatch(c, frontAgentDir) {
+  const name = c.hosts.frontAgent?.bot;
+  if (!name) { say("Front agent bot: hosts.frontAgent.kind is orca-bot, but hosts.frontAgent.bot names no bot. Set it in factory.config.json, run update, then start again."); return 1; }
+  const dir = botWatchDir(name);
+  fs.mkdirSync(dir, { recursive: true });
+  for (const f of ["botwatch.mjs", "hosts.mjs"]) fs.copyFileSync(path.join(frontAgentDir, f), path.join(dir, f));
+  // Orca runs the precheck without this session's PATH; under nvm and the like node is on no fixed path.
+  fs.writeFileSync(path.join(dir, "botwatch.sh"), `#!/bin/sh\nPATH=${JSON.stringify(`${path.dirname(process.execPath)}:${os.homedir()}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin`)}\nexport PATH\ncd "$(dirname "$0")" && exec node botwatch.mjs\n`, { mode: 0o755 });
+  const listFile = path.join(dir, "projects.json");
+  let projects = [];
+  try { projects = JSON.parse(fs.readFileSync(listFile, "utf8")); } catch {}
+  if (!Array.isArray(projects)) projects = [];
+  projects = [...projects.filter((p) => p?.name !== c.project.name), { name: c.project.name, dir: frontAgentDir, projectDir: cwd }];
+  fs.writeFileSync(listFile, JSON.stringify(projects, null, 2) + "\n");
+  say(`Front agent bot "${name}": watches ${projects.map((p) => p.name).join(", ")} (${dir.replace(os.homedir(), "~")})`);
+  if (process.env.FACTORY_SKIP_ORCA === "1" || c.agents.runner !== "orca") { say(`Bot watch: create the automation in Orca for the bot "${name}": every 5 minutes, precheck sh ${path.join(dir, "botwatch.sh")}`); return 0; }
+  const { reachable, bot } = findBot(name);
+  if (!bot) { say(`Bot watch: ${reachable ? `Orca has no bot named "${name}" on this machine (\`${ORCA_BIN} bot list\`)` : "Orca did not answer `bot list`"}. Create the bot in Orca first (a bot proposes one with \`${ORCA_BIN} bot create --offer\`, the owner accepts it), give its SOUL.md the line "For each agentic-factory project, follow ~/front-agent/<project>/FRONT_BOT.md", then run start again.`); return 1; }
+  const existing = findBotAutomation(bot);
+  if (existing) { say(`Bot watch: automation "${existing.name}" already exists for "${bot.name}"; this project is in its list`); return 0; }
+  if (existing === undefined) { say("Bot watch: Orca did not answer `automations list`; nothing was created, run start again."); return 1; }
+  const r = spawnSync(ORCA_BIN, ["automations", "create", "--name", botAutomationName(bot.name), "--bot", bot.name, "--trigger", "*/5 * * * *", "--runs-in", "chat", "--results-to", "chat", "--precheck", `sh ${JSON.stringify(path.join(dir, "botwatch.sh"))}`, "--precheck-timeout", "60", "--prompt", botAutomationPrompt(dir), "--json"], { encoding: "utf8" });
+  if (r.status === 0 && /"ok":\s*true/.test(r.stdout)) { say(`Bot watch: automation "${botAutomationName(bot.name)}" created, every 5 minutes; it wakes the bot only when the precheck finds news`); return 0; }
+  say(`Bot watch: Orca could not create the automation (${(r.stderr || r.stdout || "").trim().slice(0, 200)}).`);
+  return 1;
+}
 const readWatchProblem = (c) => { try { return fs.readFileSync(path.join(os.homedir(), "front-agent", c.project.name, "statuswatch.problem"), "utf8").trim(); } catch { return ""; } };
 const statusWatchRuns = (c) => { try { return Date.now() - fs.statSync(path.join(os.homedir(), "front-agent", c.project.name, "statuswatch.alive")).mtimeMs < 11 * 60_000; } catch { return false; } };
 function armStatusWatch(c, frontAgentDir) {
@@ -962,9 +1042,9 @@ function armStatusWatch(c, frontAgentDir) {
   const orcaFound = spawnSync("sh", ["-c", `command -v ${JSON.stringify(ORCA_BIN)}`], { encoding: "utf8" }).stdout?.trim();
   const orcaCommand = orcaFound?.startsWith("/") ? orcaFound : process.env.ORCA_CLI_BIN_DIR ? path.join(process.env.ORCA_CLI_BIN_DIR, ORCA_BIN) : ORCA_BIN;
   fs.writeFileSync(path.join(frontAgentDir, "front-agent.json"), JSON.stringify({ projectDir: cwd, handle: process.env.ORCA_TERMINAL_HANDLE ?? null, orcaCommand }, null, 2) + "\n");
-  // Opted out: a job from before must not go on alerting without any hint.
+  // Opted out, or a bot took over: a job from before must not go on alerting without any hint.
   const oldPlist = path.join(os.homedir(), "Library/LaunchAgents", `${statusWatchLabel(c.project.name)}.plist`);
-  if (c.hosts.frontAgent?.statusWatch === false && process.env.FACTORY_SKIP_ORCA !== "1" && fs.existsSync(oldPlist)) { spawnSync("launchctl", ["bootout", `gui/${process.getuid()}/${statusWatchLabel(c.project.name)}`], { encoding: "utf8" }); fs.rmSync(oldPlist, { force: true }); }
+  if ((c.hosts.frontAgent?.statusWatch === false || frontKind(c) !== "terminal") && process.env.FACTORY_SKIP_ORCA !== "1" && fs.existsSync(oldPlist)) { spawnSync("launchctl", ["bootout", `gui/${process.getuid()}/${statusWatchLabel(c.project.name)}`], { encoding: "utf8" }); fs.rmSync(oldPlist, { force: true }); }
   if (!watchRequired(c)) return;
   const r = scheduleStatusWatch(c, frontAgentDir);
   if (r.status !== 0) { say(`Status watch: could not schedule it (${(r.stderr || r.error?.message || "").trim().slice(0, 200)}). Without it, finished work and open questions do not reach the Front agent. Fix the scheduler, or set hosts.frontAgent.statusWatch to false in factory.config.json if nobody works in front here, and run start again.`); return; }
@@ -982,12 +1062,14 @@ async function start() {
   const fa = path.join(os.homedir(), "front-agent", c.project.name);
   fs.mkdirSync(fa, { recursive: true }); fs.cpSync(".factory/front-agent", fa, { recursive: true, force: true }); say(`\nFront agent bundle: ${fa.replace(os.homedir(), "~")}`);
   armStatusWatch(c, fa);
+  let failed = 0;
+  if (!["terminal", "orca-bot"].includes(frontKind(c))) { failed++; say(`Front agent: hosts.frontAgent.kind is "${frontKind(c)}"; it must be "terminal" or "orca-bot".`); }
+  if (frontKind(c) === "orca-bot") failed += armBotWatch(c, fa);
   const ctl = c.hosts.workers.find((h) => h.name === c.hosts.controller.host) ?? { kind: "local", name: "local" };
   const dir = c.hosts.controller.controllerDir ?? "~/controller";
   const prompt = `Read ${dir}/CONTROLLER.md and act as the Controller for the project ${c.project.name}.`;
   const session = `cd ${dir} && ${agentCommand(c.agents.default, prompt, c.agents.controllerArgs)}`;
   const title = controllerTitle(c);
-  let failed = 0;
   if (minimal(c)) {
     say("\nStandard:"); if (!installStandard()) failed++;
     failed += installStandardOnRemotes(c);
@@ -1003,6 +1085,9 @@ async function start() {
     const loadlog = path.join(d, "loadlog.sh");
     if (sh("ps", ["-ax", "-o", "command"]).split("\n").some((l) => l.includes(loadlog))) say("Load log: already running");
     else { spawn("bash", [loadlog], { cwd: d, detached: true, stdio: "ignore" }).unref(); say("Load log: started (~/load.log)"); }
+    // Optional: only for the tools found here, and a grant that cannot be written never fails start.
+    const readable = [cwd, ctl.projectDir ?? (ctl.projectsDir ? path.join(ctl.projectsDir, c.project.name) : ""), ctl.workspacesDir ? `${ctl.workspacesDir}/${c.project.name}` : ""].filter(Boolean).map((p) => path.resolve(expandHome(p)));
+    for (const line of applyReadGrants({ home: os.homedir(), paths: readable, controllerDir: d })) say(`Read access: ${line}`);
   } else {
     const remoteDir = dir;
     const r = spawnSync("rsync", ["-a", "-e", `ssh ${sshArgsFor(ctl).slice(0, -1).map((a) => JSON.stringify(a)).join(" ")}`, ".factory/controller/", `${ctl.ssh}:${remoteDir}/`], { encoding: "utf8" });
@@ -1028,7 +1113,7 @@ async function start() {
     else { failed++; say(`Controller session: Orca could not create the terminal (${(r.stderr || r.stdout || "").trim().slice(0, 200)}). Start it by hand:\n  ${session}`); }
     }
   }
-  nameFrontAgent(c);
+  if (frontKind(c) === "terminal") nameFrontAgent(c);
   say(failed ? `\n${failed} step(s) failed; fix them and run start again.` : "\nStarted. `status` shows the phase and the next step.");
   process.exit(failed ? 1 : 0);
 }

@@ -178,7 +178,7 @@ test("start.mjs pins a Pi worker of a role in agents.piRoleModels, and only that
   const ctl = path.join(dir, "ctl");
   fs.mkdirSync(ctl);
   for (const f of ["start.mjs", "lib.mjs", "journal.mjs", "names.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
-  fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca", default: "pi", models: { small: "s", default: "tier-model", large: "l" }, piRoleModels: { Developer: "litellm/gpt-6-luna" } }, commands: {}, capacity: { gate: {} }, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local", orcaRepoId: "r" }] } }));
+  fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca", default: "pi", models: { small: "s", default: "tier-model", large: "l" }, piRoleModels: { Developer: "provider/model-id" } }, commands: {}, capacity: { gate: {} }, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local", orcaRepoId: "r" }] } }));
   fs.writeFileSync(path.join(dir, "spec.txt"), "do it\n");
   const log = path.join(dir, "calls.log");
   const fake = path.join(dir, "fake-orca.mjs");
@@ -194,7 +194,7 @@ console.log(JSON.stringify({ ok: true, result: a[1] === "worker-start" ? { dispa
     const a = JSON.parse(fs.readFileSync(log, "utf8"));
     return a[a.indexOf("--model") + 1];
   };
-  assert.equal(model("Developer"), "litellm/gpt-6-luna", "Pi in a listed role");
+  assert.equal(model("Developer"), "provider/model-id", "Pi in a listed role");
   assert.equal(model("Tester"), "tier-model", "Pi in a role that is not listed keeps its tier");
   assert.equal(model("Developer", "--agent", "codex"), "tier-model", "another agent in a listed role keeps its tier");
   assert.equal(model("Developer", "--model", "x/y"), "x/y", "an explicit --model wins");
