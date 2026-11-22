@@ -26,6 +26,7 @@ const opt = (flag, def) => { const i = a.indexOf(flag); return i >= 0 ? a[i + 1]
 const pos = a.filter((x, i) => !x.startsWith("--") && !(i > 0 && a[i - 1].startsWith("--")));
 const split = (s) => { const i = s?.indexOf(":") ?? -1; return i > 0 ? { branch: s.slice(0, i), file: s.slice(i + 1) } : { branch: s, file: "" }; };
 const maxRounds = config.reviews?.maxRounds ?? 2;
+const refuse = (message) => { console.error(message); process.exit(1); };
 const taskWhere = (ref) => (STEERING === "github-issues" ? `GitHub issue ${ref} (gh issue view ${ref.replace("#", "")})` : `docs/tasks/${path.basename(ref)}`);
 const reportFor = (ref) => `docs/reports/${STEERING === "github-issues" ? `issue-${ref.replace("#", "")}` : path.basename(ref, ".md")}.md`;
 const RULES = `Rules: invented data only, demo or mock only, never send or write anything real, never --no-verify, never print secrets, never push to ${MAIN}.`;
@@ -66,10 +67,17 @@ ${REPLY_DEV}`;
   },
   test() {
     const [T, ref, branch, sha] = pos; const round = opt("--round", "1"); const rv = split(opt("--review"));
+    if (!/^[1-9]\d*$/.test(round)) refuse(`--round needs a whole number from 1, got '${round}'.`);
+    if (Number(round) > maxRounds) refuse(`Refused: review round ${round} is beyond reviews.maxRounds (${maxRounds}). After ${maxRounds} rounds the next step is the final functional re-evaluation (CONTROLLER.md, "Tester failed"): node templates/mkspec.mjs reeval ${T ?? "<T>"} ${ref ?? "<task-ref>"} ${branch ?? "<branch>"} ${sha ?? "<sha>"} ${BRANCH_PREFIX}${(T ?? "<t>").toLowerCase()}-review-${maxRounds}:docs/reviews/${T ?? "<T>"}-review-${maxRounds}.md. More rounds need a higher reviews.maxRounds in factory.config.json, which is ${HUMAN}'s decision.`);
+    // From round 2 the Tester re-checks the previous findings and the rework, not the whole task again (#46, #47).
+    const prev = Number(round) - 1, prevFile = `docs/reviews/${T}-review-${prev}.md`, prevBranch = `${BRANCH_PREFIX}${T.toLowerCase()}-review-${prev}`;
+    const scope = prev
+      ? `2. Re-check, round ${round}: (a) every blocker and major in the round-${prev} findings ${prevFile} (git show origin/${prevBranch}:${prevFile}): fixed or not, with the test that proves it; (b) the diff from that file's 'Reviewed commit' to the reviewed head, against the acceptance items it touches, with 'ponytail-review' on that diff. Raise a new finding only for a functional defect or a safety problem (a change that could reach a real external system, data loss, a secret, real data); anything else you notice is a debt candidate. Do not review the rest of the task diff again; the full gates below still run on the whole tree.`
+      : `2. Review the whole diff against its merge-base with origin/${MAIN} against every Result and Observable acceptance item. Run 'ponytail-review' on the full diff. Check the level is kept, tests go through public entry points and fail without the implementation, untrusted content is escaped, invented data only, no secrets, no changes to real external systems.`;
     return `You are the INDEPENDENT REVIEWER (Worker Tester, round ${round}) for ${T} on origin/${branch} (fetch; state the full SHA, expected ${sha} or later).
 Steps:
 1. Read docs/review-protocol.md, ${taskWhere(ref)}${rv.file ? `, the passing architecture spec review ${rv.file} (origin/${rv.branch}; its binding instructions are part of the spec)` : ""} and the report on the branch.
-2. Review the whole diff against its merge-base with origin/${MAIN} against every Result and Observable acceptance item. Run 'ponytail-review' on the full diff. Check the level is kept, tests go through public entry points and fail without the implementation, untrusted content is escaped, invented data only, no secrets, no changes to real external systems.
+${scope}
 3. Create a temporary branch from the reviewed head and merge current origin/${MAIN} into it; if it conflicts, abort, list the files and review on the branch's own base.
 4. Gates: ${gated(CMDS.verify ?? "verify")} once${CMDS.e2e ? ` and ${gated(CMDS.e2e)} once` : ""} (detached with nohup, poll the log). ${FLAKES} Then check the task's main flows in the browser or through the public API with the demo data.
 5. Only after the gates finished: write docs/reviews/${T}-review-${round}.md with findings by severity, debt candidates, 'Reviewed commit: <full SHA>' and 'Verdict: pass|fail'. Commit only that file on branch ${BRANCH_PREFIX}${T.toLowerCase()}-review-${round} created from the reviewed head, never --no-verify, push only that branch.

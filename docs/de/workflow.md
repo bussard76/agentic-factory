@@ -186,7 +186,7 @@ Der Rhythmus ist eine Einstellung (`rhythm.mode`), keine Regel:
 
 ## Der Zyklus des Controllers
 
-Bei jedem Ereignis eines Workers, sonst alle 10 Minuten:
+Ein Zyklus pro Weckruf, ohne eigenen Takt: ein Worker-Ereignis, das `wait.mjs` ausgibt, oder der Heartbeat (sofort bei einer Worker-Nachricht, einer fertigen Wave oder einem Eintrag in `inbox.md`, zu jeder zehnten Minute, solange Arbeit ansteht, sonst etwa stündlich). Der Controller wartet auf diese Ereignisse und fragt die Worker nicht selbst ab.
 
 1. **Ereignisse lesen:** Fertigmeldungen, Fragen und Eskalationen, neue Einträge in `inbox.md`, aktueller `main`.
 2. **Reagieren:** Developer fertig → Tester. Tester gescheitert → Nacharbeit im selben Worktree, nach zwei Fehlschlägen eine Modellstufe höher, nach der Rundengrenze Frage an den Menschen. Tester bestanden → bei Stufe 2/3 Konformität, sonst nächste Wave. Frage eines Workers → selbst entscheiden, wenn durch Regeln gedeckt, und schriftlich festhalten; sonst Frage an den Menschen.

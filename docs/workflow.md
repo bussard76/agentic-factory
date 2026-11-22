@@ -182,7 +182,7 @@ The rhythm is a setting (`rhythm.mode`), not a rule:
 
 ## The Controller's cycle
 
-On every worker event, otherwise every 10 minutes:
+One cycle per wake-up, with no timer of its own: a worker event printed by `wait.mjs`, or the heartbeat (at once for a worker message, a finished wave or an inbox entry, at each tenth minute while work is pending, about hourly otherwise). The Controller waits on these events and does not poll workers itself.
 
 1. **Read events:** worker completions, questions and escalations, new inbox entries from the human, current `main`.
 2. **React:** Developer done → Tester. Tester failed → rework in the same worktree, one tier higher after two failures, a question to the human after the round limit. Tester passed → conformance for level 2/3, else the next wave. Worker question → decide it if covered by the rules (level 1/2) and write the decision down, else ask the human.
