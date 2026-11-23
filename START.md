@@ -30,18 +30,32 @@ Run `factory status --json` and read `phase` and `next`.
 
 1. `factory init --print-questions` prints every question as JSON: `id`, `question`, `context`, `options` or free text, `recommended`, `answer`. Nothing is written.
 2. Before the first question, tell the human in two sentences what is about to happen: a few questions, then the factory writes its handbooks, hooks and skills into the repo and commits them as one adoption commit.
-3. Ask the open questions one at a time. Use `recommended` as the first option. Why each question matters is in `docs/onboarding.md` of the factory. Detected values (project name, commands from `package.json`) are proposals; show them.
+3. Ask the open questions one at a time. Use `recommended` as the first option. Why each question matters is in `docs/onboarding.md` of the factory. Detected values (project name, commands from `package.json`) are proposals; show them. A command that is empty means none was found in the project: say so, do not make one up.
+   - **`hosts.controller.controllerDir`:** where the Controller's files live, one directory per project on a machine. `recommended` is `~/controller`, or `~/controller-<project>` when `~/controller` already holds another project's Controller; keep that proposal. `~` is expanded when something runs, also in terminals Orca starts: if your shell's `HOME` differs from the one Orca uses, ask for an absolute path.
+   - **`hosts.frontAgent.kind`:** who the human talks to from now on. `terminal` (the default, recommended) is an agent session in an Orca terminal, like you. `orca-bot` is an Orca bot: it keeps its own chat and memory, and Orca wakes it when the Controller has news. Explain it in two sentences and let the human choose. On `orca-bot`, `hosts.frontAgent.bot` opens: the bot's name exactly as `orca bot list` shows it. Then do section 2a before the next question.
 4. Write the answers as `{ "<id>": "<value>" }` into a file **outside** the repo (for example `~/.factory-answers/<project>.json`). Choice answers use an option's `value`.
 5. Run `factory init --print-questions --answers <file>` again: answers can open follow-up questions (a remote host's ssh alias, the preview port). Repeat until `open` is empty.
 6. The question `rules.confirm` lists the hard rules: read them out and ask for an explicit yes.
 7. Run `factory init --answers <file>`. Read its output to the human in short: what was written, the adoption commit, anything still untracked.
 
+### 2a. Only with an Orca bot: the bot comes first
+
+The bot has to exist before `start`. Work in this order:
+
+1. `orca bot list` shows the bots on this machine. If the one the human named is there, go to step 2. If not, the human creates it in Orca (the Orca app). You cannot create it: `orca bot create --offer` proposes a bot as a card in a bot's own chat, and only its owner accepting it creates the bot. Wait until `orca bot list` shows it.
+2. The bot reads its rules from `~/front-agent/<project>/FRONT_BOT.md`, which `start` writes (section 3). Its `SOUL.md` (`~/.orca/bots/<bot>/SOUL.md`) needs this line, once per project: `For each agentic-factory project, follow ~/front-agent/<project>/FRONT_BOT.md`. The human adds it, or tells the bot in its chat to add it; if the human says so, you append it. Never change another bot's files, and never remove lines already there.
+3. Go on with the questions and with `init` (section 2, step 5 on). The "Done" list that `init` prints repeats these two steps.
+
 ## 3. Start the machine
 
 Run `factory start`. It installs the user-level skills (`orchestration` and `orca-cli` are essential), copies the Front agent bundle to `~/front-agent/<project>/`, copies the Controller bundle to the Controller's host, installs the gate, starts the load log, and starts the Controller's own agent session in an Orca terminal. Then run `factory doctor`. Report anything `MISSING` with its fix; a step that needs the human (an ssh key, a login) you name, you do not work around it.
+
+With a bot (`hosts.frontAgent.kind` is `orca-bot`), `start` does not schedule the status watch. It adds the project to the bot's watch directory `~/front-agent/.bots/<bot>/` and creates one automation for the bot (every 5 minutes, a precheck that wakes the bot only when `status.md` has news). If it says Orca has no bot of that name, section 2a is not done: finish it, then run `start` again. Expect `doctor` to show `OK Front agent bot` and the watch automation as `OK`. In Orca's automation run list, a run whose precheck found nothing is shown as `error: Precheck exited with code 1`: that is Orca's wording for a skipped run, not a failure. A real error has another message.
 
 The Controller takes it from here. If the human chose a maintained `ARCHITECTURE.md` (`architecture.mode`), a Worker Architect creates it: as the first task when the repo holds code, otherwise after the first merged wave.
 
 ## 4. From now on
 
-Read `~/front-agent/<project>/FRONT_AGENT.md`: that is your role from here, filled in for this project. At every session start you run `status`, show the human where the project stands, and ask the question the phase calls for.
+**With an Orca bot, your part ends here.** The bot is the Front agent now. Tell the human to talk to the bot in Orca from here on, and that the bot reads `~/front-agent/<project>/FRONT_BOT.md`. The Controller's first messages reach the bot directly; the watch only records a baseline on its first run, so a question open at that moment comes through the Controller's message, not the watch. If the human wants the first status at once, they ask the bot for it in its chat. Do not take over the bot's role, and do not steer the Controller's workers.
+
+**With a terminal Front agent** (the default), read `~/front-agent/<project>/FRONT_AGENT.md`: that is your role from here, filled in for this project. At every session start you run `status`, show the human where the project stands, and ask the question the phase calls for.

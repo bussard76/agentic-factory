@@ -54,6 +54,8 @@ Try the integrated behaviour on the preview with the Front agent. If enabled, th
 ## 5. Later: remote server, more hosts and rhythm
 
 - **Remote server and hosts:** follow [server setup](server-setup.md), configure `hosts.workers` and `hosts.controller.host`, run `update` and `start`; install the user-level skills on each Controller or Front agent host.
+- **An Orca bot as Front agent:** `init` asks who the Front agent is (`hosts.frontAgent.kind`: a terminal session, the default, or an Orca bot) and, for a bot, its name. Create the bot in Orca first, give its `SOUL.md` the line "For each agentic-factory project, follow ~/front-agent/<project>/FRONT_BOT.md", then run `init`, `start` and `doctor`. See [Orca](orca.md), "Front agent as an Orca bot".
+- **Controller directory:** `init` asks for it (`hosts.controller.controllerDir`) and proposes `~/controller-<project>` where `~/controller` already holds another project's Controller. Use an absolute path when your shell's `HOME` is not the one Orca's terminals use.
 - **Rhythm:** choose day-plan/night-build, continuous or custom quiet hours in `rhythm.mode`.
 - **Calibration:** leave capacity and agent calibration on `auto` to adjust limits and model tiers from measurements.
 - **GitHub issues:** choose `steering.mode: github-issues`, create the labels and run `setup-matt-pocock-skills` for the shared tracker.

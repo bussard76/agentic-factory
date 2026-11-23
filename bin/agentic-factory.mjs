@@ -35,7 +35,7 @@ const say = (s = "") => (printQuestions ? sayBuffer.push(String(s).trim()) : con
 const rl = batch || cmd !== "init" ? null : readline.createInterface({ input: process.stdin, output: process.stdout });
 // Every question asked, in order, for --print-questions (and to validate --answers).
 const asked = [];
-const validAnswerIds = ["project.name", "project.repo", "project.humanName", "project.language", "rhythm.mode", "steering.mode", "agents.default", "architecture.mode", ...["small", "default", "large"].map((t) => `agents.models.${t}`), "hosts.where", "hosts.remote.name", "hosts.remote.ssh", "hosts.remote.sshConfig", "hosts.remote.orcaEnvironment", "hosts.controller", "capacity.calibration", "agents.calibration", ...["install", "typecheck", "lint", "unit", "verify", "e2e"].map((k) => `commands.${k}`), "preview.enabled", "preview.port", "preview.command", "reviews.maxRounds", "design.tool", "rules.confirm", "skills.installNow"];
+const validAnswerIds = ["project.name", "project.repo", "project.humanName", "project.language", "rhythm.mode", "steering.mode", "agents.default", "architecture.mode", ...["small", "default", "large"].map((t) => `agents.models.${t}`), "hosts.where", "hosts.remote.name", "hosts.remote.ssh", "hosts.remote.sshConfig", "hosts.remote.orcaEnvironment", "hosts.controller", "hosts.controller.controllerDir", "hosts.frontAgent.kind", "hosts.frontAgent.bot", "capacity.calibration", "agents.calibration", ...["install", "typecheck", "lint", "unit", "verify", "e2e"].map((k) => `commands.${k}`), "preview.enabled", "preview.port", "preview.command", "reviews.maxRounds", "design.tool", "rules.confirm", "skills.installNow"];
 function validateAnswers() {
   if (!answersFile) return;
   if (!presetAnswers || typeof presetAnswers !== "object" || Array.isArray(presetAnswers)) { console.error("--answers: expected an object keyed by question id"); process.exit(1); }
@@ -44,10 +44,13 @@ function validateAnswers() {
     if (["preview.port", "reviews.maxRounds"].includes(id) && !/^\d+$/.test(String(value ?? "").trim())) { console.error(`--answers: "${id}" must be a number`); process.exit(1); }
     if (id === "reviews.maxRounds" && Number(value) < 1) { console.error(`--answers: "${id}" must be at least 1`); process.exit(1); }
     if (["project.name", "hosts.remote.name", "hosts.remote.ssh"].includes(id) && (value == null || !String(value).trim())) { console.error(`--answers: "${id}" must not be empty`); process.exit(1); }
-    const choices = { "project.language": ["en", "de"], "rhythm.mode": ["day-plan-night-build", "continuous", "custom"], "steering.mode": ["github-issues", "orca-tasks"], "agents.default": ["codex", "claude", "pi"], "hosts.where": ["local", "both", "remote"], "capacity.calibration": ["auto", "manual"], "agents.calibration": ["auto", "manual"], "preview.enabled": ["yes", "no"], "design.tool": ["figma", "pencil", "none"], "rules.confirm": ["yes", "no"], "skills.installNow": ["yes", "no"] }[id];
+    const choices = { "project.language": ["en", "de"], "rhythm.mode": ["day-plan-night-build", "continuous", "custom"], "steering.mode": ["github-issues", "orca-tasks"], "agents.default": ["codex", "claude", "pi"], "hosts.where": ["local", "both", "remote"], "hosts.frontAgent.kind": ["terminal", "orca-bot"], "capacity.calibration": ["auto", "manual"], "agents.calibration": ["auto", "manual"], "preview.enabled": ["yes", "no"], "design.tool": ["figma", "pencil", "none"], "rules.confirm": ["yes", "no"], "skills.installNow": ["yes", "no"] }[id];
+    if (id === "hosts.frontAgent.bot" && (value == null || !String(value).trim())) { console.error(`--answers: "${id}" must not be empty (the bot's name as \`orca bot list\` shows it)`); process.exit(1); }
+    if (id === "hosts.controller.controllerDir" && (value == null || !String(value).trim())) { console.error(`--answers: "${id}" must not be empty`); process.exit(1); }
     const normalized = typeof value === "boolean" ? (value ? "yes" : "no") : String(value ?? "");
     if (choices && !choices.includes(normalized)) { console.error(`--answers: "${id}" must be one of ${choices.join(", ")} (got "${normalized}")`); process.exit(1); }
   }
+  if ("hosts.frontAgent.bot" in presetAnswers && (presetAnswers["hosts.frontAgent.kind"] ?? "terminal") !== "orca-bot") { console.error('--answers: "hosts.frontAgent.bot" only goes with "hosts.frontAgent.kind": "orca-bot"'); process.exit(1); }
   if (!printQuestions && presetAnswers["rules.confirm"] !== "yes") { console.error('--answers: "rules.confirm" must be present and yes'); process.exit(1); }
 }
 const takeContext = () => { const c = sayBuffer.filter(Boolean).join("\n"); sayBuffer = []; return c; };
@@ -101,9 +104,23 @@ function detect() {
     repo, name, github: /github\.com/.test(repo), pm, scripts,
     // Frozen installs need a lockfile; without one, a plain install (the first wave would otherwise fail on `npm ci`).
     hasLock: fs.existsSync("pnpm-lock.yaml") || fs.existsSync("yarn.lock") || fs.existsSync("package-lock.json"),
-    commands: { install: !(fs.existsSync("pnpm-lock.yaml") || fs.existsSync("yarn.lock") || fs.existsSync("package-lock.json")) ? `${pm} install` : pm === "pnpm" ? "pnpm install --frozen-lockfile" : pm === "npm" ? "npm ci" : "yarn install --frozen-lockfile", typecheck: run("typecheck") || run("check-types"), lint: run("lint"), unit: run("test:unit") || run("test"), verify: run("verify") || run("test"), e2e: run("test:e2e") || run("e2e"), release: [run("e2e:compose"), run("test:images")].filter(Boolean) },
+    // Nothing to install without a package.json: a proposal is only made from what the project has.
+    commands: { install: !fs.existsSync("package.json") ? "" : !(fs.existsSync("pnpm-lock.yaml") || fs.existsSync("yarn.lock") || fs.existsSync("package-lock.json")) ? `${pm} install` : pm === "pnpm" ? "pnpm install --frozen-lockfile" : pm === "npm" ? "npm ci" : "yarn install --frozen-lockfile", typecheck: run("typecheck") || run("check-types"), lint: run("lint"), unit: run("test:unit") || run("test"), verify: run("verify") || run("test"), e2e: run("test:e2e") || run("e2e"), release: [run("e2e:compose"), run("test:images")].filter(Boolean) },
     tools: { orca: has("orca") || has("orca-ide"), codex: has("codex"), claude: has("claude"), pi: has("pi"), gh: has("gh"), figma },
   };
+}
+
+// ~/controller is the default Controller directory. Where it already holds another project's Controller (its
+// factory.config.json names another project), a directory of this project's own is proposed instead. Only a Controller
+// on this machine can be looked at; `start` checks a remote host's directory.
+let otherOwner = "";
+function proposeControllerDir(name, local) {
+  if (!local) return "~/controller";
+  try {
+    const owner = JSON.parse(fs.readFileSync(path.join(expandHome("~/controller"), "factory.config.json"), "utf8")).project?.name;
+    if (owner && owner !== name) { otherOwner = owner; return `~/controller-${String(name).replace(/[^A-Za-z0-9._-]+/g, "-")}`; }
+  } catch {}
+  return "~/controller";
 }
 
 // --- init ------------------------------------------------------------------------------------------
@@ -211,12 +228,25 @@ async function init() {
   c.hosts.workers = where === "local" ? [localHost] : where === "both" ? [localHost, remoteHost] : [remoteHost];
   // Register this repo with the local Orca so the local host has its repo id (remote hosts register on the server).
   c.hosts.controller = { host: await ask("hosts.controller", "8. Where does the Controller run?", c.hosts.workers.map((h) => ({ label: h.kind === "local" ? "On this machine (a second agent session next to the Front agent)" : `On ${h.name} (unattended, survives this machine sleeping)`, value: h.name })), c.hosts.workers.at(-1).name), controllerDir: "~/controller" };
+  const ctlHost = c.hosts.workers.find((h) => h.name === c.hosts.controller.host);
+  const proposedDir = proposeControllerDir(c.project.name, ctlHost.kind === "local");
+  if (proposedDir !== "~/controller") say(`   ~/controller already holds the Controller of another project on this machine (${otherOwner}), so a directory of its own is proposed.`);
+  say("   `~` is expanded when something runs, by the process that reads it, also in terminals Orca starts. If that process has another HOME than this shell (a test HOME, another user), give an absolute path.");
+  c.hosts.controller.controllerDir = await askText("hosts.controller.controllerDir", "   Directory for the Controller's bundle and files (one per project on a host)?", proposedDir);
+  c.hosts.frontAgent.kind = await ask("hosts.frontAgent.kind", "   Who is the Front agent, the one the human talks to?", [
+    { label: "A terminal session in Orca (an agent CLI in this project, next to the Controller)", value: "terminal" },
+    { label: "An Orca bot", value: "orca-bot", hint: "Create the bot in Orca first (orca bot create --offer; its owner accepts it). start then adds one automation that wakes it. docs/orca.md, 'Front agent as an Orca bot'." }], "terminal");
+  if (c.hosts.frontAgent.kind === "orca-bot") {
+    c.hosts.frontAgent.bot = (await askText("hosts.frontAgent.bot", "   Name of the Orca bot (exactly as `orca bot list` shows it)?", "")).trim();
+    if (!c.hosts.frontAgent.bot && !printQuestions) { console.error("hosts.frontAgent.bot: a bot Front agent needs the bot's name (as `orca bot list` shows it). Nothing written."); process.exit(1); }
+  }
   c.capacity.calibration.mode = await ask("capacity.calibration", "9. Capacity: the limits per host are starting values. Calibrate them automatically?", [{ label: "Auto: start low, raise step by step while the host stays quiet, lower on pressure; the audit verifies", value: "auto" }, { label: "Manual: use the configured limits as they are", value: "manual" }], "auto");
   c.agents.calibration = await ask("agents.calibration", "   Models: calibrate the tier per role from measured pass rates and rounds?", [{ label: "Auto", value: "auto" }, { label: "Manual: only recommend", value: "manual" }], "auto");
-  say(`\n10. Commands the hooks, Testers and waves will run (package manager: ${d.pm}, from ${d.hasLock ? "the lockfile" : "package.json or PATH"}; edit factory.config.json to change):`);
+  say(`\n10. Commands the hooks, Testers and waves will run (package manager: ${d.pm}, from ${d.hasLock ? "the lockfile" : "package.json or PATH"}; edit factory.config.json to change). A command left empty means none was found in the project: nothing is invented, and the hooks and waves skip it until you set one:`);
   for (const k of ["install", "typecheck", "lint", "unit", "verify", "e2e"]) c.commands[k] = await askText(`commands.${k}`, `    ${k}?`, d.commands[k] ?? c.commands[k] ?? "");
   if (yes) for (const k of ["install", "typecheck", "lint", "unit", "verify", "e2e"]) say(`    ${k}: ${c.commands[k] || "(none)"}`);
-  c.commands.release = d.commands.release.length ? d.commands.release : c.commands.release;
+  // Release gates come from the project's own scripts; the example config's gates belong to no project.
+  c.commands.release = d.commands.release;
   c.hosts.frontAgent.preview.enabled = (await ask("preview.enabled", "11. Local preview that follows main on this machine (the human accepts there)?", [{ label: "Yes", value: "yes" }, { label: "No", value: "no" }], "yes")) === "yes";
   if (c.hosts.frontAgent.preview.enabled) { c.hosts.frontAgent.preview.port = Number(await askText("preview.port", "   Port?", "8180")); c.hosts.frontAgent.preview.command = await askText("preview.command", "   Start command?", d.scripts.dev ? `${d.pm} dev` : c.hosts.frontAgent.preview.command); c.hosts.frontAgent.preview.envFile = `~/.config/${c.project.name}/preview.env`; }
   c.reviews.maxRounds = Number(await askText("reviews.maxRounds", "12. Review rounds before a working feature is integrated and the rest becomes debt?", "2"));
@@ -249,12 +279,16 @@ async function init() {
   // install on first use and leave an untracked lockfile in every worktree, and waves could not install frozen.
   let lockfile = "";
   if (fs.existsSync("package.json") && !d.hasLock && !has(d.pm)) say(`\nNo lockfile and \`${d.pm}\` (the manager package.json names) is not installed: no install run; commands.install stays a plain install. Later: install ${d.pm}, run \`${d.pm} install\`, commit the lockfile, and set commands.install in factory.config.json to the frozen form (\`${d.pm === "pnpm" ? "pnpm install --frozen-lockfile" : d.pm === "npm" ? "npm ci" : "yarn install --frozen-lockfile"}\`).`);
-  if (fs.existsSync("package.json") && !d.hasLock && has(d.pm)) {
-    say(`\nNo lockfile: running \`${d.pm} install\` once (manager: ${d.pm}) so the lockfile can be committed with the adoption.`);
-    const r = spawnSync(d.pm, ["install"], { stdio: "ignore" });
+  // An install command the human answered names the manager (npm install) and stays as answered; only the proposal
+  // is turned into the frozen form once the lockfile exists.
+  const answeredInstall = "commands.install" in presetAnswers || c.commands.install !== d.commands.install;
+  const lockPm = (answeredInstall && /^(pnpm|npm|yarn)\b/.exec(c.commands.install)?.[1]) || d.pm;
+  if (fs.existsSync("package.json") && !d.hasLock && has(lockPm)) {
+    say(`\nNo lockfile: running \`${lockPm} install\` once (manager: ${lockPm}${lockPm !== d.pm ? `, from the install command you gave; package.json points to ${d.pm}` : ""}) so the lockfile can be committed with the adoption.`);
+    const r = spawnSync(lockPm, ["install"], { stdio: "ignore" });
     lockfile = ["pnpm-lock.yaml", "package-lock.json", "yarn.lock"].find(fs.existsSync) ?? "";
-    if (r.status === 0 && lockfile) c.commands.install = d.pm === "pnpm" ? "pnpm install --frozen-lockfile" : d.pm === "npm" ? "npm ci" : "yarn install --frozen-lockfile";
-    else say("  install did not produce a lockfile; keeping the plain install command");
+    if (r.status !== 0 || !lockfile) say("  install did not produce a lockfile; keeping the plain install command");
+    else if (!answeredInstall) c.commands.install = lockPm === "pnpm" ? "pnpm install --frozen-lockfile" : lockPm === "npm" ? "npm ci" : "yarn install --frozen-lockfile";
   }
   // The hook mode is decided before rendering: the documents say which hooks enforce the gate.
   const setup = hooksSetup(), mode = hookMode(setup);
@@ -327,6 +361,10 @@ async function init() {
     adopted ? `Read docs/dev-workflow.md (the process) and ${minimal(c) ? "AGENTS.factory.md" : "AGENTS.md"} (the agents' rules). The adoption commit "Adopt agentic-factory (${vars.ADOPTION_ADR})" is on ${adopted}.${mode === "own" ? " Your own hooks stay in force; the factory hooks were not installed." : ` From now on protected files need an ADR reference in the commit message; try a commit without one to see the hook speak. A new or proposed ADR is committed by citing ${vars.ADOPTION_ADR} in the message; once accepted, cite the ADR itself.`}` : `Read docs/dev-workflow.md (the process) and ${minimal(c) ? "AGENTS.factory.md" : "AGENTS.md"} (the agents' rules). Commit the new files with a message that references the adoption ADR, e.g. \`git commit -m "Adopt agentic-factory (${vars.ADOPTION_ADR})"\`, and push to origin so workers and waves see them.`,
     remote && `Set up ${remote.name}: copy .factory/server/ there and follow docs/server-setup.md in the factory repo. Logins (gh, ${c.agents.default}, tailscale${c.agents.runner === "orca" ? ", Orca pairing" : ""}) are yours. Then put its Orca repo id into factory.config.json → hosts.workers[].orcaRepoId and run \`agentic-factory update\` to refresh the bundles.`,
     c.agents.runner === "orca" && !orcaRunning && `Orca: ${d.tools.orca ? `start it (\`${ORCA_BIN} open --json\`) and register the repo (\`${ORCA_BIN} repo add --path <repo> --json\`, id into hosts.workers[].orcaRepoId)` : "install it (https://github.com/stablyai/orca), then register the repo and put its id into hosts.workers[].orcaRepoId"}; the Orca skills load their guide from the binary (\`${ORCA_BIN} skills get orchestration\`).`,
+    c.hosts.frontAgent.kind === "orca-bot" && (() => {
+      const known = orcaRunning && !skipOrca ? findBot(c.hosts.frontAgent.bot) : null;
+      return `Front agent bot "${c.hosts.frontAgent.bot}"${known?.reachable ? (known.bot ? " (found in `orca bot list`)" : " (NOT in `orca bot list` yet)") : ""}: ${known?.bot ? "" : `create it in Orca first (in the Orca app, or ask another bot to propose it with \`${ORCA_BIN} bot create --offer\`, which runs only in a bot's chat; the owner accepts the card). `}Give its SOUL.md (\`~/.orca/bots/<bot>/SOUL.md\`) the line "For each agentic-factory project, follow ~/front-agent/${c.project.name}/FRONT_BOT.md", then run start (it adds one watch automation for the bot) and doctor.`;
+    })(),
     `Start the machine: \`agentic-factory start\` installs the user-level skills${remote ? ` (here and on ${ctl.kind === "remote" ? ctl.name : "the Controller's host"})` : ""}, copies the Front agent bundle to ~/front-agent/${c.project.name} and the Controller bundle to ${ctl.kind === "local" ? "" : `${ctl.name}:`}${c.hosts.controller.controllerDir ?? "~/controller"}, installs the gate, starts the load log and the Controller's session in an Orca terminal. The Front agent runs it for you; \`agentic-factory status\` shows the phase.`,
     c.hosts.frontAgent.preview.enabled && `Preview: clone the repo to ~/Development/${c.project.name}-preview, fill ${c.hosts.frontAgent.preview.envFile}, then load the launchd agent from .factory/front-agent/preview.plist.template (fill the paths) with \`launchctl bootstrap gui/$(id -u) <plist>\`.`,
     c.steering.mode === "github-issues" ? "Create the labels: ready-for-agent, in-progress, needs-human, debt:tests, debt:edge-case, debt:security, debt:load, debt:style (gh label create …)." : "Create your first ticket from docs/tasks/T00-template.md.",
