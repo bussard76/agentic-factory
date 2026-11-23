@@ -46,7 +46,9 @@ if (RUNNER === "orca") {
   if (!receipt.ok) throw new Error(JSON.stringify(receipt.error));
   const dispatch = receipt.result?.dispatchId ?? receipt.result?.dispatch?.id;
   const handle = receipt.result?.terminal ?? receipt.result?.worker?.agentTerminalHandle ?? (dispatch ? JSON.parse(sh(ORCA, ["orchestration", "worker-show", "--dispatch", dispatch, ...orcaEnvArgsOn(host), "--json"])).result?.worker?.agentTerminalHandle : undefined);  // Name the terminal and pane by task and role so the sidebar never shows an automatic session name.
-  record = { name, host: host.name, agent, model, tier, dispatch, terminal: handle, worktree: `${workspacesOn(host)}${dir}`, readonly, started: new Date().toISOString() };
+  // Orca keeps a worker started in a new worktree open by default (worker-start --help); start.mjs never asks for that.
+  // keptByDefault tells cleanup that such a keep-open is Orca's default, not a decision; keep.mjs records a real one.
+  record = { name, host: host.name, agent, model, tier, dispatch, terminal: handle, worktree: `${workspacesOn(host)}${dir}`, readonly, keptByDefault: worktree === "new", started: new Date().toISOString() };
   // The worker runs now: record it first, because a failed title must not lose it or invite a second start.
   workers[key] = record;
   writeJson("workers.json", workers);

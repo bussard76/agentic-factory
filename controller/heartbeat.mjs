@@ -43,14 +43,16 @@ let newlySettled = [];
 const pendingWork = () => {
   const reasons = [];
   if (readText("inbox.md").trim()) reasons.push("inbox");
-  // Running workers are work. A finished worker's record waits for cleanup: it wakes the Controller once, when it is first
-  // seen settled (a failed or stopped worker may send no message), and not again at every tenth minute.
+  // Running workers are work. A finished worker's record waits for cleanup: a worker that settled without a worker_done
+  // message wakes the Controller once, when it is first seen settled, and not again at every tenth minute.
   try {
     const { running, unknown, settled } = workerCounts(JSON.parse(fs.readFileSync(file("workers.json"), "utf8")));
     if (running) reasons.push("workers");
     else if (unknown) reasons.push("workers unreadable");
     const told = new Set(readJson("heartbeat.settled.json", []));
-    newlySettled = settled.filter((id) => !told.has(id));
+    // A worker that sent worker_done already woke the Controller with it; only a silent settle needs this wake.
+    const reported = new Set(messages.filter((m) => m.type === "worker_done").map((m) => m.from));
+    newlySettled = settled.filter((s) => s?.dispatch && !told.has(s.dispatch) && !reported.has(s.dispatch) && !reported.has(s.terminal)).map((s) => s.dispatch);
     if (newlySettled.length) reasons.push(`${newlySettled.length} workers settled`);
   } catch (error) { if (error.code !== "ENOENT") reasons.push("workers unreadable"); }
   try {
@@ -91,7 +93,7 @@ const workerCounts = (records, fresh = fullCheck) => {
     for (const w of list) {
       const status = workerStatus(w, { dispatches, terminals: listed, pidAlive: (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } } });
       if (status !== "finished") counted[status]++;
-      else if (w.dispatch && !dispatches[w.dispatch]?.keptOpen) counted.settled.push(w.dispatch);
+      else if (w.dispatch) counted.settled.push({ dispatch: w.dispatch, terminal: w.terminal });
     }
   }
   fs.writeFileSync(file("heartbeat.workers.json"), JSON.stringify(counted));

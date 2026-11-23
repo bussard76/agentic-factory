@@ -91,6 +91,8 @@ export function workerStatus(w, { dispatches = {}, terminals = null, pidAlive = 
   if (w.dispatch) {
     const state = dispatches[w.dispatch]?.state;
     if (!state) return "unknown";
+    // A follow-up dispatch took over the worker's terminal (worker-start --terminal): it is in use, whatever this one says.
+    if (dispatches[w.dispatch].owner && dispatches[w.dispatch].owner !== w.dispatch) return "running";
     if (state !== "gone") return SETTLED_STATES.has(state) ? "finished" : "running";
     // Orca no longer knows the dispatch (a reset, another server): a terminal still listed may still be working.
     if (!w.terminal) return "finished";
@@ -107,17 +109,24 @@ export const orcaCall = (args, h) => {
   if (r.error) return null;
   try { return JSON.parse(String(r.stdout ?? "").split("\n").filter((l) => l.trim() && !l.includes('"_keepalive"')).join("\n")); } catch { return null; }
 };
-const dispatchInfo = (state, resource) => ({ state, keptOpen: resource?.retainedReason === "user_requested", owned: resource?.ownershipState === "owned" });
+const dispatchInfo = (state, resource) => ({ state, keptOpen: resource?.retainedReason === "user_requested", owned: resource?.ownershipState === "owned", owner: resource?.ownerDispatchId ?? undefined });
+/** Settled states never change back, so they are kept in dispatch-settled.json and never asked again: "<host> <id>" → state. */
+export const knownSettled = (h) => { const all = readJson("dispatch-settled.json", {}), p = `${h?.name ?? "local"} `; return Object.fromEntries(Object.entries(all).filter(([k]) => k.startsWith(p)).map(([k, v]) => [k.slice(p.length), v])); };
 /**
  * Dispatch state for the given ids on host h: at most LIST_PAGES_MAX pages of worker-list (newest first, stops once every
  * id is seen), then worker-show for at most SHOW_CALLS_MAX of the rest, least recently asked first (dispatch-asked.json),
  * so ids that never leave cannot starve the others. All calls together stop after DISPATCH_DEADLINE_MS, and a failed or
  * slow call stops that path; ids left unanswered are absent from the result, which workerStatus reads as unknown. keptOpen: Orca retains the worker's
- * terminal with retainedReason "user_requested" (worker-keep-open, and possibly Orca's default for workers in a new
- * worktree); owned: Orca owns the worker's terminal and may close it.
+ * terminal with retainedReason "user_requested" (worker-keep-open, and Orca's default for workers in a new worktree);
+ * owned: Orca owns the worker's terminal and may close it; owner: the dispatch that owns the terminal now.
+ * A settled state, once seen, comes from dispatch-settled.json without a call (cached: true, no terminal details), so
+ * records that stay for a while cannot starve the bounded calls. Only ids of current records are kept there.
  */
 export function dispatchStates(ids, h) {
-  const want = [...new Set(ids.filter(Boolean))], out = {}, until = Date.now() + DISPATCH_DEADLINE_MS;
+  const ids0 = [...new Set(ids.filter(Boolean))], out = {}, until = Date.now() + DISPATCH_DEADLINE_MS;
+  const settled = knownSettled(h);
+  for (const id of ids0) if (SETTLED_STATES.has(settled[id])) out[id] = { state: settled[id], cached: true };
+  const want = ids0.filter((id) => !out[id]);
   const missing = () => want.some((id) => !out[id]);
   let cursor;
   for (let page = 0; page < LIST_PAGES_MAX && missing() && Date.now() < until; page++) {
@@ -137,6 +146,12 @@ export function dispatchStates(ids, h) {
     else if (r?.error?.code === "dispatch_not_found") out[id] = { state: "gone" };
     else if (!r) break;   // slow or broken Orca: the rest stays unknown
   }
+  // Remember settled answers; forget entries of this host whose record is gone.
+  const p = `${h?.name ?? "local"} `, all = readJson("dispatch-settled.json", {});
+  const next = Object.fromEntries(Object.entries(all).filter(([k]) => !k.startsWith(p) || ids0.includes(k.slice(p.length))));
+  // Not cached while another dispatch owns the terminal: that worker counts as running until it is asked again.
+  for (const [id, d] of Object.entries(out)) if (SETTLED_STATES.has(d.state) && (!d.owner || d.owner === id)) next[p + id] = d.state;
+  if (JSON.stringify(next) !== JSON.stringify(all)) { try { writeJson("dispatch-settled.json", next); } catch { /* best effort */ } }
   if (rest.length) { const live = new Set(want.map(key)); try { writeJson("dispatch-asked.json", Object.fromEntries(Object.entries(asked).filter(([k]) => live.has(k) || !k.startsWith(`${h?.name ?? "local"} `)))); } catch { /* best effort */ } }
   return out;
 }

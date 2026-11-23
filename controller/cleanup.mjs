@@ -6,13 +6,15 @@
 // its dispatch settled (lib.mjs workerStatus), even while its agent still sits at the prompt. It is released with
 // worker-release (Orca closes the agent terminal only where it may) and forgotten once Orca confirms the release. It is
 // NOT released, and keeps its record and worktree, while its worktree has uncommitted or unpushed work, while its terminal
-// is shared with a running worker, or while Orca retains it as kept open. Cleanup itself closes no worker terminal: when
+// is shared with or owned by another dispatch, while the Controller keeps it (keep.mjs), or while Orca retains it as kept
+// open and the record does not say that this is Orca's default for its start (keptByDefault, written by start.mjs).
+// A release counts only when Orca answers released or already_released. Cleanup itself closes no worker terminal: when
 // it removes a worktree, it lets `orca worktree rm` stop the setup terminals of the released dispatch, and it keeps a
 // worktree in which any other terminal is still open. --dry changes nothing: no fetch, no journal, no removals, no releases.
 // Usage: node cleanup.mjs [--on <host>|--all] [--dry] [--pushed] [--prune-remote]
 import fs from "node:fs";
 import path from "node:path";
-import { BRANCH_PREFIX, HOSTS, dispatchStates, file, orcaCall, holdsWorktree, isHelperTerminal, sh, MAIN, ORCA, RUNNER, argHost, journal, onHost, orcaEnvArgsOn, projectDirOn, readJson, trySh, workerStatus, workspacesOn, worktreeRefOn, writeJson } from "./lib.mjs";
+import { BRANCH_PREFIX, HOSTS, SETTLED_STATES, dispatchStates, file, orcaCall, holdsWorktree, isHelperTerminal, sh, MAIN, ORCA, RUNNER, argHost, journal, onHost, orcaEnvArgsOn, projectDirOn, readJson, trySh, workerStatus, workspacesOn, worktreeRefOn, writeJson } from "./lib.mjs";
 
 const dry = process.argv.includes("--dry"), allowPushed = process.argv.includes("--pushed");
 const hosts = process.argv.includes("--all") ? HOSTS : [argHost(process.argv)];
@@ -27,11 +29,20 @@ const releasedTerms = readJson("released-terminals.json", {});
 // Worktrees are matched by directory name: a record may hold a configured path (~/…, or through a symlink) and git the
 // real one. Everything is under this project's workspaces directory, and a clash with another project's name errs to busy.
 const dirOf = (p) => (p ? path.basename(String(p)) : "");
-const RELEASES_MAX = 10;   // per host and run; the rest keep their records and are released in a later cycle
+const RELEASES_MAX = 10, DEADLINE = Date.now() + 3 * 60_000;   // no new release after 3 minutes; the next cycle continues
+const T = { timeout: 20_000 };   // every Orca call in this script gives up after 20 s
+// The release state in Orca's receipt, wherever it sits: the first *state field naming one of the release outcomes.
+const RELEASE_STATES = new Set(["released", "already_released", "retained", "release_pending", "release_unknown"]);
+const releaseState = (o) => {
+  if (!o || typeof o !== "object") return undefined;
+  for (const [k, v] of Object.entries(o)) if (/state$/i.test(k) && RELEASE_STATES.has(v)) return v;
+  for (const v of Object.values(o)) { const found = releaseState(v); if (found) return found; }
+  return undefined;
+};   // per host and run; the rest keep their records and are released in a later cycle
 let releases = 0;
 const terminalsOf = (host) => {   // null when the state is unknown; one call per host, reused below
   if (RUNNER !== "orca") return [];
-  try { const t = JSON.parse(trySh(ORCA, ["terminal", "list", ...orcaEnvArgsOn(host), "--json"]) || "null")?.result?.terminals; return Array.isArray(t) ? t : null; } catch { return null; }
+  try { const t = JSON.parse(trySh(ORCA, ["terminal", "list", ...orcaEnvArgsOn(host), "--json"], T) || "null")?.result?.terminals; return Array.isArray(t) ? t : null; } catch { return null; }
 };
 const hostTerms = new Map(hosts.map((h) => [h.name, terminalsOf(h)]));
 for (const host of hosts) {
@@ -62,7 +73,7 @@ for (const host of hosts) {
     const name = w.name ?? k, d = dispatches[w.dispatch] ?? {}, wt = wtAt.get(dirOf(w.worktree));
     const hold = (why) => { if (w.worktree && !busy.has(dirOf(w.worktree))) busy.set(dirOf(w.worktree), `worker "${name}" ${why}`); };
     if (status.get(k) !== "finished") { hold(status.get(k) === "unknown" ? "state unknown" : d.state === "abandoned" ? "abandoned, may still run" : "running"); continue; }
-    if (d.keptOpen) { hold(`finished, but Orca keeps it open (user_requested); release it with \`orca orchestration worker-release --dispatch ${w.dispatch}\` when nobody needs it`); continue; }
+    if (w.keep) { hold(`finished, kept by the Controller; \`node keep.mjs ${k} --off\` lets cleanup release it`); continue; }
     if (w.terminal && heldTerminals.has(w.terminal)) { hold("finished, but its terminal is used by a running worker"); continue; }
     // A worktree git does not list may still exist under another path: its work cannot be checked, so it is not released.
     if (!wt && w.worktree && onHost(host, `test -e ${q(w.worktree.replace(/^~\//, ""))} && echo yes`).trim() === "yes") { hold("finished, but its worktree is not in git's worktree list; not released"); continue; }
@@ -70,17 +81,26 @@ for (const host of hosts) {
     if (wt && !wt.merged && !wt.pushed) { hold("finished with commits that are not on origin; not released"); continue; }
     if (d.state === "gone") { hold(`finished? Orca no longer knows dispatch ${w.dispatch}; remove its record by hand once nothing runs there`); continue; }
     if (!w.dispatch) { forget.push(k); continue; }   // a record without a dispatch has nothing to release
-    if (++releases > RELEASES_MAX) { hold("finished; released in a later cycle (at most 10 per run)"); continue; }
-    // The dispatch's setup terminals, from Orca's record of what it created, before the release settles it.
+    if (++releases > RELEASES_MAX || Date.now() > DEADLINE) { hold("finished; released in a later cycle (at most 10 per run, within the run's time limit)"); continue; }
+    // Fresh facts right before the release: state, who owns the terminal now, whether Orca keeps it open, setup terminals.
     const shown = orcaCall(["orchestration", "worker-show", "--dispatch", w.dispatch, "--full"], host);
+    if (!shown?.ok) { hold(`finished, but Orca did not answer before the release (${shown?.error?.code ?? "no answer"}); retried next cycle`); continue; }
+    const res = shown.result?.terminalResource, now = shown.result?.worker?.state ?? shown.result?.state;
+    if (!SETTLED_STATES.has(now)) { hold(`state now ${now ?? "unknown"}`); continue; }
+    if (res?.ownerDispatchId && res.ownerDispatchId !== w.dispatch) { hold(`finished, but its terminal now belongs to dispatch ${res.ownerDispatchId}`); continue; }
+    if (w.terminal && !res) { hold("finished, but Orca reports no terminal resource for it (a follow-up dispatch may use its terminal); not released"); continue; }
+    // Orca keeps every worker started in a new worktree open by default (user_requested). start.mjs marks those records
+    // keptByDefault, and for them only the Controller's own keep marker holds. Older records and other starts stay held.
+    if (res?.retainedReason === "user_requested" && !w.keptByDefault) { hold(`finished, but Orca keeps it open (user_requested); release it with \`orca orchestration worker-release --dispatch ${w.dispatch}\` when nobody needs it`); continue; }
     const setup = (shown?.result?.worker?.effects ?? []).filter((e) => e.kind === "terminal" && e.role === "setup" && e.id && !heldTerminals.has(e.id)).map((e) => e.id);
     if (dry) { console.log(`[${host.name}] would release the finished worker "${name}"`); }
     else {
-      const r = orcaCall(["orchestration", "worker-release", "--dispatch", w.dispatch], host);
-      if (!(r?.ok || r?.error?.code === "dispatch_not_found")) { failedReleases.push(w.dispatch); hold(`finished, release failed (${r?.error?.code ?? "no answer"}); retried next cycle`); continue; }
+      // Only released and already_released mean the terminal is closed; retained and release_pending keep everything.
+      const r = orcaCall(["orchestration", "worker-release", "--dispatch", w.dispatch], host), answer = r?.ok ? releaseState(r.result) : r?.error?.code;
+      if (!["released", "already_released"].includes(answer)) { failedReleases.push(`${w.dispatch} (${answer ?? "no answer"})`); hold(`finished, release answered ${answer ?? "nothing"}; retried next cycle`); continue; }
       released++; forget.push(k);
     }
-    if (w.terminal && d.owned) releasedAgents.add(w.terminal);
+    if (w.terminal && res?.ownershipState === "owned") releasedAgents.add(w.terminal);
     for (const id of setup) if (w.worktree) releasedTerms[id] = dirOf(w.worktree);
   }
   for (const t of terms) if (holdsWorktree(t.title) && t.status !== "exited" && !releasedAgents.has(t.handle) && t.worktreePath && !busy.has(dirOf(t.worktreePath))) busy.set(dirOf(t.worktreePath), `terminal "${t.title}" open`);
@@ -91,11 +111,11 @@ for (const host of hosts) {
   const newestWave = readText("wave-handle.txt").trim().split(" ")[1];
   for (const t of terms) {
     if (t.handle === newestWave || isHelperTerminal(t.title) || !/^(.* · Integration · |Coordinator )/.test(t.title ?? "") || !integration || t.worktreePath !== integration) continue;
-    const output = trySh(ORCA, ["terminal", "read", "--terminal", t.handle, ...orcaEnvArgsOn(host), "--json"]);
+    const output = trySh(ORCA, ["terminal", "read", "--terminal", t.handle, ...orcaEnvArgsOn(host), "--json"], T);
     if (!/WAVE-END/.test(output.replace(/echo WAVE-END/g, ""))) continue;
     closedWaves++;
     if (dry) console.log(`[${host.name}] would close the finished wave terminal "${t.title}"`);
-    else trySh(ORCA, ["terminal", "close", "--terminal", t.handle, ...orcaEnvArgsOn(host), "--json"]);
+    else trySh(ORCA, ["terminal", "close", "--terminal", t.handle, ...orcaEnvArgsOn(host), "--json"], T);
   }
   for (const w of wts) {
     const name = w.path.split("/").pop();
@@ -115,7 +135,7 @@ for (const host of hosts) {
         for (const t of inside.filter((t) => releasedTerms[t.handle] === name)) {
           if (!orcaCall(["terminal", "close", "--terminal", t.handle], host)?.ok) throw new Error(`closing its setup terminal "${t.title}" failed`);
         }
-        const r = trySh(ORCA, ["worktree", "rm", "--worktree", worktreeRefOn(host, name), ...orcaEnvArgsOn(host), "--json"]);
+        const r = trySh(ORCA, ["worktree", "rm", "--worktree", worktreeRefOn(host, name), ...orcaEnvArgsOn(host), "--json"], { timeout: 120_000 });
         if (!/"ok": *true/.test(r)) throw new Error("orca worktree rm failed");
       } else {
         const r = onHost(host, `git -C ${q(PD)} worktree remove ${q(w.path)} && echo removed`);

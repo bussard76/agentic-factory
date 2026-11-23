@@ -9,9 +9,10 @@ import os from "node:os";
 import path from "node:path";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
-const FILES = ["cleanup.mjs", "capacity.mjs", "heartbeat.mjs", "controller-terminal.mjs", "lib.mjs", "journal.mjs", "names.mjs", "steering/tasks.mjs"];
+const FILES = ["keep.mjs", "cleanup.mjs", "capacity.mjs", "heartbeat.mjs", "controller-terminal.mjs", "lib.mjs", "journal.mjs", "names.mjs", "steering/tasks.mjs"];
 
-// dispatches: id → { state, retainedReason, ownership, setup: [terminal handles], releaseFails }. worker-list pages them
+// dispatches: id → { state, retainedReason, ownership, owner (dispatch owning the terminal), noResource, setup: [terminal
+// handles], releaseFails, releaseAnswer (released, retained, release_pending, …) }. worker-list pages them
 // (newest first, `pageSize` per page, `filler` unrelated rows first); worker-show answers for known ids and
 // dispatch_not_found for the rest; `broken` makes every orchestration call fail without an answer.
 function setup({ dispatches = {}, terminals = [], workers = {}, capacity = { gate: {} }, pageSize = 100, filler = 0, broken = false } = {}) {
@@ -31,22 +32,22 @@ fs.appendFileSync(${JSON.stringify(log)}, a.join(" ") + "\\n");
 const out = (result) => console.log(JSON.stringify({ ok: true, result }));
 const fail = (code) => { console.log(JSON.stringify({ ok: false, error: { code } })); process.exit(1); };
 const arg = (n) => a[a.indexOf(n) + 1];
-const resource = (d) => ({ retainedReason: d.retainedReason ?? null, ownershipState: d.ownership ?? "owned" });
+const resource = (d, id) => (d.noResource ? null : { retainedReason: d.retainedReason ?? null, ownershipState: d.ownership ?? "owned", ownerDispatchId: d.owner ?? id });
 if (s.broken && a[0] === "orchestration") process.exit(1);
 if (a[0] === "terminal" && a[1] === "list") out({ terminals: s.terminals });
 else if (a[0] === "terminal" && a[1] === "wait") out({ wait: { satisfied: true } });
 else if (a[1] === "worker-list") {
   const rows = [...Array.from({ length: s.filler }, (_, i) => ({ dispatchId: "ctx_filler" + i, workerState: "succeeded", resource: {} })),
-    ...Object.entries(s.dispatches).map(([id, d]) => ({ dispatchId: id, workerState: d.state, resource: resource(d) }))];
+    ...Object.entries(s.dispatches).map(([id, d]) => ({ dispatchId: id, workerState: d.state, resource: resource(d, id) }))];
   const from = Number(a.includes("--cursor") ? arg("--cursor") : 0), to = from + s.pageSize;
   out({ workers: rows.slice(from, to), page: { nextCursor: to < rows.length ? String(to) : null } });
 }
 else if (a[1] === "worker-show") {
-  const d = s.dispatches[arg("--dispatch")];
+  const id = arg("--dispatch"), d = s.dispatches[id];
   if (!d) fail("dispatch_not_found");
-  out({ worker: { state: d.state, effects: (d.setup ?? []).map((id) => ({ kind: "terminal", role: "setup", id })) }, terminalResource: resource(d) });
+  out({ worker: { state: d.state, effects: (d.setup ?? []).map((id) => ({ kind: "terminal", role: "setup", id })) }, terminalResource: resource(d, id) });
 }
-else if (a[1] === "worker-release") { const d = s.dispatches[arg("--dispatch")]; if (d?.releaseFails) fail("release_unknown"); out({ state: "released" }); }
+else if (a[1] === "worker-release") { const d = s.dispatches[arg("--dispatch")]; if (d?.releaseFails) fail("release_unknown"); out({ dispatchId: arg("--dispatch"), terminalState: d?.releaseAnswer ?? "released" }); }
 else if (a[0] === "orchestration" && a[1] === "inbox") out({ messages: [] });
 else if (a[0] === "worktree" && a[1] === "list") out({ worktrees: [] });
 else out({});`);
@@ -106,14 +107,14 @@ test("dispatchStates pages worker-list at most 3 times, asks worker-show for at 
   const calls = h.calls();
   assert.equal(calls.filter((c) => c.includes("worker-list")).length, 3, "paging is bounded");
   assert.equal(calls.filter((c) => c.includes("worker-show")).length, 10, "fallback lookups are bounded");
-  assert.deepEqual(got.ctx_near, { state: "succeeded", keptOpen: true, owned: false });
-  assert.deepEqual(got.ctx_far, { state: "ready", keptOpen: false, owned: true });
+  assert.deepEqual(got.ctx_near, { state: "succeeded", keptOpen: true, owned: false, owner: "ctx_near" });
+  assert.deepEqual(got.ctx_far, { state: "ready", keptOpen: false, owned: true, owner: "ctx_far" });
   assert.deepEqual(got.ctx_gone, { state: "gone" });
   assert.equal(Object.keys(got).length, 10, "ids beyond the bounds stay unanswered, which reads as unknown");
   h.done();
   // Paging follows the cursor and stops as soon as every id is found.
   const p = setup({ dispatches: { ctx_a: { state: "failed" } }, pageSize: 100, filler: 150 });
-  assert.deepEqual(libCall(p, `lib.dispatchStates(["ctx_a"], undefined)`), { ctx_a: { state: "failed", keptOpen: false, owned: true } });
+  assert.deepEqual(libCall(p, `lib.dispatchStates(["ctx_a"], undefined)`), { ctx_a: { state: "failed", keptOpen: false, owned: true, owner: "ctx_a" } });
   assert.deepEqual(p.calls().filter((c) => c.includes("worker-list")).map((c) => c.includes("--cursor 100")), [false, true]);
   assert.ok(!p.calls().some((c) => c.includes("worker-show")));
   p.done();
@@ -230,7 +231,7 @@ test("cleanup keeps a finished worker's record and worktree while Orca does not 
   h.repo("t1");
   const r = h.run("cleanup.mjs");
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /kept t1: worker "T1 · Worker Developer" finished, release failed \(release_unknown\); retried next cycle/);
+  assert.match(r.stdout, /kept t1: worker "T1 · Worker Developer" finished, release answered release_unknown; retried next cycle/);
   assert.match(r.stdout, /release FAILED for ctx_a/);
   assert.deepEqual(Object.keys(h.readWorkers()), ["a"]);
   assert.ok(!h.calls().some((c) => c.startsWith("worktree rm")));
@@ -250,7 +251,8 @@ test("capacity counts running, abandoned and unknown workers; finished ones at t
   assert.equal(JSON.parse(h.run("capacity.mjs", "--verbose").stdout).measured.suite, 2);
   h.patch((s) => { s.broken = true; });
   const u = JSON.parse(h.run("capacity.mjs", "--verbose").stdout);
-  assert.equal(u.measured.suite, 4); assert.match(u.reason, /4 recorded workers counted as live/);
+  // The two settled ones are remembered (settled states never change back); the other two cannot be read.
+  assert.equal(u.measured.suite, 2); assert.match(u.reason, /2 recorded workers counted as live/);
   h.done();
 });
 
@@ -267,7 +269,9 @@ test("capacity: --set-suite needs a bounded number and a quote, is journaled, an
   const v = JSON.parse(r.stdout);
   assert.equal(v.caps.suite, 1);
   assert.equal(v.suite, "wait");
-  assert.equal(v.capOnly, true, `nothing but the cap holds it: ${v.reason}`);
+  // Without PSI (macOS) the CPU rule reads the load average, which a parallel test run can push up: then capOnly must be false.
+  const onlyCap = v.reason.split("; ").every((x) => /calibrated cap|available memory unknown/.test(x));
+  assert.equal(v.capOnly, onlyCap, `capOnly says whether only the cap holds it: ${v.reason}`);
   assert.ok(Date.parse(v.measureAgainAt) - Date.now() > 30e3, "measure again in about a minute");
   const journal = fs.readFileSync(path.join(h.ctl, "journal.ndjson"), "utf8");
   assert.match(journal, /"type":"decision".*capacity suiteMax set → 1 by hand.*"by":"Alex: one at a time today"/);
@@ -292,5 +296,80 @@ test("heartbeat: a finished worker is not active, wakes the Controller once when
   assert.match(beat(), /woke term_c \(1 workers settled\)/);
   assert.match(notice(), /Nothing left to do/);
   assert.doesNotMatch(beat(), /woke/, "a settled record waiting for cleanup wakes nobody again");
+  h.done();
+});
+
+test("a worker start.mjs started in a new worktree is released despite Orca's default keep-open; the Controller's keep marker holds it", () => {
+  const h = setup({ dispatches: { ctx_a: { state: "succeeded", retainedReason: "user_requested" }, ctx_b: { state: "succeeded", retainedReason: "user_requested" }, ctx_old: { state: "succeeded", retainedReason: "user_requested" } } });
+  h.repo("t1", "t2", "t3");
+  h.setWorkers({
+    a: rec("T1 · Worker Developer", "ctx_a", "structworker_a", h.wt("t1"), { keptByDefault: true }),
+    b: rec("T2 · Worker Developer", "ctx_b", "structworker_b", h.wt("t2"), { keptByDefault: true }),
+    old: rec("T3 · Worker Developer", "ctx_old", "structworker_old", h.wt("t3")),   // a record from before keptByDefault
+  });
+  const keep = spawnSync("node", [path.join(h.ctl, "keep.mjs"), "b", "--by", "Alex wants to read it"], { cwd: h.ctl, encoding: "utf8", env: h.env });
+  assert.equal(keep.status, 0, keep.stderr);
+  assert.equal(h.readWorkers().b.keep, true);
+  assert.match(fs.readFileSync(path.join(h.ctl, "journal.ndjson"), "utf8"), /"type":"decision".*keeping worker b.*"by":"Alex wants to read it"/);
+  const r = h.run("cleanup.mjs");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /kept t2: worker "T2 · Worker Developer" finished, kept by the Controller; `node keep.mjs b --off` lets cleanup release it/);
+  assert.match(r.stdout, /kept t3: worker "T3 · Worker Developer" finished, but Orca keeps it open \(user_requested\)/, "older records stay held");
+  assert.deepEqual(h.calls().filter((c) => c.includes("worker-release")).map((c) => c.split(" ")[3]), ["ctx_a"]);
+  assert.deepEqual(h.calls().filter((c) => c.startsWith("worktree rm ")).map((c) => c.split(" ")[3].split("/").pop()), ["t1"]);
+  assert.deepEqual(Object.keys(h.readWorkers()).sort(), ["b", "old"]);
+  assert.equal(spawnSync("node", [path.join(h.ctl, "keep.mjs"), "b", "--off"], { cwd: h.ctl, encoding: "utf8", env: h.env }).status, 0);
+  assert.equal(h.run("cleanup.mjs").status, 0);
+  assert.deepEqual(Object.keys(h.readWorkers()), ["old"]);
+  assert.notEqual(spawnSync("node", [path.join(h.ctl, "keep.mjs"), "nosuch"], { cwd: h.ctl, encoding: "utf8", env: h.env }).status, 0);
+  h.done();
+});
+
+test("only released and already_released count: retained and release_pending keep the record and the worktree", () => {
+  const h = setup({ dispatches: { ctx_r: { state: "succeeded", releaseAnswer: "retained" }, ctx_p: { state: "failed", releaseAnswer: "release_pending" }, ctx_a: { state: "stopped", releaseAnswer: "already_released" } } });
+  h.repo("t1", "t2", "t3");
+  h.setWorkers({ r: rec("T1 · Worker Developer", "ctx_r", "structworker_r", h.wt("t1")), p: rec("T2 · Worker Developer", "ctx_p", "structworker_p", h.wt("t2")), a: rec("T3 · Worker Developer", "ctx_a", "structworker_a", h.wt("t3")) });
+  const r = h.run("cleanup.mjs");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /kept t1: worker "T1 · Worker Developer" finished, release answered retained; retried next cycle/);
+  assert.match(r.stdout, /kept t2: worker "T2 · Worker Developer" finished, release answered release_pending; retried next cycle/);
+  assert.deepEqual(h.calls().filter((c) => c.startsWith("worktree rm ")).map((c) => c.split(" ")[3].split("/").pop()), ["t3"]);
+  assert.deepEqual(Object.keys(h.readWorkers()).sort(), ["p", "r"]);
+  h.done();
+});
+
+test("a settled dispatch whose terminal a follow-up dispatch now owns counts as running", () => {
+  const h = setup({ dispatches: { ctx_old: { state: "succeeded", owner: "ctx_follow" }, ctx_gone_res: { state: "succeeded", noResource: true } } });
+  h.repo("t1", "t2");
+  h.setWorkers({ old: rec("T1 · Worker Developer", "ctx_old", "structworker_x", h.wt("t1")), nores: rec("T2 · Worker Developer", "ctx_gone_res", "structworker_y", h.wt("t2")) });
+  assert.equal(JSON.parse(h.run("capacity.mjs", "--verbose").stdout).measured.suite, 1, "capacity counts it");
+  const r = h.run("cleanup.mjs");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /kept t1: worker "T1 · Worker Developer" running/);
+  assert.match(r.stdout, /kept t2: worker "T2 · Worker Developer" finished, but Orca reports no terminal resource for it/);
+  assert.ok(!h.calls().some((c) => c.includes("worker-release") || c.startsWith("worktree rm")));
+  assert.equal(JSON.parse(h.run("capacity.mjs", "--verbose").stdout).measured.suite, 1, "still counted: not cached while another dispatch owns the terminal");
+  h.done();
+});
+
+test("scenario J: settled records behind the list window are asked once and then never again, so they stop counting", () => {
+  const ids = Array.from({ length: 25 }, (_, i) => `ctx_${i}`);
+  const h = setup({ dispatches: Object.fromEntries(ids.map((id) => [id, { state: "succeeded", retainedReason: "user_requested" }])), filler: 320 });
+  h.setWorkers(Object.fromEntries(ids.map((id, i) => [id, rec(`T${i} · Worker Developer`, id, `structworker_${i}`, `/w/${i}`)])));
+  const suites = [1, 2, 3].map(() => JSON.parse(h.run("capacity.mjs", "--verbose").stdout).measured.suite);
+  assert.deepEqual(suites, [15, 5, 0]);
+  fs.rmSync(path.join(h.dir, "calls.log"));
+  assert.equal(JSON.parse(h.run("capacity.mjs", "--verbose").stdout).measured.suite, 0);
+  assert.ok(!h.calls().some((c) => c.includes("worker-list") || c.includes("worker-show")), "settled states come from dispatch-settled.json");
+  h.done();
+});
+
+test("scenario K: a backlog of finished default-kept workers drains, 10 per cleanup cycle", () => {
+  const n = 40, ids = Array.from({ length: n }, (_, i) => `ctx_${i}`);
+  const h = setup({ dispatches: Object.fromEntries(ids.map((id) => [id, { state: "succeeded", retainedReason: "user_requested" }])), filler: 320 });
+  h.repo(...ids.map((_, i) => `k${i}`));
+  h.setWorkers(Object.fromEntries(ids.map((id, i) => [id, rec(`K${i} · Worker Developer`, id, `structworker_${i}`, h.wt(`k${i}`), { keptByDefault: true })])));
+  const left = [1, 2, 3, 4].map(() => { const r = h.run("cleanup.mjs"); assert.equal(r.status, 0, r.stderr); return Object.keys(h.readWorkers()).length; });
+  assert.deepEqual(left, [30, 20, 10, 0]);
   h.done();
 });

@@ -14,6 +14,7 @@ controller/gate-slots*.json
 controller/capacity-state*.json
 controller/released-terminals.json
 controller/dispatch-asked.json
+controller/dispatch-settled.json
 controller/wave-handle.txt
 controller/specs/
 controller/logs/
