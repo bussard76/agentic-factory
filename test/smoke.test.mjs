@@ -51,6 +51,7 @@ test("two projects on one host: own controller dir everywhere, a foreign one is 
   assert.equal(JSON.parse(fs.readFileSync(path.join(twoHome, "controller/factory.config.json"), "utf8")).project.name, "first", "the other project's controller stays");
   config.hosts.controller.controllerDir = "~/controller-second"; config.agents.controllerArgs = "--test-flag"; fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config, null, 2));
   r = run("update"); assert.equal(r.status, 0, r.stdout + r.stderr);
+  for (const doc of ["docs/coordinator.md", "docs/review-protocol.md"]) assert.match(fs.readFileSync(path.join(project, doc), "utf8"), /~\/controller-second\/gate bash -c/, `${doc} names this project's gate by its path`);
   // What an older factory left in the shared place, long ago: this version's start must not touch it.
   const shared = ["gate", "gate.mjs"].map((f) => path.join(twoHome, ".local/bin", f)); fs.mkdirSync(path.dirname(shared[0]), { recursive: true });
   fs.writeFileSync(shared[0], "#!/bin/sh\nexec node \"$HOME/.local/bin/gate.mjs\" \"$@\"\n", { mode: 0o755 }); fs.writeFileSync(shared[1], "console.log('OLD SHARED GATE');\n");
@@ -161,7 +162,7 @@ test("agent entry questions, answers, status and start in an isolated home", asy
     writeOrca(`π - ~/${ctlFolder}-other`); assert.equal(JSON.parse(withOrca().stdout).setup.controller.terminal, false, "another folder's pi title");
     const calls = path.join(base, "calls");
     fs.writeFileSync(fakeOrca, `#!/bin/sh\nif [ "$1" = terminal ] && [ "$2" = create ]; then printf '%s\\n' "$@" > '${calls}.orca'; printf '%s\\n' '{"ok":true}'; else printf '%s\\n' '{"result":{"terminals":[]}}'; fi\n`, { mode: 0o755 });
-    fs.writeFileSync(path.join(bin, "rsync"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "rsync"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}.rsync'\ncase "$*" in *bad:*) echo 'rsync: boom' >&2; exit 23;; esac\nexit 0\n`, { mode: 0o755 });
     // start schedules the status watch on this machine: a test must never reach the real crontab.
     fs.writeFileSync(path.join(bin, "crontab"), "#!/bin/sh\n[ \"$1\" = -l ] && exit 0\ncat > /dev/null\n", { mode: 0o755 });
     fs.writeFileSync(path.join(bin, "launchctl"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
@@ -170,6 +171,23 @@ test("agent entry questions, answers, status and start in an isolated home", asy
     fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
     r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
     assert.equal(r.status, 0, r.stdout + r.stderr); const sshCalls = fs.readFileSync(`${calls}.ssh`, "utf8"); assert.match(sshCalls, /pgrep -f "\[b\]ash \$HOME\/controller\/loadlog\.sh " >\/dev\/null \|\| \(cd ~\/controller && nohup bash \$HOME\/controller\/loadlog\.sh 'project'/); assert.doesNotMatch(sshCalls, /\.local\/bin\/gate/, "a remote start does not touch the shared gate either"); assert.match(sshCalls, /node heartbeat\.mjs/);
+    // Gates run on every other worker host too (workers, waves, slots): the project's gate goes there, and a failure is a failed start.
+    fs.rmSync(`${calls}.ssh`); fs.rmSync(`${calls}.rsync`, { force: true });
+    config.hosts.workers.push({ name: "other", kind: "remote", ssh: "fake2", projectsDir: "~/projects", orcaEnvironment: "other-env" }); fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
+    r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
+    assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /Gate on other: ~\/controller\/gate \(this project's own\)/);
+    assert.match(fs.readFileSync(`${calls}.ssh`, "utf8"), /fake2 mkdir -p ~\/controller/);
+    assert.match(fs.readFileSync(`${calls}.rsync`, "utf8"), /\/gate \S*\/gate\.mjs \S*\/factory\.config\.json fake2:~\/controller\//);
+    // doctor checks it per host
+    const sshReal = fs.readFileSync(path.join(bin, "ssh"), "utf8");
+    fs.writeFileSync(path.join(bin, "ssh"), `#!/bin/sh\ncase "$*" in *"fake2"*"/gate ]"*) ;; *"/gate ]"*) echo ok;; *"echo ok"*) echo ok;; esac\n`, { mode: 0o755 });
+    const dr = spawnSync("node", [CLI, "doctor"], { cwd: project, encoding: "utf8", env });
+    assert.match(dr.stdout, /OK\s+remote: this project's gate/); assert.match(dr.stdout, /MISSING other: this project's gate is missing in ~\/controller/);
+    fs.writeFileSync(path.join(bin, "ssh"), sshReal, { mode: 0o755 });
+    config.hosts.workers[1].ssh = "bad"; fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
+    r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
+    assert.notEqual(r.status, 0); assert.match(r.stdout, /Gate on other: could not copy it to ~\/controller.*boom/);
+    config.hosts.workers.pop(); fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
     const orcaArgs = fs.readFileSync(`${calls}.orca`, "utf8"); assert.match(orcaArgs, /saved-server/); assert.match(orcaArgs, /path:\/remote\/home\/projects\/project/);
     config.hosts.workers[0].orcaEnvironment = ""; fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
     r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });

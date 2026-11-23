@@ -4,14 +4,15 @@
 import fs from "node:fs";
 import path from "node:path";
 
-/** Returns true when it wrote, false when the file already had `text` and `mode`. */
+/** Returns true when it wrote, false when the file already had `text` (a string or a Buffer) and `mode`. The mode is set before the rename. */
 export function writeFileAtomic(file, text, mode = 0o644) {
   let target = file;
   try { target = fs.realpathSync(file); } catch {}
-  try { if (fs.readFileSync(target, "utf8") === text && (fs.statSync(target).mode & 0o777) === mode) return false; } catch {}
+  const bytes = Buffer.isBuffer(text) ? text : Buffer.from(text);
+  try { if (fs.readFileSync(target).equals(bytes) && (fs.statSync(target).mode & 0o777) === mode) return false; } catch {}
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const tmp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.tmp`);
-  try { fs.writeFileSync(tmp, text, { mode }); fs.chmodSync(tmp, mode); fs.renameSync(tmp, target); }
+  try { fs.writeFileSync(tmp, bytes, { mode }); fs.chmodSync(tmp, mode); fs.renameSync(tmp, target); }
   catch (e) { try { fs.unlinkSync(tmp); } catch {} throw e; }
   return true;
 }
@@ -29,4 +30,21 @@ export function withLock(file, fn) {
     }
   }
   try { return fn(); } finally { try { fs.rmdirSync(lock); } catch {} }
+}
+
+/**
+ * Copies the tree `src` into `dst` file by file through writeFileAtomic (mode of the source kept), leaving files that have no source
+ * alone, like fs.cpSync(…, { force: true }) but without a moment in which a script that is run or read is empty or half written.
+ * Returns the paths that were written.
+ */
+export function copyTreeAtomic(src, dst) {
+  const written = [];
+  for (const e of fs.readdirSync(src, { withFileTypes: true })) {
+    const from = path.join(src, e.name), to = path.join(dst, e.name);
+    if (e.isDirectory()) written.push(...copyTreeAtomic(from, to));
+    else if (e.isSymbolicLink()) { fs.mkdirSync(dst, { recursive: true }); fs.rmSync(to, { force: true }); fs.cpSync(from, to, { dereference: false }); }
+    else if (writeFileAtomic(to, fs.readFileSync(from), fs.statSync(from).mode & 0o777)) written.push(to);
+  }
+  fs.mkdirSync(dst, { recursive: true });
+  return written;
 }

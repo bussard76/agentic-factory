@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { applyReadGrants } from "../bin/read-grants.mjs";
-import { withLock, writeFileAtomic } from "../bin/safe-write.mjs";
+import { copyTreeAtomic, withLock, writeFileAtomic } from "../bin/safe-write.mjs";
 import { addTomlAllowPaths, scanAllowPaths } from "../bin/read-grants.mjs";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
@@ -95,7 +95,7 @@ test("the callers use the project's own gate by an absolute path from its own co
   // the wave script never guesses a gate on the PATH or in ~/.local/bin: without GATE it uses the gate next to it, or stops
   const dir = tmp("wave-gate"); fs.copyFileSync(path.join(ROOT, "controller/integ-wave.sh"), path.join(dir, "integ-wave.sh"));
   const r = spawnSync("bash", [path.join(dir, "integ-wave.sh"), "t", "s", "origin/x"], { encoding: "utf8", env: { PATH: process.env.PATH, HOME: dir } });
-  assert.notEqual(r.status, 0); assert.match(r.stderr, /GATE is not set/);
+  assert.notEqual(r.status, 0); assert.match(r.stderr, /is not a command on this host/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -204,4 +204,40 @@ test("projects.json updates of two starts at the same moment keep both entries",
   assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")).map((p) => p.name).sort(), ["a", "b", "c", "d", "e", "f"]);
   assert.equal(fs.existsSync(`${file}.lock`), false);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// --- last review: files that are run or read while start writes them; no bare gate anywhere ---------------
+test("copyTreeAtomic never shows a reader an empty or half file, keeps modes, and leaves unchanged files alone", async () => {
+  const dir = tmp("atomic-tree"), src = path.join(dir, "src"), dst = path.join(dir, "dst");
+  fs.mkdirSync(path.join(src, "sub"), { recursive: true }); fs.mkdirSync(dst);
+  const big = (c) => c.repeat(3_000_000);
+  fs.writeFileSync(path.join(src, "gate.mjs"), big("a")); fs.writeFileSync(path.join(src, "run.sh"), "#!/bin/sh\n", { mode: 0o755 }); fs.writeFileSync(path.join(src, "sub/bin.dat"), Buffer.from([0, 255, 1, 2]));
+  assert.deepEqual(copyTreeAtomic(src, dst).sort(), [path.join(dst, "gate.mjs"), path.join(dst, "run.sh"), path.join(dst, "sub/bin.dat")].sort());
+  assert.equal(fs.statSync(path.join(dst, "run.sh")).mode & 0o777, 0o755); assert.deepEqual([...fs.readFileSync(path.join(dst, "sub/bin.dat"))], [0, 255, 1, 2]);
+  const ino = fs.statSync(path.join(dst, "run.sh")).ino; assert.deepEqual(copyTreeAtomic(src, dst), [], "nothing changed, nothing written"); assert.equal(fs.statSync(path.join(dst, "run.sh")).ino, ino);
+  fs.writeFileSync(path.join(dst, "state.json"), "{}");   // a file without a source stays
+  // A reader that looks at the file all the time while it is replaced again and again.
+  const reader = path.join(dir, "reader.mjs");
+  fs.writeFileSync(reader, `import fs from "node:fs";\nconst f = ${JSON.stringify(path.join(dst, "gate.mjs"))}; const bad = new Set(); const end = Date.now() + 2500;\nwhile (Date.now() < end) { try { const n = fs.readFileSync(f).length; if (n !== 3000000) bad.add(n); } catch (e) { bad.add(e.code); } }\nconsole.log(JSON.stringify([...bad]));\n`);
+  const out = new Promise((r) => { let s = ""; const c = spawn("node", [reader], { stdio: ["ignore", "pipe", "inherit"] }); c.stdout.on("data", (d) => (s += d)); c.on("exit", () => r(s)); });
+  await new Promise((r) => setTimeout(r, 300));
+  for (let i = 0; i < 12; i++) { fs.writeFileSync(path.join(src, "gate.mjs"), big(i % 2 ? "a" : "b")); copyTreeAtomic(src, dst); }
+  assert.equal((await out).trim(), "[]", "every read saw a whole file");
+  assert.ok(fs.existsSync(path.join(dst, "state.json")));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("no spec, template or doc tells an agent to run a bare gate", () => {
+  const roots = ["templates", "controller", "front-agent", "standard", "docs", "START.md", "README.md", "server"];
+  const skip = (f) => /^docs\/(reviews|decisions|learnings)/.test(f) || /node_modules|\.test\./.test(f) || f === "docs/improvement.md";
+  const files = []; const walk = (p) => { const full = path.join(ROOT, p); if (!fs.existsSync(full)) return; if (fs.statSync(full).isDirectory()) fs.readdirSync(full).forEach((e) => walk(path.join(p, e))); else if (/\.(md|mjs|sh|json|txt)$/.test(p) && !skip(p)) files.push(p); };
+  roots.forEach(walk);
+  // `gate bash -c …` or `gate <command>` not reached through a path, and "through `gate`" (or über `gate`): all of it runs whatever `gate` the PATH finds
+  const bare = [/(^|[\s'"`(])gate (bash|sh|node|pnpm|npm|yarn|npx)\b/, /(through|via|über) ['"`]gate['"`]/i];
+  const hits = [];
+  for (const f of files) fs.readFileSync(path.join(ROOT, f), "utf8").split("\n").forEach((line, i) => { if (bare.some((re) => re.test(line))) hits.push(`${f}:${i + 1}: ${line.trim().slice(0, 100)}`); });
+  assert.deepEqual(hits, [], "name the project's gate by its path ({{CONTROLLER_DIR}}/gate)");
+  // and the specs the Controller renders
+  const spec = fs.readFileSync(path.join(ROOT, "controller/templates/mkspec.mjs"), "utf8");
+  assert.match(spec, /\(through '\{\{CONTROLLER_DIR\}\}\/gate'\)/);
 });

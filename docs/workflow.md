@@ -92,7 +92,7 @@ Every ticket, whether a GitHub issue or a task file, becomes exactly one branch 
 | 1. Ticket is `ready` | Front agent | issue `#12` or `docs/tasks/T12-<slug>.md` | goal, outside-in evidence, level, acceptance; checked for conflicts with the project's rules; a line in `inbox.md` |
 | 2. Spec review | Architect (read-only) | branch `agents/t12-specreview` from `main` | commits only `docs/reviews/T12-architecture-spec.md`; `Verdict: pass` |
 | 3. Build | Developer | **new worktree** `<workspaces>/<project>/t12/` on **new branch** `agents/t12` from `origin/main` | checklist of every acceptance item in the report; one item at a time: failing test, implementation, commit, **push after each item**; targeted checks only; self-review against the spec; merge `origin/main` at the end; report `docs/reports/T12-….md`; `worker_done` with branch and SHA |
-| 4. Review round 1 | Tester (fresh context, read-only) | temporary branch from the reviewed SHA with `origin/main` merged in; findings on `agents/t12-review-1` | runs the full gates itself through `gate`; checks the flows; commits only `docs/reviews/T12-review-1.md` with `Reviewed commit: <SHA>` and `Verdict` |
+| 4. Review round 1 | Tester (fresh context, read-only) | temporary branch from the reviewed SHA with `origin/main` merged in; findings on `agents/t12-review-1` | runs the full gates itself through the project's gate (`<controllerDir>/gate`); checks the flows; commits only `docs/reviews/T12-review-1.md` with `Reviewed commit: <SHA>` and `Verdict` |
 | 5a. `fail` | Developer | **the same worktree and branch** `agents/t12` | fixes each finding test-first, commits, pushes; "Rework 1" in the report; a new Tester writes `T12-review-2.md` on `agents/t12-review-2` |
 | 5b. `pass` | Architect (level 2/3 only) | `agents/t12-conformance` from the passed SHA | coarse boundary check, `T12-architecture-conformance.md` |
 | 6. Wave | Controller | worktree `<workspaces>/<project>/coordinator-integration/`, branch `integration` reset to `origin/main` | merges each passed task branch **together with the review branch of its passing round** (`agents/t12` and `agents/t12-review-2`, plus the conformance branch for level 2/3), one branch at a time (an octopus merge is rejected by the push gate), carrying the merged commits' ADR references into the merge message, runs the full gates once, **pushes `integration` to `main`**; the pre-push hook verifies that every commit is an ancestor of a `Verdict: pass` review SHA found in the pushed tree |
@@ -154,7 +154,7 @@ Rules that make this safe:
 | **Git host** | the repository; all worker branches go there, never to `main` directly |
 
 - **Capacity by measurement and calibration:** the Controller starts workers by measured pressure (CPU, memory and I/O stall time, available memory, gate queue, foreign load, quotas), not by a fixed count. The caps per host are starting values: they rise step by step while the host stays quiet and fall on pressure; the audit verifies. Gate slots adapt. Under pressure the order is critical path, nearly finished tasks, waves, new development, debt. Details: [capacity.md](capacity.md).
-- **Gates:** test runs go through `gate`, fair in order, pooled by unit and browser tests.
+- **Gates:** test runs go through the project's own gate (`<controllerDir>/gate`, on every worker host), fair in order, pooled by unit and browser tests.
 - **Load log:** load, memory and pressure once a minute.
 
 ## Models
