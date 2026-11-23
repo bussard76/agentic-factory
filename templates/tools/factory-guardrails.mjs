@@ -423,7 +423,7 @@ function commitIsDocsByConfig(sha, isMerge, ctx) {
 }
 function parseReviews(tip) {
   const files = tryGit("ls-tree", "-r", "--name-only", tip, "docs/reviews/").trim().split("\n").filter(Boolean);
-  return files.map((f) => tryGit("show", `${tip}:${f}`)).map((t) => ({ pass: /^Verdict:\s*pass\b/m.test(t), sha: /^Reviewed commit:\s*([0-9a-f]{40})\b/m.exec(t)?.[1] })).filter((r) => r.pass && r.sha);
+  return files.map((f) => tryGit("show", `${tip}:${f}`)).map((t) => ({ pass: /^Verdict:\s*pass\b/m.test(t), sha: /^Reviewed commit:[ \t]*(`?)([0-9a-f]{40})\1[ \t\r]*$/m.exec(t)?.[2] })).filter((r) => r.pass && r.sha);
 }
 
 const [cmd, arg, ...more] = process.argv.slice(2);
