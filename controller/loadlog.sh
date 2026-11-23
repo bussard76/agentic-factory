@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Appends one line per minute to ~/load.log: load, memory, PSI, agent and test process counts, gate waiters of this project.
 # Several projects on one host share ~/load.log, so every line ends in project=<name>; the machine values are the same in each,
-# gatewaiters counts this project's gate queue only. The name is FACTORY_PROJECT (start sets it), else the factory.config.json
-# next to this script (the Controller directory of this project), else "factory".
+# gatewaiters counts this project's gate queue only. The name is the first argument (start passes it), else FACTORY_PROJECT, else the
+# factory.config.json next to this script (the Controller directory of this project), else "factory".
 # Start once per boot (e.g. from the Controller's first cycle): nohup bash <controller dir>/loadlog.sh &
 HERE="$(cd "$(dirname "$0")" && pwd)"
-PROJECT="${FACTORY_PROJECT:-$(node -e 'try{console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).project.name)}catch{console.log("factory")}' "$HERE/factory.config.json" 2>/dev/null)}"
+PROJECT="${1:-${FACTORY_PROJECT:-$(node -e 'try{console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).project.name)}catch{console.log("factory")}' "$HERE/factory.config.json" 2>/dev/null)}}"
 TMP="${TMPDIR:-/tmp}"
 while true; do
   psi() { awk '/^some/{for(i=1;i<=NF;i++) if($i ~ /^avg10=/){split($i,a,"="); printf "%s", a[2]}}' "/proc/pressure/$1" 2>/dev/null; }

@@ -52,8 +52,18 @@ test("two projects on one host: own controller dir everywhere, a foreign one is 
   config.hosts.controller.controllerDir = "~/controller-second"; config.agents.controllerArgs = "--test-flag"; fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config, null, 2));
   r = run("update"); assert.equal(r.status, 0, r.stdout + r.stderr);
   r = run("start"); assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /claude --test-flag "Read/, "the Controller session carries its configured arguments");
-  spawnSync("pkill", ["-f", path.join(twoHome, "controller-second", "loadlog.sh")]);
   const ctl = path.join(twoHome, "controller-second");
+  const loggers = () => spawnSync("ps", ["-ax", "-o", "pid=,command="], { encoding: "utf8" }).stdout.split("\n").filter((l) => l.includes(path.join(ctl, "loadlog.sh")));
+  assert.match(loggers().join("\n"), /loadlog\.sh second$/m, "start passes the project to the logger");
+  // A logger from before the project was passed (no argument, untagged lines) is replaced on the next start.
+  spawnSync("pkill", ["-f", path.join(ctl, "loadlog.sh")]);
+  spawn("bash", [path.join(ctl, "loadlog.sh")], { detached: true, stdio: "ignore" }).unref();
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+  assert.ok(loggers().some((l) => l.trim().endsWith("loadlog.sh")), "the old-form logger runs");
+  r = run("start"); assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.ok(!loggers().some((l) => l.trim().endsWith("loadlog.sh")), "the old-form logger is gone");
+  assert.match(loggers().join("\n"), /loadlog\.sh second$/m, "a tagged one runs instead");
+  spawnSync("pkill", ["-f", path.join(ctl, "loadlog.sh")]);
   assert.ok(fs.existsSync(path.join(ctl, "CONTROLLER.md")));
   for (const f of ["CONTROLLER.md", "templates/mkspec.mjs", "wave.mjs", "runscript.mjs", "wavewait.mjs", "capacity.mjs"]) assert.doesNotMatch(fs.readFileSync(path.join(ctl, f), "utf8"), /~\/controller(?!-second)\b/, f);
   assert.match(fs.readFileSync(path.join(ctl, "CONTROLLER.md"), "utf8"), /~\/controller-second\/status\.md/);
@@ -144,7 +154,7 @@ test("agent entry questions, answers, status and start in an isolated home", asy
     config.hosts.workers = [{ name: "remote", kind: "remote", ssh: "fake", projectsDir: "~/projects", orcaEnvironment: "saved-server" }]; config.hosts.controller.host = "remote";
     fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
     r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
-    assert.equal(r.status, 0, r.stdout + r.stderr); const sshCalls = fs.readFileSync(`${calls}.ssh`, "utf8"); assert.match(sshCalls, /pgrep -f "\[b\]ash \$HOME\/controller\/loadlog\.sh"/); assert.match(sshCalls, /FACTORY_PROJECT=project nohup bash \$HOME\/controller\/loadlog\.sh/); assert.match(sshCalls, /gate-shim/); assert.match(sshCalls, /node heartbeat\.mjs/);
+    assert.equal(r.status, 0, r.stdout + r.stderr); const sshCalls = fs.readFileSync(`${calls}.ssh`, "utf8"); assert.match(sshCalls, /pgrep -f "\[b\]ash \$HOME\/controller\/loadlog\.sh " >\/dev\/null \|\| \(cd ~\/controller && nohup bash \$HOME\/controller\/loadlog\.sh 'project'/); assert.match(sshCalls, /gate-shim/); assert.match(sshCalls, /node heartbeat\.mjs/);
     const orcaArgs = fs.readFileSync(`${calls}.orca`, "utf8"); assert.match(orcaArgs, /saved-server/); assert.match(orcaArgs, /path:\/remote\/home\/projects\/project/);
     config.hosts.workers[0].orcaEnvironment = ""; fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
     r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });

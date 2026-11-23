@@ -59,9 +59,10 @@ test("the load log tags every line with its project, from start's FACTORY_PROJEC
   fs.copyFileSync(path.join(ROOT, "controller/loadlog.sh"), path.join(home, "controller-one/loadlog.sh"));
   // Another project's file in the old place must not decide the name.
   fs.mkdirSync(path.join(home, "controller")); fs.writeFileSync(path.join(home, "controller/factory.config.json"), JSON.stringify({ project: { name: "other" } }));
-  const run = (env) => { spawnSync("bash", [path.join(home, "controller-one/loadlog.sh")], { cwd: "/", timeout: 3000, killSignal: "SIGKILL", env: { ...process.env, HOME: home, ...env } }); const l = fs.readFileSync(path.join(home, "load.log"), "utf8").trim().split("\n"); fs.rmSync(path.join(home, "load.log")); return l[0]; };
+  const run = (env, ...arg) => { spawnSync("bash", [path.join(home, "controller-one/loadlog.sh"), ...arg], { cwd: "/", timeout: 3000, killSignal: "SIGKILL", env: { ...process.env, HOME: home, ...env } }); const l = fs.readFileSync(path.join(home, "load.log"), "utf8").trim().split("\n"); fs.rmSync(path.join(home, "load.log")); return l[0]; };
   assert.match(run({}), /gatewaiters=\d+ project=one$/);
   assert.match(run({ FACTORY_PROJECT: "named" }), / project=named$/);
+  assert.match(run({ FACTORY_PROJECT: "env" }, "arg"), / project=arg$/, "the argument start passes wins");
   fs.rmSync(home, { recursive: true, force: true });
 });
 

@@ -10,6 +10,7 @@ import { findControllerTerminal } from "../controller/controller-terminal.mjs";
 import { heartbeatCronScript, statusWatchCronScript, statusWatchLabel, statusWatchPlist } from "./heartbeat-cron.mjs";
 import { installGate } from "./gate-install.mjs";
 import { applyReadGrants } from "./read-grants.mjs";
+import { writeFileAtomic } from "./safe-write.mjs";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
@@ -1016,15 +1017,16 @@ function armBotWatch(c, frontAgentDir) {
   if (!name) { say("Front agent bot: hosts.frontAgent.kind is orca-bot, but hosts.frontAgent.bot names no bot. Set it in factory.config.json, run update, then start again."); return 1; }
   const dir = botWatchDir(name);
   fs.mkdirSync(dir, { recursive: true });
-  for (const f of ["botwatch.mjs", "hosts.mjs"]) fs.copyFileSync(path.join(frontAgentDir, f), path.join(dir, f));
+  // The directory is shared by every project that names the bot and Orca reads it every 5 minutes: whole files, never half of one.
+  for (const f of ["botwatch.mjs", "hosts.mjs"]) writeFileAtomic(path.join(dir, f), fs.readFileSync(path.join(frontAgentDir, f), "utf8"), 0o644);
   // Orca runs the precheck without this session's PATH; under nvm and the like node is on no fixed path.
-  fs.writeFileSync(path.join(dir, "botwatch.sh"), `#!/bin/sh\nPATH=${JSON.stringify(`${path.dirname(process.execPath)}:${os.homedir()}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin`)}\nexport PATH\ncd "$(dirname "$0")" && exec node botwatch.mjs\n`, { mode: 0o755 });
+  writeFileAtomic(path.join(dir, "botwatch.sh"), `#!/bin/sh\nPATH=${JSON.stringify(`${path.dirname(process.execPath)}:${os.homedir()}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin`)}\nexport PATH\ncd "$(dirname "$0")" && exec node botwatch.mjs\n`, 0o755);
   const listFile = path.join(dir, "projects.json");
   let projects = [];
   try { projects = JSON.parse(fs.readFileSync(listFile, "utf8")); } catch {}
   if (!Array.isArray(projects)) projects = [];
   projects = [...projects.filter((p) => p?.name !== c.project.name), { name: c.project.name, dir: frontAgentDir, projectDir: cwd }];
-  fs.writeFileSync(listFile, JSON.stringify(projects, null, 2) + "\n");
+  writeFileAtomic(listFile, JSON.stringify(projects, null, 2) + "\n");
   say(`Front agent bot "${name}": watches ${projects.map((p) => p.name).join(", ")} (${dir.replace(os.homedir(), "~")})`);
   if (process.env.FACTORY_SKIP_ORCA === "1" || c.agents.runner !== "orca") { say(`Bot watch: create the automation in Orca for the bot "${name}": every 5 minutes, precheck sh ${path.join(dir, "botwatch.sh")}`); return 0; }
   const { reachable, bot } = findBot(name);
@@ -1086,18 +1088,23 @@ async function start() {
     fs.mkdirSync(d, { recursive: true }); fs.cpSync(".factory/controller", d, { recursive: true, force: true }); say(`Controller bundle: ${dir}`);
     try { say(installGate(path.join(d, "gate"), os.homedir()).message); } catch (e) { failed++; say(`Gate: could not install ~/.local/bin/gate (${e.message.split("\n")[0]})`); }
     const loadlog = path.join(d, "loadlog.sh");
-    if (sh("ps", ["-ax", "-o", "command"]).split("\n").some((l) => l.includes(loadlog))) say("Load log: already running");
-    else { spawn("bash", [loadlog], { cwd: d, detached: true, stdio: "ignore", env: { ...process.env, FACTORY_PROJECT: c.project.name } }).unref(); say(`Load log: started (~/load.log, each line tagged project=${c.project.name})`); }
+    // A logger of this directory that was started without the project name writes untagged lines for as long as it runs: it goes.
+    const loggers = sh("ps", ["-ax", "-o", "pid=,command="]).split("\n").map((l) => /^\s*(\d+)\s+(.*)$/.exec(l)).filter((m) => m?.[2].includes(loadlog)).map((m) => ({ pid: Number(m[1]), tagged: !m[2].trim().endsWith(loadlog) }));
+    for (const l of loggers.filter((l) => !l.tagged)) try { process.kill(l.pid); } catch {}
+    if (loggers.some((l) => l.tagged)) say("Load log: already running");
+    else { spawn("bash", [loadlog, c.project.name], { cwd: d, detached: true, stdio: "ignore" }).unref(); say(`Load log: started (~/load.log, each line ends in project=${c.project.name})`); }
     // Optional: only for the tools found here, and a grant that cannot be written never fails start.
     const readable = [cwd, ctl.projectDir ?? (ctl.projectsDir ? path.join(ctl.projectsDir, c.project.name) : ""), ctl.workspacesDir ? `${ctl.workspacesDir}/${c.project.name}` : ""].filter(Boolean).map((p) => path.resolve(expandHome(p)));
     for (const line of applyReadGrants({ home: os.homedir(), paths: readable, controllerDir: d })) say(`Read access: ${line}`);
   } else {
-    const remoteDir = dir, remoteLoadlog = `${dir.replace(/^~(?=\/|$)/, "$HOME")}/loadlog.sh`;   // one logger per Controller directory, not one per host
+    // One logger per Controller directory, not one per host. The trailing space is the project argument: a logger from before it was
+    // passed (started as "bash loadlog.sh" in this directory, writing untagged lines) is stopped, found by its working directory (Linux).
+    const remoteDir = dir, remoteLoadlog = `${dir.replace(/^~(?=\/|$)/, "$HOME")}/loadlog.sh`, quoted = `'${c.project.name.replace(/'/g, "'\\''")}'`;
     const r = spawnSync("rsync", ["-a", "-e", `ssh ${sshArgsFor(ctl).slice(0, -1).map((a) => JSON.stringify(a)).join(" ")}`, ".factory/controller/", `${ctl.ssh}:${remoteDir}/`], { encoding: "utf8" });
     if (r.status !== 0) { failed++; say(`Controller bundle: copy to ${ctl.name} failed: ${(r.stderr || "").trim().slice(0, 200)}`); }
     else {
       say(`Controller bundle: ${ctl.name}:${remoteDir}`);
-      const s = spawnSync("ssh", [...sshArgsFor(ctl), `mkdir -p ~/.local/bin && v() { sed -n 's/^# gate-shim: *\\([0-9]*\\).*/\\1/p' "$1" 2>/dev/null | head -1; } && n=$(v ${remoteDir}/gate) && o=$(v ~/.local/bin/gate) && { { [ -n "$o" ] && [ -n "$n" ] && [ "$o" -gt "$n" ]; } || cmp -s ${remoteDir}/gate ~/.local/bin/gate || { install -m 755 ${remoteDir}/gate ~/.local/bin/.gate.$$ && mv -f ~/.local/bin/.gate.$$ ~/.local/bin/gate; }; } && for s in ${remoteDir}/skills/*; do n=$(basename "$s"); for t in ~/.claude/skills ~/.agents/skills; do mkdir -p "$t"; [ -e "$t/$n" ] || cp -R "$s" "$t/"; done; done; pgrep -f "[b]ash ${remoteLoadlog}" >/dev/null || (cd ${remoteDir} && FACTORY_PROJECT=${c.project.name} nohup bash ${remoteLoadlog} >/dev/null 2>&1 &); echo ok`], { encoding: "utf8" });
+      const s = spawnSync("ssh", [...sshArgsFor(ctl), `mkdir -p ~/.local/bin && v() { sed -n 's/^# gate-shim: *\\([0-9]*\\).*/\\1/p' "$1" 2>/dev/null | head -1; } && n=$(v ${remoteDir}/gate) && o=$(v ~/.local/bin/gate) && { { [ -n "$o" ] && [ -n "$n" ] && [ "$o" -gt "$n" ]; } || cmp -s ${remoteDir}/gate ~/.local/bin/gate || { install -m 755 ${remoteDir}/gate ~/.local/bin/.gate.$$ && mv -f ~/.local/bin/.gate.$$ ~/.local/bin/gate; }; } && for s in ${remoteDir}/skills/*; do n=$(basename "$s"); for t in ~/.claude/skills ~/.agents/skills; do mkdir -p "$t"; [ -e "$t/$n" ] || cp -R "$s" "$t/"; done; done; for p in $(pgrep -f "[b]ash loadlog.sh$" 2>/dev/null); do [ "$(readlink /proc/$p/cwd 2>/dev/null)" = "$(cd ${remoteDir} && pwd)" ] && kill $p; done; pgrep -f "[b]ash ${remoteLoadlog} " >/dev/null || (cd ${remoteDir} && nohup bash ${remoteLoadlog} ${quoted} >/dev/null 2>&1 &); echo ok`], { encoding: "utf8" });
       s.stdout?.trim().endsWith("ok") ? say(`Gate, user-level skills and load log on ${ctl.name}: ok`) : (failed++, say(`Gate, skills or load log on ${ctl.name} failed: ${(s.stderr || "").trim().slice(0, 200)}`));
     }
   }
