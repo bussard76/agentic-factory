@@ -155,6 +155,7 @@ Rules that make this safe:
 
 - **Capacity by measurement and calibration:** the Controller starts workers by measured pressure (CPU, memory and I/O stall time, available memory, gate queue, foreign load, quotas), not by a fixed count. The caps per host are starting values: they rise step by step while the host stays quiet and fall on pressure; the audit verifies. Gate slots adapt. Under pressure the order is critical path, nearly finished tasks, waves, new development, debt. Details: [capacity.md](capacity.md).
 - **Gates:** test runs go through the project's own gate (`<controllerDir>/gate`, on every worker host), fair in order, pooled by unit and browser tests.
+- **Documentation-only changes** (when the project sets `docsOnly.enabled`): a fail-closed check decides (plain Markdown and images in an allowlist of paths; never process files, review findings, tickets or agent instructions); such a task needs no Tester, and its wave runs only the format and Markdown checks. **Formatter on staged files** (`commands.formatStaged`): `pre-commit` formats the fully staged files, so format errors never cost a gate run or a review round. Details: [testing.md](testing.md#documentation-only-changes).
 - **Load log:** load, memory and pressure once a minute.
 
 ## Models

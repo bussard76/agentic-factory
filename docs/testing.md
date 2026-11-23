@@ -21,6 +21,53 @@ Every full gate goes through `gate <command>` (`controller/gate.mjs`, Node only;
 
 Developers' focused checks run **without** the gate; they are cheap.
 
+## Documentation-only changes
+
+With `docsOnly.enabled: true` in the `factory.config.json` on the main branch, a change that touches documentation only skips the full gates and the separate review. Off by default: without the key every change takes the full path, as before. The Controller and the wave read the setting from `origin/<main>`, so it takes effect once it is on the main branch; no `agentic-factory update` is needed.
+
+**The check** is `node tools/factory-guardrails.mjs docs-only`, run at the repository root (with the untracked standard: `.git/factory/hooks/factory-guardrails.mjs`). It fails closed:
+
+| Candidate | Command |
+|---|---|
+| a branch or commit range | `docs-only origin/main..origin/agents/t12` (what the head adds since the merge base, and every commit on the way) |
+| the staged changes | `docs-only --staged` |
+| the working tree, untracked files included | `docs-only` |
+
+`--base <ref>` replaces `origin/<main branch>` for the last two; `--json` prints the result as one JSON line. The check prints every changed path (JSON-quoted when it holds unusual characters), marks each one that is not documentation with the reason, and ends with one line `verdict=<…> paths=<n> reason="…"` for the journal or review record. Exit codes: **0** docs-only, **3** not docs-only, **4** unclear, **2** usage. Every caller treats anything but 0 as "not docs-only".
+
+**Its settings come from the base of the candidate** (the merge base's `factory.config.json`), never from the candidate itself, so a change cannot widen its own allowlist. A path is documentation only when all of these hold:
+
+- **A plain file, before and after:** mode `100644`. A symlink, a submodule, an executable file or a mode change is not.
+- **A documentation file type:** Markdown (`.md`) or a raster image (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`). `.svg` and `.mdx` can carry code, so they count only when the project lists them in `docsOnly.extraTypes` (`["svg", "mdx"]`). A file without an extension never counts.
+- **In the allowlist** `docsOnly.paths`: path patterns (`**` any depth, `*` and `?` within one directory, `{a,b}` alternatives). Default `["docs/**", "*.md"]`: under `docs/`, and Markdown at the top level. A project whose documentation lives elsewhere names its own directories; the list replaces the default. Each pattern must start with a directory name (`handbook/**`) or name top-level files (`*.md`); `**`, `**/*.md` or `{docs,src}/**` are refused as unclear.
+- **Not a file the factory installs or reads as process state or agent instruction:** every file in the factory's record of what it installed (`.factory/manifest.json` in the base, or the untracked standard's `standard.json`), and in any case `AGENTS.md`, `AGENTS.factory.md`, `ARCHITECTURE.md`, `CODING_STANDARDS.md`, `design/`, `tools/`, `docs/adr/`, the protocols, `docs/coordinator.md`, `docs/dev-workflow.md`, `docs/debt.md`, `docs/process-decisions.md`, `docs/controller-rules.md`, the review findings (`docs/reviews/`), reports, handoffs, and the tickets (`docs/tasks/` or `steering.tasksDir`). Agents act on these, so a change to them keeps its Tester.
+- **Not an agent instruction file in any spelling** (`CLAUDE.md`, `GEMINI.md`, `agents.md`, `SKILL.md`, `*.agent.md`, `*.prompt.md`, …) and not under a dot path (hooks, CI, tool configuration).
+
+Matching ignores case: on a case-insensitive file system `docs/ADR/` is `docs/adr/`. Configured paths (`docsOnly.paths`, `steering.tasksDir`) are normalised first: backslashes become slashes, a leading `./` or `/` and a trailing `/` are dropped, so `./docs/tickets`, `/docs/tickets` and `docs/tickets/` all name the same directory. A value that names nothing inside the repository (`../tickets`, `C:/…`, empty) makes the check unclear; it is never dropped silently. A rename is a delete plus an add, so both sides must be documentation. **Unclear (exit 4):** an empty diff, an unmerged path, a missing base or head, an invalid setting, a commit on the way whose own changes cannot be told, any git error.
+
+**Markdown that is compiled is not inert.** Some site generators compile `.md` as MDX (imports, components), and some products load Markdown files as prompts or content. A project where that is so either leaves `docsOnly` off or narrows `docsOnly.paths` to the Markdown that nothing compiles or loads.
+
+**The gate path.** The wave decides, before it merges anything, from `origin/<main>`: whether the path is on, which checks it runs, and the classifier itself (main's `tools/factory-guardrails.mjs`, or the clone's installed standard), so a branch in the wave cannot choose its own gate path. A wave whose merged changes the check calls docs-only runs only `commands.formatCheck` and `commands.markdownCheck` (one that is not configured is skipped) instead of `commands.verify` and `commands.e2e`, and pushes. If neither is configured, it runs the full gates: a docs-only wave never pushes after running nothing. Its output carries the check's evidence and a line `GATE-PATH docs-only` or `GATE-PATH full` with the reason, which `wavewait.mjs` journals as a `gate` event. A wave that mixes documentation and code takes the full gates.
+
+**No separate review.** For a docs-only task the Controller runs `node docsonly.mjs <task> <branch>` instead of starting a Tester: it runs main's check on the pushed branch, prints the evidence and records it in the journal as the task's `review` event (`verdict=docs-only`, the head SHA and the paths). A failed fetch is unclear: review as usual. The push gate already lets documentation-only commits through without a findings file. With a `docsOnly.paths` of its own, the push gate exempts those paths too (under all the rules above), but only once the setting is on `main`: it reads the setting from the tree being replaced, so a push cannot widen its own exemption. Product code keeps its independent review before every push, unchanged.
+
+## Formatter on staged files
+
+`commands.formatStaged` runs the project's formatter in write mode on the staged files in `pre-commit`, so a format error never costs a gate run or a review round. Off unless the project names a command. Either a string, to which the staged paths are appended as arguments:
+
+```json
+"formatStaged": "pnpm exec prettier --write --ignore-unknown"
+```
+
+or `{ "command": "…", "paths": ["**/*.py"] }` to pass only matching files. What it does:
+
+- **Fully staged files only:** added and modified regular files whose working copy equals the staged version, a renamed file under its new path. Deleted files, symlinks and submodules are not passed.
+- The formatted bytes are staged under the mode that was staged, so the commit holds the formatted version and nothing the user did not stage (no unstaged `chmod`, no lost executable bit).
+- **Partially staged files are skipped and named:** a file with unstaged content, an unstaged mode change, or deleted in the working tree is committed exactly as staged, and its working copy is never touched. Stage it fully to have it formatted. No `git stash` (the stash is shared by all worktrees of a clone), no backups to lose.
+- A failing formatter fails the commit with its output and puts the working copies back as staged. If a later pre-commit step fails (the secret scan, the test count, lint), the formatting is taken back too, so the staged files are as the user staged them. A commit stopped afterwards by the commit message hook keeps the formatted version, in the index and the working copy alike.
+- `git commit <paths>` (`--only`) is not formatted: git commits it from a temporary index, and formatting only that one would leave the real index with the unformatted version. Stage the files and commit without paths.
+- Merge, cherry-pick and revert commits are not reformatted: their content was formatted on its branch, and a reformatted merge would carry unreviewed changes.
+
 ## Flaky tests under load
 
 Some tests fail only when the server is saturated and pass alone. Rules:

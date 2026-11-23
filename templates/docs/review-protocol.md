@@ -12,6 +12,10 @@ Every task branch is reviewed by an **independent Tester** before it is integrat
 6. After {{MAX_ROUNDS}} rounds a working feature is integrated; open points become debt plus an acceptance item for {{HUMAN}}.
 7. On `pass`, level-2/3 tasks also get a fresh Architect's coarse conformance check (`docs/architect-protocol.md`).
 
+## Documentation-only changes
+
+When the `factory.config.json` on `{{MAIN}}` sets `docsOnly.enabled`, a change that touches documentation only gets no separate review. The Controller runs `node docsonly.mjs <task> <branch>`, which runs `{{MAIN}}`'s docs-only check (the `docs-only` command of the factory guardrails) on the pushed branch; only its exit 0 counts. The check's output, every changed path and the verdict, is recorded in place of a findings file (in the Controller's journal as the task's `review` event). Documentation means plain Markdown or raster images inside the allowlist (`docsOnly.paths`, default `docs/**` and top-level Markdown); the check fails closed: code, configuration, executable files, mode changes, renames across the boundary, links, agent instruction files, the files the factory installs or reads as process state (these protocols, the coordinator and workflow docs, review findings, tickets) and any unclear state mean a normal review. Product code keeps its independent review before every push.
+
 ## Review rule: functional only (decided by {{HUMAN}}, {{DATE}})
 
 The verdict is `fail` **only** for a real functional defect: a specified flow does not work or gives wrong results, data is lost, or a change could reach a real external system (production, real accounts, {{HUMAN}}'s real data). Evidence: the full suites plus checking the changed flows in the browser. When `design/<feature>/` holds signed-off screens, compare the rendered result with them. A missing signed-off control or flow is a functional defect. Other visible differences go into the review file under "Differs from design" for the Front agent's acceptance; they do not fail the review.

@@ -158,6 +158,7 @@ Regeln, die das sicher machen:
 
 - **Kapazität nach Messung und Kalibrierung:** Der Controller startet Worker nach gemessener Last (CPU-, Speicher- und I/O-Wartezeit, verfügbarer RAM, Gate-Warteschlange, fremde Last, Kontingente), nicht nach fester Anzahl. Die Obergrenzen pro Host sind Startwerte: Sie steigen schrittweise, solange der Host ruhig bleibt, und sinken bei Druck; der Audit prüft die Schritte. Die Gate-Plätze passen sich an. Bei Engpass gilt: kritischer Pfad, fast fertige Aufgaben, Waves, neue Entwicklung, Schuldenabbau.
 - **Gates:** Testläufe gehen über das eigene Gate des Projekts (`<controllerDir>/gate`, auf jedem Worker-Host), fair in Reihenfolge, getrennt nach Unit- und Browser-Tests.
+- **Reine Doku-Änderungen** (wenn das Projekt `docsOnly.enabled` setzt): Eine Prüfung entscheidet, im Zweifel dagegen (nur Markdown und Bilder in einer Positivliste von Pfaden; nie Prozessdateien, Review-Befunde, Tickets oder Agenten-Anweisungen); eine solche Aufgabe braucht keinen Tester, und ihre Wave lässt nur die Format- und Markdown-Prüfung laufen. **Formatter auf gestagten Dateien** (`commands.formatStaged`): `pre-commit` formatiert die vollständig gestagten Dateien, damit Formatfehler keinen Gate-Lauf und keine Review-Runde kosten. Einzelheiten: [testing.md](../testing.md#documentation-only-changes).
 - **Lastlog:** schreibt jede Minute Last, Speicher und Wartezeiten mit.
 
 ## Modelle

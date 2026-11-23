@@ -6,6 +6,8 @@
 # Usage (inside the integration worktree, env from wave.mjs):
 #   integ-wave.sh "<title>" "<summary>" <branch>...   branches as origin/<prefix>/<name>, each task with its review branch
 # Env: WAVE_LOG_DIR (optional), MAIN, INSTALL_CMD, VERIFY_CMD (required, non-empty), E2E_CMD (optional), GATE (path to gate), TRAILER (optional)
+# Docs-only path (docs/testing.md): with docsOnly.enabled in origin/MAIN's factory.config.json, a wave that changes
+# documentation only runs commands.formatCheck and commands.markdownCheck from that config instead of verify and e2e.
 set -uo pipefail
 # Step logs stay inspectable after the wave; wave.mjs sets a directory per project, so waves of two projects on one host never mix.
 LOGS="${WAVE_LOG_DIR:-${TMPDIR:-/tmp}/wave-$$}"; mkdir -p "$LOGS"
@@ -31,6 +33,15 @@ git merge --abort 2>/dev/null; git reset -q --hard 2>/dev/null
 git fetch -q origin || { echo "FETCH-FAILED"; exit 1; }
 # Decided here and once, from this clone and from main: a branch merged below cannot switch the check off.
 if [ -f "$(git rev-parse --git-common-dir)/factory/standard.json" ] || git show "origin/$MAIN:factory.config.json" 2>/dev/null | grep -Eq '"footprint"[[:space:]]*:[[:space:]]*"minimal"'; then STANDARD=1; fi
+# Also decided once, from main: whether the docs-only path is on, its checks, and the classifier itself (main's copy of
+# the guardrails, or this clone's installed standard). A branch merged below cannot choose its own gate path.
+cfgget() { git show "origin/$MAIN:factory.config.json" 2>/dev/null | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{try{const v=process.argv[1].split(".").reduce((o,k)=>o?.[k],JSON.parse(s));process.stdout.write(typeof v==="string"||typeof v==="boolean"?String(v):"")}catch{}})' "$1"; }
+DOCS_ENABLED=$(cfgget docsOnly.enabled); FORMAT_CHECK_CMD=$(cfgget commands.formatCheck); MARKDOWN_CHECK_CMD=$(cfgget commands.markdownCheck)
+DOCS_CHECK=""
+if [ "$DOCS_ENABLED" = true ]; then
+  if [ "$STANDARD" = 1 ]; then DOCS_CHECK="$(git rev-parse --git-common-dir)/factory/hooks/factory-guardrails.mjs"
+  elif git show "origin/$MAIN:tools/factory-guardrails.mjs" > "$LOGS/docs-only-check.mjs" 2>/dev/null; then DOCS_CHECK="$LOGS/docs-only-check.mjs"; fi
+fi
 git checkout -q -B integration "origin/$MAIN" || { echo "CHECKOUT-FAILED"; exit 1; }
 # The integration worktree is disposable: drop untracked AND ignored leftovers (lockfiles or build output from an
 # earlier install), otherwise a branch that adds such a file cannot be merged ("would be overwritten").
@@ -57,11 +68,28 @@ done
 [ "$merged" -gt 0 ] || { echo "NOTHING-TO-MERGE"; exit 1; }
 if [ -n "${INSTALL_CMD:-}" ]; then bash -c "$INSTALL_CMD" > "$LOGS/wave-install.log" 2>&1 || { echo INSTALL-FAILED; tail -3 "$LOGS/wave-install.log"; exit 1; }; fi
 arm
+# The docs-only path: main's check decides, on what the wave adds to main. Anything but its exit 0 (not docs-only,
+# unclear, a missing or older check) runs the full gates, and so does a docs-only wave with no docs check configured.
+docs=0
+if [ "$DOCS_ENABLED" = true ]; then
+  if [ -n "$DOCS_CHECK" ] && [ -f "$DOCS_CHECK" ] && node "$DOCS_CHECK" docs-only "origin/$MAIN..HEAD" > "$LOGS/wave-docs-only.log" 2>&1; then docs=1; fi
+  [ -f "$LOGS/wave-docs-only.log" ] && cat "$LOGS/wave-docs-only.log"
+  if [ "$docs" = 1 ] && [ -z "$FORMAT_CHECK_CMD$MARKDOWN_CHECK_CMD" ]; then docs=0; echo "GATE-PATH full: docs-only, but neither commands.formatCheck nor commands.markdownCheck is configured"
+  elif [ "$docs" = 1 ]; then echo "GATE-PATH docs-only: format and Markdown checks instead of the full gates"
+  else echo "GATE-PATH full: $([ -n "$DOCS_CHECK" ] && echo "not docs-only (see the verdict above)" || echo "no docs-only check on $MAIN")"; fi
+fi
+if [ "$docs" = 1 ]; then
+  for c in "$FORMAT_CHECK_CMD" "$MARKDOWN_CHECK_CMD"; do
+    [ -n "$c" ] || continue
+    if bash -c "$c" > "$LOGS/wave-docs-check.log" 2>&1; then echo "docs check PASS: $c"; else echo "docs check FAIL: $c"; strip < "$LOGS/wave-docs-check.log" | tail -8; exit 1; fi
+  done
+else
 s=$(date +%s)
 if "$GATE" bash -c "$VERIFY_CMD" > "$LOGS/wave-verify.log" 2>&1; then echo "verify PASS $(( $(date +%s) - s ))s"; else echo "verify FAIL"; strip < "$LOGS/wave-verify.log" | grep -a -E "^ *×| FAIL |Test Files|  Tests |Error" | head -8; exit 1; fi
 if [ -n "${E2E_CMD:-}" ]; then
   s=$(date +%s)
   if "$GATE" bash -c "$E2E_CMD" > "$LOGS/wave-e2e.log" 2>&1; then echo "e2e PASS $(( $(date +%s) - s ))s"; else echo "e2e FAIL"; strip < "$LOGS/wave-e2e.log" | grep -a -E "failed|✘|Error" | head -6; exit 1; fi
+fi
 fi
 git log --oneline -3
 arm

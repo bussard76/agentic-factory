@@ -52,11 +52,13 @@ Judge security findings against an attacker **without write access to the human'
 
 The template hooks (`templates/.githooks`, `templates/tools/factory-guardrails.mjs`) give every project:
 
-- **pre-commit:** test count must not drop; no whitespace errors or conflict markers; a staged-secret scan; the project's static checks
+- **pre-commit:** the project's formatter on the staged files, when `commands.formatStaged` is set ([testing.md](testing.md#formatter-on-staged-files)); test count must not drop; no whitespace errors or conflict markers; a staged-secret scan; the project's static checks
 - **commit-msg:** protected files (`AGENTS.md`, `ARCHITECTURE.md`, `docs/adr/**`, the hooks, the guardrail script) change only when the message references an accepted `ADR-NNNN` that carries a `Decided by:` line; new dependencies are a level-2 decision of the Architect's spec review, not hook-protected
 - **pre-push to `main`:** every non-documentation commit must be covered by a findings file under `docs/reviews/` with `Verdict: pass` and a `Reviewed commit:` SHA that is an ancestor of the pushed tip; after the reviewed commit only `docs/reviews/` may change
 
 `--no-verify` is forbidden everywhere. The hook checks recorded coverage; the Controller remains responsible for the reviewer's independence.
+
+**Documentation-only tasks** get no separate review when the project sets `docsOnly.enabled`: the docs-only check's evidence (every changed path and the verdict) takes the review's place (process files, review findings, tickets and agent instructions never count as documentation) in the journal, and the wave runs the format and Markdown checks instead of the full gates. Details and the fail-closed rules: [testing.md](testing.md#documentation-only-changes).
 
 ## Findings file
 
