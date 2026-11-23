@@ -6,25 +6,127 @@ import fs from "node:fs";
 import path from "node:path";
 import { writeFileAtomic } from "./safe-write.mjs";
 
-const quote = (p) => JSON.stringify(p);
+// A TOML basic string for any path: JSON escapes the quote, the backslash and the control characters the same way, and DEL is added.
+const quote = (p) => JSON.stringify(String(p)).replace(/\u007f/g, "\\u007f");
 
-// ~/.lean-ctx/config.toml: allow_paths = [ … ] is a top-level key, so a new one goes before the first [table].
-export function addTomlAllowPaths(text, paths) {
-  // A key that is not a plain list (a string, a table's own key) cannot be extended safely: a second key would break the file.
-  if (/^allow_paths\s*=/m.test(text) && !/^allow_paths\s*=\s*\[/m.test(text)) throw new Error("allow_paths is not a plain list");
-  const m = /^allow_paths\s*=\s*\[([\s\S]*?)\]/m.exec(text);
-  if (m) {
-    const have = [...m[1].matchAll(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g)].map((x) => (x[1] !== undefined ? JSON.parse(`"${x[1]}"`) : x[2]));
-    const add = paths.filter((p) => !have.includes(p));
-    if (!add.length) return { text, added: [] };
-    const items = [...have, ...add].map((p) => `    ${quote(p)},`).join("\n");
-    return { text: text.slice(0, m.index) + `allow_paths = [\n${items}\n]` + text.slice(m.index + m[0].length), added: add };
+// --- a reader for the one thing we edit ------------------------------------------------------------------
+// ~/.lean-ctx/config.toml: allow_paths = [ … ] is a top-level key. This is not a TOML parser: it walks the top level far enough to
+// find that key (skipping strings, comments and other values correctly, so a "]" inside a path is just a character), and it throws
+// on anything it does not understand. The caller then leaves the file alone.
+const WS = /[ \t]/;
+function skipString(text, i) {
+  const q = text[i], n = text.length;
+  if (text.startsWith(q.repeat(3), i)) {
+    for (let j = i + 3; j < n; j++) { if (q === '"' && text[j] === "\\") { j++; continue; } if (text.startsWith(q.repeat(3), j)) { j += 3; while (text[j] === q) j++; return j; } }
+    throw new Error("unterminated multi-line string");
   }
-  const block = `allow_paths = [\n${paths.map((p) => `    ${quote(p)},`).join("\n")}\n]\n`;
-  const table = /^\s*\[/m.exec(text);
-  const at = table ? table.index : text.length;
-  const before = text.slice(0, at);
-  return { text: before + (before && !before.endsWith("\n") ? "\n" : "") + block + text.slice(at), added: paths };
+  for (let j = i + 1; j < n; j++) {
+    const c = text[j];
+    if (c === "\n") break;
+    if (q === '"' && c === "\\") { j++; continue; }
+    if (c === q) return j + 1;
+  }
+  throw new Error("unterminated string");
+}
+const skipComment = (text, i) => { while (i < text.length && text[i] !== "\n") i++; return i; };
+/** Skips whitespace, newlines and comments. */
+function skipBlank(text, i) {
+  for (;;) {
+    if (WS.test(text[i] ?? "") || text[i] === "\n" || text[i] === "\r") i++;
+    else if (text[i] === "#") i = skipComment(text, i);
+    else return i;
+  }
+}
+/** Returns the end index of the value that starts at i (to the end of its line, at bracket depth 0). */
+function skipValue(text, i) {
+  let depth = 0;
+  for (; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"' || c === "'") i = skipString(text, i) - 1;
+    else if (c === "#") i = skipComment(text, i) - 1;
+    else if (c === "[" || c === "{") depth++;
+    else if (c === "]" || c === "}") { if (--depth < 0) throw new Error("unbalanced bracket"); }
+    else if (c === "\n" && depth === 0) return i;
+  }
+  if (depth) throw new Error("unbalanced bracket");
+  return i;
+}
+function readItem(text, i) {
+  const end = skipString(text, i), raw = text.slice(i, end);
+  if (raw.startsWith('"""') || raw.startsWith("'''")) throw new Error("multi-line string in allow_paths");
+  if (raw[0] === "'") return { value: raw.slice(1, -1), end };
+  let value; try { value = JSON.parse(raw); } catch { throw new Error("an escape in allow_paths that is not understood"); }
+  return { value, end };
+}
+/** Finds the top-level allow_paths. Returns { arr, firstTable }; arr is null when the key is absent. Throws when unsure. */
+export function scanAllowPaths(text) {
+  let i = 0, arr = null, firstTable = -1;
+  for (;;) {
+    i = skipBlank(text, i);
+    if (i >= text.length) break;
+    if (text[i] === "[") { firstTable = text.lastIndexOf("\n", i - 1) + 1; break; }
+    const key = /^[A-Za-z0-9_-]+|^"[^"\n]*"|^'[^'\n]*'/.exec(text.slice(i));
+    if (!key) throw new Error("a line that is not understood");
+    let j = i + key[0].length;
+    while (WS.test(text[j] ?? "")) j++;
+    if (key[0] === "allow_paths" && text[j] === "=") {
+      if (arr) throw new Error("allow_paths appears twice");
+      j++; while (WS.test(text[j] ?? "")) j++;
+      if (text[j] !== "[") throw new Error("allow_paths is not a plain list");
+      const open = j; j++;
+      const items = []; let comma = false;
+      for (;;) {
+        j = skipBlank(text, j);
+        if (text[j] === "]") break;
+        if (text[j] !== '"' && text[j] !== "'") throw new Error("allow_paths holds something other than strings");
+        if (items.length && !comma) throw new Error("a missing comma in allow_paths");
+        const it = readItem(text, j); items.push(it); j = it.end; comma = false;
+        const k = skipBlank(text, j);
+        if (text[k] === ",") { comma = true; j = k + 1; }
+      }
+      const close = j;
+      const eol = text.indexOf("\n", close); const rest = text.slice(close + 1, eol < 0 ? text.length : eol);
+      if (!/^[ \t\r]*(#.*)?$/.test(rest)) throw new Error("text after the closing bracket of allow_paths");
+      arr = { open, close, items, comma, multiline: text.slice(open, close).includes("\n") };
+      i = close + 1;
+      continue;
+    }
+    if (text[j] !== "=" && text[j] !== ".") throw new Error("a line that is not understood");
+    i = skipValue(text, j);
+  }
+  return { arr, firstTable };
+}
+
+// Adds the missing paths. Everything else in the file, comments inside the array included, stays byte for byte.
+export function addTomlAllowPaths(text, paths) {
+  const { arr, firstTable } = scanAllowPaths(text);
+  const have = arr ? arr.items.map((x) => x.value) : [];
+  const add = [...new Set(paths)].filter((p) => !have.includes(p));
+  if (!add.length) return { text, added: [] };
+  let out;
+  if (!arr) {
+    const block = `allow_paths = [\n${add.map((p) => `    ${quote(p)},`).join("\n")}\n]\n`;
+    const at = firstTable < 0 ? text.length : firstTable;
+    const before = text.slice(0, at);
+    out = before + (before && !before.endsWith("\n") ? "\n" : "") + block + (firstTable < 0 ? "" : "\n") + text.slice(at);
+  } else {
+    const last = arr.items.at(-1);
+    const lineStart = text.lastIndexOf("\n", arr.close - 1) + 1;
+    const closeOwnLine = arr.multiline && /^[ \t]*$/.test(text.slice(lineStart, arr.close));
+    if (closeOwnLine) {
+      const indent = (/^[ \t]*/.exec(text.slice(arr.open).split("\n")[1] ?? "")?.[0]) || "    ";
+      let t = text.slice(0, lineStart) + add.map((p) => `${indent}${quote(p)},\n`).join("") + text.slice(lineStart);
+      if (last && !arr.comma) t = t.slice(0, last.end) + "," + t.slice(last.end);
+      out = t;
+    } else {
+      const at = last ? last.end : arr.open + 1;
+      out = text.slice(0, at) + (last ? ", " : "") + add.map(quote).join(", ") + text.slice(at);
+    }
+  }
+  // Read the result back: it must hold everything it held before, plus what was added. Otherwise nothing is written.
+  const check = scanAllowPaths(out).arr?.items.map((x) => x.value) ?? [];
+  if (![...have, ...add].every((p) => check.includes(p))) throw new Error("the edited allow_paths did not read back");
+  return { text: out, added: add };
 }
 
 export const GRANTS = [
@@ -33,10 +135,17 @@ export const GRANTS = [
     detect: (home) => fs.existsSync(path.join(home, ".lean-ctx", "config.toml")),
     apply(home, paths) {
       const file = path.join(home, ".lean-ctx", "config.toml");
-      const { text, added } = addTomlAllowPaths(fs.readFileSync(file, "utf8"), paths);
-      if (!added.length) return "allow_paths already has them";   // nothing changes: the live file is not touched
-      writeFileAtomic(file, text, fs.statSync(file).mode & 0o777);   // the tool may read it at any moment: whole file or none
-      return `allow_paths += ${added.join(", ")}`;
+      // Another writer (the tool itself, another project's start) may change the file while we work: compute from what we read,
+      // and compute again when the file differs just before the rename. The rename itself is the only moment that can still lose a write.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const before = fs.readFileSync(file, "utf8");
+        const { text, added } = addTomlAllowPaths(before, paths);
+        if (!added.length) return "allow_paths already has them";   // nothing changes: the live file is not touched
+        if (fs.readFileSync(file, "utf8") !== before) continue;
+        writeFileAtomic(file, text, fs.statSync(file).mode & 0o777);   // the tool may read it at any moment: whole file or none
+        return `allow_paths += ${added.join(", ")}`;
+      }
+      throw new Error("the file keeps changing");
     },
   },
   {
@@ -51,7 +160,7 @@ export const GRANTS = [
       const add = paths.map((p) => `Read(${p}/**)`).filter((r) => !allow.includes(r));
       if (!add.length) return `${file} already allows them`;
       allow.push(...add);
-      writeFileAtomic(file, JSON.stringify(settings, null, 2) + "\n");
+      writeFileAtomic(file, JSON.stringify(settings, null, 2) + "\n", fs.existsSync(file) ? fs.statSync(file).mode & 0o777 : 0o644);
       return `${file}: ${add.join(", ")}`;
     },
   },
@@ -66,7 +175,7 @@ export function applyReadGrants({ home, paths, controllerDir, grants = GRANTS })
     try { found = g.detect(home); } catch { found = false; }
     if (!found) continue;
     try { lines.push(`${g.name}: ${g.apply(home, unique, controllerDir)}`); }
-    catch (e) { lines.push(`${g.name}: could not write the grant (${String(e.message).split("\n")[0].slice(0, 160)}); add read access for ${unique.join(", ")} by hand`); }
+    catch (e) { lines.push(`${g.name}: could not write the grant (${String(e.message).split("\n")[0].slice(0, 160)}); the file was left as it is. Add read access for ${unique.join(", ")} by hand`); }
   }
   return lines;
 }

@@ -15,7 +15,7 @@ while true; do
     load=$(sysctl -n vm.loadavg | tr -d '{}' | awk '{print $1" "$2" "$3}'); total=$(( $(sysctl -n hw.memsize) / 1048576 ))
     avail=$(vm_stat | awk -v ps="$(sysctl -n hw.pagesize)" '/Pages (free|inactive|speculative)/{gsub("\\.","",$NF); s+=$NF} END{print int(s*ps/1048576)}'); used=$(( total - avail ))
   fi
-  waiters=0; for d in "$TMP"/$PROJECT-gate-*/; do [ -d "$d" ] && waiters=$(( waiters + $(ls "$d" 2>/dev/null | grep -c '^ticket-') )); done
+  waiters=0; for d in "$TMP"/"$PROJECT"-gate-*/; do [ -d "$d" ] && waiters=$(( waiters + $(ls "$d" 2>/dev/null | grep -c '^ticket-') )); done
   printf '%s load=%s mem=%s/%sMB avail=%sMB psi_cpu=%s psi_mem=%s psi_io=%s agents=%s vitest=%s playwright=%s gatewaiters=%s project=%s\n' \
     "$(date +%H:%M)" "$load" "$used" "$total" "$avail" "$(psi cpu)" "$(psi memory)" "$(psi io)" \
     "$(pgrep -f '(^|/)(codex|claude|pi)( |$)' 2>/dev/null | wc -l | tr -d ' ')" "$(pgrep -f '(^|/)vitest( |$)' 2>/dev/null | wc -l | tr -d ' ')" "$(pgrep -f '(^|/)playwright( |$)' 2>/dev/null | wc -l | tr -d ' ')" "$waiters" "$PROJECT" >> "$HOME/load.log"

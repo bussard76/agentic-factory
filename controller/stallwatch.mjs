@@ -5,14 +5,28 @@
 // Runs until killed. Usage: node stallwatch.mjs
 import fs from "node:fs";
 import { HOSTS, ORCA, RUNNER, file, isHelperTerminal, journal, onHost, orcaEnvArgsOn, readJson, trySh, workspacesOn } from "./lib.mjs";
-// A shared host lists every project's terminals, and a title does not tell them apart. A terminal is this project's when its
-// worktree lies in this project's workspace directory on that host, or when workers.json names its handle. A remote host's
-// configured path can start with ~, so there the last two segments (<workspaces dir>/<project>) decide.
-const isMine = (host, t) => {
-  const ws = workspacesOn(host), wt = t.worktreePath ?? "";
-  if (wt && (host.kind === "local" ? wt.startsWith(ws) : wt.includes(`/${ws.split("/").filter(Boolean).slice(-2).join("/")}/`))) return true;
-  return Object.values(readJson("workers.json", {})).some((w) => (w.host ?? "local") === host.name && w.terminal === t.handle);
+// A shared host lists every project's terminals, and a title does not tell them apart. A terminal is this project's when workers.json
+// names its handle (start.mjs records it for every worker), or when its worktree lies in this project's workspace directory on that
+// host. A remote host's configured path can start with ~, so there the last two segments (<workspaces dir>/<project>) decide.
+// When worker terminals exist but none can be told to be this project's (a layout neither rule knows), all of them are watched, with a
+// notice: watching too much is better than a stall that nobody sees.
+const real = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
+const underWorkspaces = (host, wt) => {
+  if (!wt) return false;
+  const ws = workspacesOn(host);
+  if (host.kind !== "local") return wt.includes(`/${ws.split("/").filter(Boolean).slice(-2).join("/")}/`);
+  return wt.startsWith(ws) || (real(wt) + "/").startsWith(real(ws.replace(/\/$/, "")) + "/");
 };
+const isMine = (host, t) => Object.values(readJson("workers.json", {})).some((w) => (w.host ?? "local") === host.name && w.terminal === t.handle) || underWorkspaces(host, t.worktreePath);
+const notices = new Map();
+const notice = (key, text) => { if (notices.get(key) !== text) { notices.set(key, text); console.log(`${new Date().toTimeString().slice(0, 5)} NOTICE ${text}`); } };
+function ownWorkers(host, workers) {
+  const mine = workers.filter((t) => isMine(host, t));
+  if (!workers.length || mine.length === workers.length) { notices.delete(host.name); return mine; }
+  if (!mine.length) { notice(host.name, `${workers.length} worker terminal(s) on ${host.name} and none can be told to be this project's (not in workers.json, worktree not under ${workspacesOn(host)}): watching all of them`); return workers; }
+  notice(host.name, `${workers.length - mine.length} worker terminal(s) on ${host.name} ignored: not this project's`);
+  return mine;
+}
 
 const PROMPTS = /Ask Codex to do anything|\? for shortcuts|^> $|Type your message|│ >/m;   // agent prompt patterns (Codex, Claude Code, Pi)
 const WORKING = /esc to interrupt|Working \(|Thinking|⠋|⠙|⠹|Running /i;
@@ -31,7 +45,7 @@ for (;;) {
     if (RUNNER === "orca") {
       let terms = [];
       try { terms = JSON.parse(trySh(ORCA, ["terminal", "list", ...orcaEnvArgsOn(host), "--json"]) || "{}").result?.terminals ?? []; } catch {}
-      for (const t of terms.filter((t) => / · Worker /.test(t.title ?? "") && !isHelperTerminal(t.title) && t.status !== "exited" && isMine(host, t))) {
+      for (const t of ownWorkers(host, terms.filter((t) => / · Worker /.test(t.title ?? "") && !isHelperTerminal(t.title) && t.status !== "exited"))) {
         const key = `${host.name}|${t.handle}`; seen.add(key);
         let tail = "";
         try { tail = (JSON.parse(trySh(ORCA, ["terminal", "read", "--terminal", t.handle, "--screen", ...orcaEnvArgsOn(host), "--json"]) || "{}").result?.terminal?.tail ?? []).join("\n"); } catch {}

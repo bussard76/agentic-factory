@@ -8,9 +8,9 @@ import path from "node:path";
 import readline from "node:readline/promises";
 import { findControllerTerminal } from "../controller/controller-terminal.mjs";
 import { heartbeatCronScript, statusWatchCronScript, statusWatchLabel, statusWatchPlist } from "./heartbeat-cron.mjs";
-import { installGate } from "./gate-install.mjs";
+import { gateState, installGate, remoteGateScript } from "./gate-install.mjs";
 import { applyReadGrants } from "./read-grants.mjs";
-import { writeFileAtomic } from "./safe-write.mjs";
+import { withLock, writeFileAtomic } from "./safe-write.mjs";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
@@ -721,6 +721,12 @@ function doctor() {
     if (c.agents.runner === "orca" && !h.orcaRepoId) info(`${h.name}: orcaRepoId not set yet`);
   }
   const ctl = c.hosts.workers.find((h) => h.name === c.hosts.controller.host);
+  if (!ctl || ctl.kind === "local") {
+    const g = gateState(os.homedir(), path.join(ROOT, "controller/gate"));
+    if (g.state === "dispatcher") ok(`gate: the dispatcher is installed (~/.local/bin/gate, gate-shim ${g.number}); it runs this project's own gate.mjs`);
+    else if (g.state === "missing") info("gate: ~/.local/bin/gate is not installed yet (start installs it)");
+    else bad(g.state === "older" ? "gate: ~/.local/bin/gate is the shim of an older factory (or another file), not the dispatcher: gates here run whichever project's gate.mjs it names. Run `agentic-factory start` in this project, and update every other project on this host" : `gate: ~/.local/bin/gate is an older dispatcher (gate-shim ${g.number}): run \`agentic-factory start\``);
+  }
   if (ctl) {
     const statusAge = ctl.kind === "local" ? (fs.existsSync(expandHome(`${c.hosts.controller.controllerDir ?? "~/controller"}/status.md`)) ? (Date.now() - fs.statSync(expandHome(`${c.hosts.controller.controllerDir ?? "~/controller"}/status.md`)).mtimeMs) / 60000 : null) : Number(sh("ssh", [...(ctl.sshConfig ? ["-F", ctl.sshConfig.replace(/^~/, os.homedir())] : []), ctl.ssh, `stat -c %Y ${c.hosts.controller.controllerDir ?? "~/controller"}/status.md 2>/dev/null`]) ? (Date.now() / 1000 - Number(sh("ssh", [...(ctl.sshConfig ? ["-F", ctl.sshConfig.replace(/^~/, os.homedir())] : []), ctl.ssh, "stat -c %Y ~/controller/status.md"]))) / 60 : null);
     statusAge === null ? info(`controller status.md not found on ${ctl.name} (controller not started yet)`) : statusAge > 25 ? bad(`controller status.md is ${Math.round(statusAge)} min old`) : ok(`controller status.md ${Math.round(statusAge)} min old`);
@@ -868,6 +874,7 @@ function collectStatus() {
     userSkills: ["orchestration", "orca-cli"].every(userSkill),
     frontAgentBundle: fs.existsSync(path.join(os.homedir(), "front-agent", c.project.name, "FRONT_AGENT.md")),
     statusWatch: statusWatchRuns(c),
+    gate: gateState(os.homedir(), path.join(ROOT, "controller/gate")).state,   // dispatcher | outdated | older | missing, for ~/.local/bin/gate on this machine
     controller: { host: ctl.host, statusAgeMin: ctl.ageMin, terminal: ctlTerminal, running: ctlTerminal || (ctl.ageMin !== null && ctl.ageMin <= 25) },
   };
   // A bot Front agent: the bot and its watch automation instead of the terminal's status watch.
@@ -906,6 +913,7 @@ function collectStatus() {
   else if (watchRequired(c) && readWatchProblem(c)) s.next = `The status watch runs but cannot reach your terminal (${readWatchProblem(c)}). Then: ${s.next}`;
   else if (s.setup.frontAgent && process.env.FACTORY_SKIP_ORCA !== "1" && c.agents.runner === "orca" && !(s.setup.frontAgent.botExists && s.setup.frontAgent.watchAutomation)) s.next = `${s.setup.frontAgent.botExists ? `The bot "${s.setup.frontAgent.bot}" has no watch automation, so finished work and open questions do not wake it: run \`start\`` : `The Front agent bot "${s.setup.frontAgent.bot ?? "(hosts.frontAgent.bot is empty)"}" is not in \`orca bot list\`: create it in Orca, then run \`start\``}. Then: ${s.next}`;
   s.hints = [
+    ...(["older", "outdated"].includes(s.setup.gate) ? [`~/.local/bin/gate is not the current dispatcher (${s.setup.gate}): an older factory's start may have put its shim back. Run \`start\` in this project and update the other projects on this host`] : []),
     ...(!s.work.glossary ? ["the business terms are not written down yet (no GLOSSARY.md): capture them with domain-modeling while specifying"] : []),
     ...(c.architecture?.mode === undefined ? ["no decision on ARCHITECTURE.md yet: ask the human, then set architecture.mode to architect or off in factory.config.json and run update"] : []),
     ...(c.architecture?.mode === "architect" && !s.work.architecture ? ["no ARCHITECTURE.md yet: the Controller starts the baseline (mkspec baseline)"] : []),
@@ -924,6 +932,7 @@ function status() {
     say(`${st.hooksArmed ? "OK     " : "MISSING"} hooks armed`);
     say(`${st.userSkills ? "OK     " : "MISSING"} user-level skills (orchestration, orca-cli)`);
     say(`${st.frontAgentBundle ? "OK     " : "MISSING"} Front agent bundle`);
+    say(`${st.gate === "dispatcher" ? "OK     " : st.gate === "missing" ? "info   " : "MISSING"} gate: ${st.gate}`);
     if (st.frontAgent) say(`${st.frontAgent.botExists ? "OK     " : "MISSING"} Front agent bot ${st.frontAgent.bot ?? "(hosts.frontAgent.bot is empty)"}\n${st.frontAgent.watchAutomation ? "OK     " : "MISSING"} its watch automation`);
     say(`${st.controller.running ? "OK     " : "MISSING"} Controller on ${st.controller.host}${st.controller.statusAgeMin !== null ? ` (status.md ${st.controller.statusAgeMin} min old)` : ""}`);
     const w = s.work;
@@ -1023,10 +1032,13 @@ function armBotWatch(c, frontAgentDir) {
   writeFileAtomic(path.join(dir, "botwatch.sh"), `#!/bin/sh\nPATH=${JSON.stringify(`${path.dirname(process.execPath)}:${os.homedir()}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin`)}\nexport PATH\ncd "$(dirname "$0")" && exec node botwatch.mjs\n`, 0o755);
   const listFile = path.join(dir, "projects.json");
   let projects = [];
-  try { projects = JSON.parse(fs.readFileSync(listFile, "utf8")); } catch {}
-  if (!Array.isArray(projects)) projects = [];
-  projects = [...projects.filter((p) => p?.name !== c.project.name), { name: c.project.name, dir: frontAgentDir, projectDir: cwd }];
-  writeFileAtomic(listFile, JSON.stringify(projects, null, 2) + "\n");
+  // Two projects starting at the same moment must not drop each other's entry: read, change and write under one lock.
+  withLock(listFile, () => {
+    try { projects = JSON.parse(fs.readFileSync(listFile, "utf8")); } catch {}
+    if (!Array.isArray(projects)) projects = [];
+    projects = [...projects.filter((p) => p?.name !== c.project.name), { name: c.project.name, dir: frontAgentDir, projectDir: cwd }];
+    writeFileAtomic(listFile, JSON.stringify(projects, null, 2) + "\n");
+  });
   say(`Front agent bot "${name}": watches ${projects.map((p) => p.name).join(", ")} (${dir.replace(os.homedir(), "~")})`);
   if (process.env.FACTORY_SKIP_ORCA === "1" || c.agents.runner !== "orca") { say(`Bot watch: create the automation in Orca for the bot "${name}": every 5 minutes, precheck sh ${path.join(dir, "botwatch.sh")}`); return 0; }
   const { reachable, bot } = findBot(name);
@@ -1086,10 +1098,10 @@ async function start() {
   if (ctl.kind === "local") {
     const d = expandHome(dir);
     fs.mkdirSync(d, { recursive: true }); fs.cpSync(".factory/controller", d, { recursive: true, force: true }); say(`Controller bundle: ${dir}`);
-    try { say(installGate(path.join(d, "gate"), os.homedir()).message); } catch (e) { failed++; say(`Gate: could not install ~/.local/bin/gate (${e.message.split("\n")[0]})`); }
+    try { say(installGate(path.join(d, "gate"), os.homedir(), path.join(d, "gate-forward.mjs")).message); } catch (e) { failed++; say(`Gate: could not install ~/.local/bin/gate (${e.message.split("\n")[0]})`); }
     const loadlog = path.join(d, "loadlog.sh");
     // A logger of this directory that was started without the project name writes untagged lines for as long as it runs: it goes.
-    const loggers = sh("ps", ["-ax", "-o", "pid=,command="]).split("\n").map((l) => /^\s*(\d+)\s+(.*)$/.exec(l)).filter((m) => m?.[2].includes(loadlog)).map((m) => ({ pid: Number(m[1]), tagged: !m[2].trim().endsWith(loadlog) }));
+    const loggers = sh("ps", ["-ax", "-o", "pid=,command="]).split("\n").map((l) => /^\s*(\d+)\s+(.*)$/.exec(l)).map((m) => m && { pid: Number(m[1]), cmd: new RegExp(`^(?:\\S*/)?bash\\s+${loadlog.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s+(\\S.*))?$`).exec(m[2].trim()) }).filter((m) => m?.cmd).map((m) => ({ pid: m.pid, tagged: Boolean(m.cmd[1]) }));
     for (const l of loggers.filter((l) => !l.tagged)) try { process.kill(l.pid); } catch {}
     if (loggers.some((l) => l.tagged)) say("Load log: already running");
     else { spawn("bash", [loadlog, c.project.name], { cwd: d, detached: true, stdio: "ignore" }).unref(); say(`Load log: started (~/load.log, each line ends in project=${c.project.name})`); }
@@ -1104,8 +1116,8 @@ async function start() {
     if (r.status !== 0) { failed++; say(`Controller bundle: copy to ${ctl.name} failed: ${(r.stderr || "").trim().slice(0, 200)}`); }
     else {
       say(`Controller bundle: ${ctl.name}:${remoteDir}`);
-      const s = spawnSync("ssh", [...sshArgsFor(ctl), `mkdir -p ~/.local/bin && v() { sed -n 's/^# gate-shim: *\\([0-9]*\\).*/\\1/p' "$1" 2>/dev/null | head -1; } && n=$(v ${remoteDir}/gate) && o=$(v ~/.local/bin/gate) && { { [ -n "$o" ] && [ -n "$n" ] && [ "$o" -gt "$n" ]; } || cmp -s ${remoteDir}/gate ~/.local/bin/gate || { install -m 755 ${remoteDir}/gate ~/.local/bin/.gate.$$ && mv -f ~/.local/bin/.gate.$$ ~/.local/bin/gate; }; } && for s in ${remoteDir}/skills/*; do n=$(basename "$s"); for t in ~/.claude/skills ~/.agents/skills; do mkdir -p "$t"; [ -e "$t/$n" ] || cp -R "$s" "$t/"; done; done; for p in $(pgrep -f "[b]ash loadlog.sh$" 2>/dev/null); do [ "$(readlink /proc/$p/cwd 2>/dev/null)" = "$(cd ${remoteDir} && pwd)" ] && kill $p; done; pgrep -f "[b]ash ${remoteLoadlog} " >/dev/null || (cd ${remoteDir} && nohup bash ${remoteLoadlog} ${quoted} >/dev/null 2>&1 &); echo ok`], { encoding: "utf8" });
-      s.stdout?.trim().endsWith("ok") ? say(`Gate, user-level skills and load log on ${ctl.name}: ok`) : (failed++, say(`Gate, skills or load log on ${ctl.name} failed: ${(s.stderr || "").trim().slice(0, 200)}`));
+      const s = spawnSync("ssh", [...sshArgsFor(ctl), remoteGateScript(remoteDir, remoteLoadlog, quoted)], { encoding: "utf8" });
+      s.stdout?.trim().endsWith("ok") ? say(`Gate, user-level skills and load log on ${ctl.name}: ok`) : (failed++, say(`Gate (the dispatcher in ~/.local/bin), skills or load log on ${ctl.name} failed, so this start failed: ${(s.stderr || "").trim().slice(0, 300)}`));
     }
   }
   armHeartbeat(c, ctl, dir);

@@ -15,3 +15,18 @@ export function writeFileAtomic(file, text, mode = 0o644) {
   catch (e) { try { fs.unlinkSync(tmp); } catch {} throw e; }
   return true;
 }
+
+/** Runs fn while holding the directory lock `<file>.lock` (mkdir is atomic). A lock older than 30 s is a dead holder's and is taken over. */
+export function withLock(file, fn) {
+  const lock = `${file}.lock`;
+  for (let tries = 0; ; tries++) {
+    try { fs.mkdirSync(lock); break; }
+    catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      try { if (Date.now() - fs.statSync(lock).mtimeMs > 30_000) { fs.rmdirSync(lock); continue; } } catch {}
+      if (tries > 100) throw new Error(`${lock} is held by another run`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
+  try { return fn(); } finally { try { fs.rmdirSync(lock); } catch {} }
+}

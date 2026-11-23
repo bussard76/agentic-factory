@@ -70,7 +70,7 @@ test("two projects on one host: own controller dir everywhere, a foreign one is 
   for (const f of ["wave.mjs", "runscript.mjs", "integ-wave.sh"]) assert.doesNotMatch(fs.readFileSync(path.join(ctl, f), "utf8"), /\/tmp\/(wave|integ-wave)/, `${f}: a fixed /tmp file would mix two projects' waves`);
   // The shared gate serves this project from inside its checkout: its slots and its pool, not the other project's.
   fs.writeFileSync(path.join(ctl, "gate-slots.json"), JSON.stringify({ unit: 1, e2e: 1 }));
-  const gate = path.join(twoHome, ".local/bin/gate"); assert.ok(fs.existsSync(path.join(ctl, "gate.mjs")), "each project keeps its own gate.mjs"); assert.ok(!fs.existsSync(path.join(twoHome, ".local/bin/gate.mjs")), "the shared place holds no project's gate.mjs");
+  const gate = path.join(twoHome, ".local/bin/gate"); assert.ok(fs.existsSync(path.join(ctl, "gate.mjs")), "each project keeps its own gate.mjs"); assert.match(fs.readFileSync(path.join(twoHome, ".local/bin/gate.mjs"), "utf8"), /gate-forward/, "the shared place holds the forwarder, no project's gate");
   const tmpDir = path.join(base, "tmp"); fs.mkdirSync(tmpDir);
   r = spawnSync(gate, ["sh", "-c", "ls \"$TMPDIR\""], { cwd: project, encoding: "utf8", env: { ...env, TMPDIR: tmpDir } });
   assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /second-gate-unit/); assert.doesNotMatch(r.stdout, /first-gate/);
@@ -154,7 +154,7 @@ test("agent entry questions, answers, status and start in an isolated home", asy
     config.hosts.workers = [{ name: "remote", kind: "remote", ssh: "fake", projectsDir: "~/projects", orcaEnvironment: "saved-server" }]; config.hosts.controller.host = "remote";
     fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
     r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
-    assert.equal(r.status, 0, r.stdout + r.stderr); const sshCalls = fs.readFileSync(`${calls}.ssh`, "utf8"); assert.match(sshCalls, /pgrep -f "\[b\]ash \$HOME\/controller\/loadlog\.sh " >\/dev\/null \|\| \(cd ~\/controller && nohup bash \$HOME\/controller\/loadlog\.sh 'project'/); assert.match(sshCalls, /gate-shim/); assert.match(sshCalls, /node heartbeat\.mjs/);
+    assert.equal(r.status, 0, r.stdout + r.stderr); const sshCalls = fs.readFileSync(`${calls}.ssh`, "utf8"); assert.match(sshCalls, /pgrep -f "\[b\]ash \$HOME\/controller\/loadlog\.sh " >\/dev\/null \|\| \(cd ~\/controller && nohup bash \$HOME\/controller\/loadlog\.sh 'project'/); assert.match(sshCalls, /put \S*\/gate ~\/\.local\/bin\/gate && put \S*\/gate-forward\.mjs ~\/\.local\/bin\/gate\.mjs && g=ok;/); assert.match(sshCalls, /node heartbeat\.mjs/);
     const orcaArgs = fs.readFileSync(`${calls}.orca`, "utf8"); assert.match(orcaArgs, /saved-server/); assert.match(orcaArgs, /path:\/remote\/home\/projects\/project/);
     config.hosts.workers[0].orcaEnvironment = ""; fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
     r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
@@ -241,6 +241,8 @@ test("a wave of two reviewed tasks is accepted, one without its review branch is
 // The wave environment exactly as controller/wave.mjs builds it from the generated config.
 function waveEnv() {
   const cfg = JSON.parse(fs.readFileSync(path.join(tmp, "factory.config.json"), "utf8"));
+  // The dispatcher runs the gate.mjs of the project's Controller directory (the default ~/controller of this home), as start leaves it.
+  fs.mkdirSync(path.join(home, "controller"), { recursive: true }); fs.copyFileSync(path.join(ROOT, "controller/gate.mjs"), path.join(home, "controller/gate.mjs"));
   return { ...process.env, MAIN: cfg.project.mainBranch, INSTALL_CMD: cfg.commands.install ?? "", VERIFY_CMD: cfg.commands.verify ?? "", E2E_CMD: cfg.commands.e2e ?? "", GATE: path.join(ROOT, "controller/gate"), TRAILER: "", HOME: home, FACTORY_PROJECT: "smoke", WAVE_WORKTREE_OK: "1" };
 }
 function runWave(title, branches) {
