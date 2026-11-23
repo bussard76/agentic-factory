@@ -54,6 +54,8 @@ Probiere das integrierte Verhalten mit dem Front-Agenten auf der Preview aus. Is
 ## 5. Später: Remote-Server, weitere Hosts und Rhythmus
 
 - **Remote-Server und Hosts:** Folge der [Server-Einrichtung](../server-setup.md), konfiguriere `hosts.workers` und `hosts.controller.host` und führe `update` und `start` aus. Installiere die Benutzer-Skills auf jedem Host mit Controller oder Front-Agent.
+- **Ein Orca-Bot als Front-Agent:** `init` fragt, wer der Front-Agent ist (`hosts.frontAgent.kind`: eine Terminal-Sitzung, der Standard, oder ein Orca-Bot) und bei einem Bot nach dessen Namen. Lege den Bot zuerst in Orca an, trage in seine `SOUL.md` die Zeile „For each agentic-factory project, follow ~/front-agent/<project>/FRONT_BOT.md“ ein und führe dann `init`, `start` und `doctor` aus. Siehe [Orca](../orca.md), „Front agent as an Orca bot“.
+- **Controller-Verzeichnis:** `init` fragt danach (`hosts.controller.controllerDir`) und schlägt `~/controller-<Projekt>` vor, wenn `~/controller` schon den Controller eines anderen Projekts enthält. Nimm einen absoluten Pfad, wenn das `HOME` deiner Shell nicht das der Orca-Terminals ist.
 - **Rhythmus:** `rhythm.mode` wählt tags planen/nachts bauen, durchgehend oder eigene Ruhezeiten.
 - **Kalibrierung:** Lass Kapazitäts- und Agenten-Kalibrierung auf `auto`, damit Messungen Limits und Modellstufen anpassen.
 - **GitHub-Issues:** Wähle `steering.mode: github-issues`, lege die Labels an und führe `setup-matt-pocock-skills` für den gemeinsamen Tracker aus.
