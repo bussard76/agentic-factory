@@ -14,7 +14,7 @@
 // Usage: node cleanup.mjs [--on <host>|--all] [--dry] [--pushed] [--prune-remote]
 import fs from "node:fs";
 import path from "node:path";
-import { BRANCH_PREFIX, HOSTS, SETTLED_STATES, dispatchStates, file, orcaCall, holdsWorktree, isHelperTerminal, sh, MAIN, ORCA, RUNNER, argHost, journal, onHost, orcaEnvArgsOn, projectDirOn, readJson, trySh, workerStatus, workspacesOn, worktreeRefOn, writeJson } from "./lib.mjs";
+import { BRANCH_PREFIX, HOSTS, SETTLED_STATES, dispatchStates, file, orcaCall, holdsWorktree, isHelperTerminal, sh, MAIN, ORCA, RUNNER, argHost, journal, onHost, orcaEnvArgsOn, projectDirOn, readJson, readState, trySh, workerStatus, workspacesOn, worktreeRefOn, writeJson } from "./lib.mjs";
 
 const dry = process.argv.includes("--dry"), allowPushed = process.argv.includes("--pushed");
 const hosts = process.argv.includes("--all") ? HOSTS : [argHost(process.argv)];
@@ -25,21 +25,13 @@ const readText = (name) => { try { return fs.readFileSync(file(name), "utf8"); }
 const failedReleases = [], forget = [];
 // Setup terminals of released dispatches, remembered until their worktree is gone: handle → worktree path. Only these
 // may be stopped with a worktree removal; any other terminal open in a worktree keeps it.
-const releasedTerms = readJson("released-terminals.json", {});
+const releasedTerms = readState("released-terminals.json", {});
 // Worktrees are matched by directory name: a record may hold a configured path (~/…, or through a symlink) and git the
 // real one. Everything is under this project's workspaces directory, and a clash with another project's name errs to busy.
 const dirOf = (p) => (p ? path.basename(String(p)) : "");
 const RELEASES_MAX = 10, DEADLINE = Date.now() + 3 * 60_000;   // no new release after 3 minutes; the next cycle continues
 const T = { timeout: 20_000 };   // every Orca call in this script gives up after 20 s
-// The release state in Orca's receipt, wherever it sits: the first *state field naming one of the release outcomes.
-const RELEASE_STATES = new Set(["released", "already_released", "retained", "release_pending", "release_unknown"]);
-const releaseState = (o) => {
-  if (!o || typeof o !== "object") return undefined;
-  for (const [k, v] of Object.entries(o)) if (/state$/i.test(k) && RELEASE_STATES.has(v)) return v;
-  for (const v of Object.values(o)) { const found = releaseState(v); if (found) return found; }
-  return undefined;
-};   // per host and run; the rest keep their records and are released in a later cycle
-let releases = 0;
+let releases = 0;   // per host and run; the rest keep their records and are released in a later cycle
 const terminalsOf = (host) => {   // null when the state is unknown; one call per host, reused below
   if (RUNNER !== "orca") return [];
   try { const t = JSON.parse(trySh(ORCA, ["terminal", "list", ...orcaEnvArgsOn(host), "--json"], T) || "null")?.result?.terminals; return Array.isArray(t) ? t : null; } catch { return null; }
@@ -95,9 +87,13 @@ for (const host of hosts) {
     const setup = (shown?.result?.worker?.effects ?? []).filter((e) => e.kind === "terminal" && e.role === "setup" && e.id && !heldTerminals.has(e.id)).map((e) => e.id);
     if (dry) { console.log(`[${host.name}] would release the finished worker "${name}"`); }
     else {
-      // Only released and already_released mean the terminal is closed; retained and release_pending keep everything.
-      const r = orcaCall(["orchestration", "worker-release", "--dispatch", w.dispatch], host), answer = r?.ok ? releaseState(r.result) : r?.error?.code;
-      if (!["released", "already_released"].includes(answer)) { failedReleases.push(`${w.dispatch} (${answer ?? "no answer"})`); hold(`finished, release answered ${answer ?? "nothing"}; retried next cycle`); continue; }
+      // The receipt's shape is not documented, so it only has to say ok. The release counts when worker-show then
+      // reports terminalResource.releaseState "released"; anything else (retained, release_pending, missing) keeps
+      // the record and the worktree for the next cycle.
+      const r = orcaCall(["orchestration", "worker-release", "--dispatch", w.dispatch], host);
+      if (!r?.ok) { failedReleases.push(`${w.dispatch} (${r?.error?.code ?? "no answer"})`); hold(`finished, release answered ${r?.error?.code ?? "nothing"}; retried next cycle`); continue; }
+      const after = orcaCall(["orchestration", "worker-show", "--dispatch", w.dispatch, "--full"], host)?.result?.terminalResource?.releaseState;
+      if (after !== "released") { failedReleases.push(`${w.dispatch} (releaseState ${after ?? "missing"})`); hold(`finished, release not confirmed by Orca (releaseState ${after ?? "missing"}); retried next cycle`); continue; }
       released++; forget.push(k);
     }
     if (w.terminal && res?.ownershipState === "owned") releasedAgents.add(w.terminal);

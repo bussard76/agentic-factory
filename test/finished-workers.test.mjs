@@ -12,7 +12,8 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
 const FILES = ["keep.mjs", "cleanup.mjs", "capacity.mjs", "heartbeat.mjs", "controller-terminal.mjs", "lib.mjs", "journal.mjs", "names.mjs", "steering/tasks.mjs"];
 
 // dispatches: id → { state, retainedReason, ownership, owner (dispatch owning the terminal), noResource, setup: [terminal
-// handles], releaseFails, releaseAnswer (released, retained, release_pending, …) }. worker-list pages them
+// handles], releaseFails, releaseAnswer (what the release leaves in terminalResource.releaseState: released, retained,
+// release_pending, …; already_released leaves released), receipt (the release answer's body, which cleanup must ignore) }. worker-list pages them
 // (newest first, `pageSize` per page, `filler` unrelated rows first); worker-show answers for known ids and
 // dispatch_not_found for the rest; `broken` makes every orchestration call fail without an answer.
 function setup({ dispatches = {}, terminals = [], workers = {}, capacity = { gate: {} }, pageSize = 100, filler = 0, broken = false } = {}) {
@@ -32,7 +33,7 @@ fs.appendFileSync(${JSON.stringify(log)}, a.join(" ") + "\\n");
 const out = (result) => console.log(JSON.stringify({ ok: true, result }));
 const fail = (code) => { console.log(JSON.stringify({ ok: false, error: { code } })); process.exit(1); };
 const arg = (n) => a[a.indexOf(n) + 1];
-const resource = (d, id) => (d.noResource ? null : { retainedReason: d.retainedReason ?? null, ownershipState: d.ownership ?? "owned", ownerDispatchId: d.owner ?? id });
+const resource = (d, id) => (d.noResource ? null : { retainedReason: d.retainedReason ?? null, ownershipState: d.ownership ?? "owned", ownerDispatchId: d.owner ?? id, releaseState: d.releaseState ?? "retained" });
 if (s.broken && a[0] === "orchestration") process.exit(1);
 if (a[0] === "terminal" && a[1] === "list") out({ terminals: s.terminals });
 else if (a[0] === "terminal" && a[1] === "wait") out({ wait: { satisfied: true } });
@@ -47,7 +48,13 @@ else if (a[1] === "worker-show") {
   if (!d) fail("dispatch_not_found");
   out({ worker: { state: d.state, effects: (d.setup ?? []).map((id) => ({ kind: "terminal", role: "setup", id })) }, terminalResource: resource(d, id) });
 }
-else if (a[1] === "worker-release") { const d = s.dispatches[arg("--dispatch")]; if (d?.releaseFails) fail("release_unknown"); out({ dispatchId: arg("--dispatch"), terminalState: d?.releaseAnswer ?? "released" }); }
+else if (a[1] === "worker-release") {
+  const d = s.dispatches[arg("--dispatch")];
+  if (d?.releaseFails) fail("release_unknown");
+  const answer = d?.releaseAnswer ?? "released";
+  if (d) { d.releaseState = answer === "already_released" ? "released" : answer; fs.writeFileSync(${JSON.stringify(state)}, JSON.stringify(s)); }
+  out(d?.receipt ?? { dispatchId: arg("--dispatch") });
+}
 else if (a[0] === "orchestration" && a[1] === "inbox") out({ messages: [] });
 else if (a[0] === "worktree" && a[1] === "list") out({ worktrees: [] });
 else out({});`);
@@ -331,8 +338,8 @@ test("only released and already_released count: retained and release_pending kee
   h.setWorkers({ r: rec("T1 · Worker Developer", "ctx_r", "structworker_r", h.wt("t1")), p: rec("T2 · Worker Developer", "ctx_p", "structworker_p", h.wt("t2")), a: rec("T3 · Worker Developer", "ctx_a", "structworker_a", h.wt("t3")) });
   const r = h.run("cleanup.mjs");
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /kept t1: worker "T1 · Worker Developer" finished, release answered retained; retried next cycle/);
-  assert.match(r.stdout, /kept t2: worker "T2 · Worker Developer" finished, release answered release_pending; retried next cycle/);
+  assert.match(r.stdout, /kept t1: worker "T1 · Worker Developer" finished, release not confirmed by Orca \(releaseState retained\); retried next cycle/);
+  assert.match(r.stdout, /kept t2: worker "T2 · Worker Developer" finished, release not confirmed by Orca \(releaseState release_pending\); retried next cycle/);
   assert.deepEqual(h.calls().filter((c) => c.startsWith("worktree rm ")).map((c) => c.split(" ")[3].split("/").pop()), ["t3"]);
   assert.deepEqual(Object.keys(h.readWorkers()).sort(), ["p", "r"]);
   h.done();
@@ -371,5 +378,55 @@ test("scenario K: a backlog of finished default-kept workers drains, 10 per clea
   h.setWorkers(Object.fromEntries(ids.map((id, i) => [id, rec(`K${i} · Worker Developer`, id, `structworker_${i}`, h.wt(`k${i}`), { keptByDefault: true })])));
   const left = [1, 2, 3, 4].map(() => { const r = h.run("cleanup.mjs"); assert.equal(r.status, 0, r.stderr); return Object.keys(h.readWorkers()).length; });
   assert.deepEqual(left, [30, 20, 10, 0]);
+  h.done();
+});
+
+test("the release receipt is not interpreted: only worker-show's terminalResource.releaseState released confirms it", () => {
+  // Receipts that name "released" in some field must not count while Orca's own record says otherwise.
+  const lying = { terminalResource: { ownershipState: "released", terminalState: "released", releaseState: "released" } };
+  const h = setup({ dispatches: {
+    ctx_lie: { state: "succeeded", releaseAnswer: "retained", receipt: lying },
+    ctx_quiet: { state: "succeeded", releaseAnswer: "released", receipt: {} },
+    ctx_none: { state: "succeeded", releaseAnswer: null },
+  } });
+  h.repo("t1", "t2", "t3");
+  h.setWorkers({ lie: rec("T1 · Worker Developer", "ctx_lie", "structworker_1", h.wt("t1")), quiet: rec("T2 · Worker Developer", "ctx_quiet", "structworker_2", h.wt("t2")), none: rec("T3 · Worker Developer", "ctx_none", "structworker_3", h.wt("t3")) });
+  h.patch((s) => { s.dispatches.ctx_none.releaseAnswer = "missing"; });
+  const r = h.run("cleanup.mjs");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /kept t1: worker "T1 · Worker Developer" finished, release not confirmed by Orca \(releaseState retained\)/);
+  assert.match(r.stdout, /kept t3: worker "T3 · Worker Developer" finished, release not confirmed by Orca \(releaseState missing\)/);
+  assert.deepEqual(h.calls().filter((c) => c.startsWith("worktree rm ")).map((c) => c.split(" ")[3].split("/").pop()), ["t2"], "an empty receipt is fine when Orca's record says released");
+  assert.deepEqual(Object.keys(h.readWorkers()).sort(), ["lie", "none"]);
+  h.done();
+});
+
+test("a corrupt or null cache file is an empty cache: capacity and cleanup carry on, say so once, and rewrite it", () => {
+  for (const content of ["{bad", "null", "[1,2]", "7"]) {
+    const h = setup({ dispatches: { ctx_a: { state: "succeeded" }, ctx_b: { state: "ready" } } });
+    h.repo("t1");
+    h.setWorkers({ a: rec("T1 · Worker Developer", "ctx_a", "structworker_a", h.wt("t1"), { keptByDefault: true }), b: rec("T2 · Worker Developer", "ctx_b", "structworker_b", "/w/b") });
+    for (const f of ["dispatch-settled.json", "dispatch-asked.json", "released-terminals.json", "quota.json", "capacity-state.local.json"]) fs.writeFileSync(path.join(h.ctl, f), content);
+    const cap = h.run("capacity.mjs", "--verbose");
+    assert.equal(cap.status, 0, `${content}: ${cap.stderr}`);
+    assert.equal(JSON.parse(cap.stdout).measured.suite, 1, content);
+    assert.match(cap.stderr, /dispatch-settled\.json could not be read; starting from scratch/, content);
+    assert.equal(typeof JSON.parse(fs.readFileSync(path.join(h.ctl, "dispatch-settled.json"), "utf8")), "object", "rewritten");
+    assert.ok(Number.isFinite(JSON.parse(fs.readFileSync(path.join(h.ctl, "capacity-state.local.json"), "utf8")).suiteMax), "calibration state rewritten");
+    fs.writeFileSync(path.join(h.ctl, "dispatch-settled.json"), content);
+    const r = h.run("cleanup.mjs");
+    assert.equal(r.status, 0, `${content}: ${r.stderr}`);
+    assert.match(r.stdout, /released 1 dispatches/, content);
+    assert.equal(typeof JSON.parse(fs.readFileSync(path.join(h.ctl, "released-terminals.json"), "utf8")), "object");
+    h.done();
+  }
+});
+
+test("heartbeat: corrupt or null state files do not stop it", () => {
+  const h = setup({ dispatches: { ctx_a: { state: "ready" } }, terminals: [{ handle: "term_c", title: "p · Controller" }] });
+  h.setWorkers({ a: rec("A · Worker Developer", "ctx_a", "structworker_a", "/w/a") });
+  for (const f of ["heartbeat.known.json", "heartbeat.settled.json", "heartbeat.workers.json", "heartbeat.announced.json", "heartbeat.seen.json", "dispatch-settled.json"]) fs.writeFileSync(path.join(h.ctl, f), "null");
+  for (let i = 0; i < 2; i++) { const r = spawnSync("node", [path.join(h.ctl, "heartbeat.mjs")], { cwd: h.ctl, encoding: "utf8", env: h.env }); assert.equal(r.status, 0, r.stderr); }
+  assert.match(fs.readFileSync(path.join(h.ctl, "heartbeat.notice"), "utf8"), /Working: 1 workers/);
   h.done();
 });

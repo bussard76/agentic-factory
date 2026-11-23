@@ -22,7 +22,11 @@ const LOCK_STALE_MS = 5 * 60_000;
 const log = (line) => console.log(`${new Date().toISOString()} ${line}`);
 const run = (cmd, args, cwd) => execFileSync(cmd, args, { cwd, encoding: "utf8", timeout: 60_000, stdio: ["ignore", "pipe", "pipe"] });
 const orca = (...args) => JSON.parse(run(ORCA, [...args, "--json"]));
-const readJson = (name, fallback) => { try { return JSON.parse(fs.readFileSync(file(name), "utf8")); } catch { return fallback; } };
+// Unreadable, or the wrong kind of value (null, an array for an object): the fallback.
+const readJson = (name, fallback) => {
+  try { const v = JSON.parse(fs.readFileSync(file(name), "utf8")); if (fallback === null || (Array.isArray(fallback) ? Array.isArray(v) : v !== null && typeof v === "object" && !Array.isArray(v))) return v; } catch { /* fallback */ }
+  return fallback;
+};
 const readText = (name) => { try { return fs.readFileSync(file(name), "utf8"); } catch { return ""; } };
 const short = (error) => String(error.message).slice(0, 160);
 
@@ -80,7 +84,7 @@ const workerCounts = (records, fresh = fullCheck) => {
     try {
       const at = fs.statSync(file("heartbeat.workers.json")).mtimeMs, changed = fs.statSync(file("workers.json")).mtimeMs;
       const cached = Date.now() - at < COUNT_CACHE_MS && changed <= at ? readJson("heartbeat.workers.json", null) : null;
-      if (cached) return (counted = cached);
+      if (cached && typeof cached === "object" && Number.isFinite(cached.running) && Number.isFinite(cached.unknown) && Array.isArray(cached.settled)) return (counted = cached);
     } catch { /* no cache or no workers.json */ }
   }
   counted = { running: 0, unknown: 0, settled: [] };

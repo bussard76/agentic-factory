@@ -111,7 +111,7 @@ export const orcaCall = (args, h) => {
 };
 const dispatchInfo = (state, resource) => ({ state, keptOpen: resource?.retainedReason === "user_requested", owned: resource?.ownershipState === "owned", owner: resource?.ownerDispatchId ?? undefined });
 /** Settled states never change back, so they are kept in dispatch-settled.json and never asked again: "<host> <id>" → state. */
-export const knownSettled = (h) => { const all = readJson("dispatch-settled.json", {}), p = `${h?.name ?? "local"} `; return Object.fromEntries(Object.entries(all).filter(([k]) => k.startsWith(p)).map(([k, v]) => [k.slice(p.length), v])); };
+export const knownSettled = (h) => { const all = readState("dispatch-settled.json", {}), p = `${h?.name ?? "local"} `; return Object.fromEntries(Object.entries(all).filter(([k]) => k.startsWith(p)).map(([k, v]) => [k.slice(p.length), v])); };
 /**
  * Dispatch state for the given ids on host h: at most LIST_PAGES_MAX pages of worker-list (newest first, stops once every
  * id is seen), then worker-show for at most SHOW_CALLS_MAX of the rest, least recently asked first (dispatch-asked.json),
@@ -136,7 +136,7 @@ export function dispatchStates(ids, h) {
     cursor = r.result?.nextCursor ?? r.result?.page?.nextCursor;
     if (!cursor) break;
   }
-  const asked = readJson("dispatch-asked.json", {}), key = (id) => `${h?.name ?? "local"} ${id}`;
+  const asked = readState("dispatch-asked.json", {}), key = (id) => `${h?.name ?? "local"} ${id}`;
   const rest = want.filter((id) => !out[id]).sort((a, b) => (asked[key(a)] ?? 0) - (asked[key(b)] ?? 0));
   for (const id of rest.slice(0, SHOW_CALLS_MAX)) {
     if (Date.now() >= until) break;
@@ -147,7 +147,7 @@ export function dispatchStates(ids, h) {
     else if (!r) break;   // slow or broken Orca: the rest stays unknown
   }
   // Remember settled answers; forget entries of this host whose record is gone.
-  const p = `${h?.name ?? "local"} `, all = readJson("dispatch-settled.json", {});
+  const p = `${h?.name ?? "local"} `, all = readState("dispatch-settled.json", {});
   const next = Object.fromEntries(Object.entries(all).filter(([k]) => !k.startsWith(p) || ids0.includes(k.slice(p.length))));
   // Not cached while another dispatch owns the terminal: that worker counts as running until it is asked again.
   for (const [id, d] of Object.entries(out)) if (SETTLED_STATES.has(d.state) && (!d.owner || d.owner === id)) next[p + id] = d.state;
@@ -163,7 +163,22 @@ export const git = (...a) => trySh("git", ["-C", PROJECT_DIR, ...a]).trim();
 export const clean = (s) => String(s).split("\n").filter((l) => !/pair|token|code=/i.test(l)).join("\n");
 export const file = (name) => path.join(DIR, name);
 export const readJson = (name, fallback) => (fs.existsSync(file(name)) ? JSON.parse(fs.readFileSync(file(name), "utf8")) : fallback);
-export const writeJson = (name, value) => fs.writeFileSync(file(name), JSON.stringify(value, null, 2) + "\n");
+/**
+ * A state file the scripts can rebuild (caches, calibration): one that cannot be read, or holds the wrong kind of value
+ * (null, an array for an object), counts as missing. One line on stderr says so; the next write replaces it. Not for
+ * workers.json: an empty worker list would make capacity count nobody and cleanup forget everyone.
+ */
+export const readState = (name, fallback) => {
+  if (!fs.existsSync(file(name))) return fallback;
+  try {
+    const v = JSON.parse(fs.readFileSync(file(name), "utf8"));
+    if (Array.isArray(fallback) ? Array.isArray(v) : v !== null && typeof v === "object" && !Array.isArray(v)) return v;
+  } catch { /* reported below */ }
+  console.error(`${name} could not be read; starting from scratch, it is rewritten on the next save`);
+  return fallback;
+};
+/** Writes through a temporary file and a rename, so a reader in another process never sees a half-written file. */
+export const writeJson = (name, value) => { const tmp = `${file(name)}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n"); fs.renameSync(tmp, file(name)); };
 export const journal = (type, task, extra = {}) => fs.appendFileSync(file("journal.ndjson"), JSON.stringify({ ts: new Date().toISOString(), type, task, ...extra }) + "\n");
 export const modelFor = (tier, agent = config.agents?.default ?? "codex") => (agent === FALLBACK.agent ? FALLBACK.models?.[tier] : MODELS[tier]) ?? MODELS.default;
 /** A setup or shell terminal in an entry. Its name contains the entry's role, but it is neither the worker nor a wave. */

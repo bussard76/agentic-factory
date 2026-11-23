@@ -5,7 +5,7 @@
 // `decision` event in the journal. --set-suite <n> --by "<the human's words>" sets the suite cap by hand (journaled; the
 // automatic step-down on pressure still applies). Usage: node capacity.mjs [--on <host>] [--verbose] [--reset] [--set-suite <n> --by "<quote>"]
 import fs from "node:fs";
-import { CONTROLLER_HOME, ORCA, PROJECT, RUNNER, argHost, dispatchStates, file, journal, onHost, orcaEnvArgsOn, readJson, trySh, workerStatus, writeJson } from "./lib.mjs";
+import { CONTROLLER_HOME, ORCA, PROJECT, RUNNER, argHost, dispatchStates, file, journal, onHost, orcaEnvArgsOn, readJson, readState, trySh, workerStatus, writeJson } from "./lib.mjs";
 
 const host = argHost(process.argv);
 const CAP = host.capacity;
@@ -44,7 +44,7 @@ const dispatches = RUNNER === "orca" ? dispatchStates(recorded.map((w) => w.disp
 const statuses = recorded.map((w) => workerStatus(w, { dispatches, terminals: liveTerminals, pidAlive: alivePid }));
 const workers = recorded.filter((w, i) => statuses[i] !== "finished");
 const suite = workers.filter((w) => !w.readonly).length, readonly = workers.filter((w) => w.readonly).length;
-const quota = readJson("quota.json", {});
+const quota = readState("quota.json", {});
 const recentTimeouts = recentLoadTimeouts(30);
 
 // --- pressure flags and reasons (before any calibration decision uses them) -----------------------------------------
@@ -66,7 +66,8 @@ if (RUNNER === "orca" && statuses.includes("unknown")) notes.push(`${statuses.fi
 // --- calibrated caps --------------------------------------------------------------------------------------------------
 const stateName = `capacity-state.${host.name}.json`;
 const fresh = () => ({ suiteMax: CAL.mode === "auto" ? Math.min(CAL.startSuite, CAP.suiteWorkersMax ?? CAL.startSuite) : CAP.suiteWorkersMax ?? 4, readonlyMax: CAL.mode === "auto" ? Math.min(CAL.startReadonly, CAP.readOnlyWorkersMax ?? CAL.startReadonly) : CAP.readOnlyWorkersMax ?? 4, quietSince: new Date().toISOString(), roQuietSince: new Date().toISOString(), history: [] });
-const state = (process.argv.includes("--reset") ? null : readJson(stateName, null)) ?? fresh();
+const saved = process.argv.includes("--reset") ? null : readState(stateName, null);
+const state = saved && Number.isFinite(saved.suiteMax) && Number.isFinite(saved.readonlyMax) && Array.isArray(saved.history) ? saved : fresh();
 if (setSuite) {
   state.suiteMax = Number(setSuite); state.quietSince = new Date().toISOString();
   state.history.push({ ts: state.quietSince, dir: "set", suiteMax: state.suiteMax, why: `set by ${setBy}` });
