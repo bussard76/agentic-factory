@@ -4,6 +4,13 @@ set -eu
 d=$(dirname "$0")
 # The project's own pre-commit (kept by init as pre-commit.own next to this file) runs first and must pass.
 if [ -x "$d/pre-commit.own" ]; then "$d/pre-commit.own" "$@"; fi
+# The project's formatter on the fully staged files (commands.formatStaged); does nothing when that is not set. If a
+# step below fails, the trap takes the formatting back. Skipped when a locally kept older tools/factory-guardrails.mjs
+# does not know the step yet (agentic-factory update keeps changed files).
+if [ ! -f tools/factory-guardrails.mjs ] || grep -q format-staged tools/factory-guardrails.mjs; then
+  trap 'st=$?; node tools/factory-guardrails.mjs format-staged --finish "$st" || true; exit $st' EXIT
+  node tools/factory-guardrails.mjs format-staged
+fi
 node tools/factory-guardrails.mjs test-count
 node tools/factory-guardrails.mjs staged-safety
 node tools/factory-guardrails.mjs static-checks

@@ -37,6 +37,7 @@ New features go from the outside in. Nothing is built until {{HUMAN}} has signed
 - Tester and wave: full `{{VERIFY}}` and `{{E2E}}` on current `{{MAIN}}` plus the branch.
 - Release only: `{{RELEASE}}`. Never per task or per wave.
 - Every full gate runs through this project's own gate (fair slots, pooled by unit and browser), as `{{CONTROLLER_DIR}}/gate bash -c '<command>'` because the gate starts a program without a shell. Never a bare `gate` from the PATH: on a host with other factories it would be another project's.
+- Documentation only, when the `factory.config.json` on `{{MAIN}}` sets `docsOnly.enabled`: a task whose branch the docs-only check (the Controller's `node docsonly.mjs <task> <branch>`) calls docs-only (exit 0) gets no Tester and no full gate; its wave runs only the format and Markdown checks. The check's printed evidence (changed paths, verdict) is recorded in place of the review. Anything else, including an unclear verdict, takes the full path. Process files, review findings, tickets and agent instructions never count as documentation.
 
 ## Capacity by measurement (decided by {{HUMAN}}, {{DATE}})
 
@@ -52,7 +53,7 @@ The Controller runs `node capacity.mjs` before every start and follows its verdi
 
 ## Review loop
 
-1. Developer done → Tester (fresh context) on current `{{MAIN}}` plus the branch.
+1. Developer done → Tester (fresh context) on current `{{MAIN}}` plus the branch. With `docsOnly.enabled`, a branch the docs-only check calls docs-only goes straight into the next wave, its evidence recorded instead of a review.
 2. Tester failed → while rounds are left ({{MAX_ROUNDS}} at most), rework in the same worktree with the findings unchanged and a new round; with more than two rounds allowed, the rework after the second failure runs one tier higher. After the last round fails: no rework, `mkspec reeval` on the commit that round reviewed; a failing re-evaluation goes to {{HUMAN}}. A fix after a passing round (failed conformance, red wave, merge conflict) is no failed round: rework and re-check as usual, allowed beyond the limit only after a round that says `Verdict: pass` (a rework without a findings file takes `--reason "<what failed>"`).
 3. Tester passed → conformance review for level 2/3, else into the next wave.
 4. A wave starts when {{WAVE_PASSED}} passed tasks wait, one has waited {{WAVE_MINUTES}} minutes, or a task is on the critical path. The wave merges, runs the full gates once, and pushes to `{{MAIN}}`.

@@ -147,7 +147,23 @@
     "release": [
       "pnpm e2e:compose",
       "pnpm test:images"
-    ]
+    ],
+    "formatCheck": "",
+    "markdownCheck": "",
+    "$docsChecks": "Optional. formatCheck (e.g. a formatter's check mode such as \"prettier --check .\", run through the project's own tooling) and markdownCheck (e.g. \"markdownlint-cli2 '**/*.md'\") are what a documentation-only wave runs instead of verify and e2e (docsOnly.enabled); an empty one is skipped.",
+    "formatStaged": "",
+    "$formatStaged": "Optional, off when empty: pre-commit runs this formatter in write mode on the staged files (paths appended) and stages the result, e.g. \"prettier --write --ignore-unknown\" run through the project's own tooling. Or { \"command\": \"…\", \"paths\": [\"**/*.py\"] } to pass only matching files. Partially staged files keep their unstaged changes."
+  },
+  "docsOnly": {
+    "enabled": false,
+    "$enabled": "true: a change that touches documentation only (tools/factory-guardrails.mjs docs-only, fail closed) gets no Tester and no full gate; its wave runs commands.formatCheck and commands.markdownCheck (with neither configured, the full gates). Read from the main branch's factory.config.json. false: every change takes the full path.",
+    "paths": [
+      "docs/**",
+      "*.md"
+    ],
+    "$paths": "Where documentation lives (** any depth, * and ? within a directory, {a,b}); each pattern starts with a directory name or names top-level files. Only plain Markdown and raster images count; the files the factory installs or reads as process state (protocols, coordinator and workflow docs, reviews, tickets), agent instruction files, dot paths and executable files never do. Read from the main branch: a change cannot widen its own allowlist.",
+    "extraTypes": [],
+    "$extraTypes": "Opt-in file types that can carry code: \"svg\", \"mdx\". Empty: Markdown and raster images only."
   },
   "reviews": {
     "functionalOnly": true,
