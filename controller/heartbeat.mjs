@@ -6,7 +6,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { findControllerTerminal } from "./controller-terminal.mjs";
+import { controllerPlaces, locateController } from "./controller-terminal.mjs";
 import { HOSTS, HUMAN, MAIN, ORCA, PROJECT, PROJECT_DIR, STEERING, config, dispatchStates, file, hostNamed, orcaEnvArgsOn, workerStatus, worktreeRefOn } from "./lib.mjs";
 
 const IDLE_WAIT_MS = 15_000;
@@ -14,6 +14,10 @@ const IDLE_WAKE_MS = 55 * 60_000; // Nothing to do: wake about hourly, a little 
 const INBOX_POINTER_MS = 5 * 60_000; // A busy Controller gets a pointer to the inbox after this long.
 const LOG_LIMIT = 1 << 20;
 const MESSAGE = "Heartbeat: run the next cycle of \"The loop\" in CONTROLLER.md now, then stop and wait for the next heartbeat.";
+// Nothing a worker or a message wrote is ever typed into the Controller's terminal: the lines above and the one below are
+// fixed text plus a count this script made. The Controller reads the mail itself (step 1 of its loop). What a terminal's
+// title says goes only into the sidebar comment, on one line.
+const oneLine = (text, n) => String(text ?? "").replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, n);
 const POINTER = "Heartbeat: inbox.md has a new instruction. Read it after your current step.";
 const title = `${PROJECT} · Controller`;
 
@@ -35,6 +39,12 @@ try { if (Date.now() - fs.statSync(LOCK).mtimeMs > LOCK_STALE_MS) fs.rmdirSync(L
 try { fs.mkdirSync(LOCK); } catch { process.exit(0); }
 process.on("exit", () => { try { fs.rmdirSync(LOCK); } catch { /* already gone */ } });
 try { if (fs.statSync(file("heartbeat.log")).size > LOG_LIMIT) fs.renameSync(file("heartbeat.log"), file("heartbeat.log.1")); } catch { /* no log yet */ }
+// Proof for `doctor` and `status` (a quiet beat writes no log line): heartbeat.alive says a run started, heartbeat.ok that one
+// got through, so a job that never ran, or crashes after it started, is told from one that works. A run that could not reach
+// Orca's terminal list is no success.
+let reached = true;
+try { fs.writeFileSync(file("heartbeat.alive"), ""); } catch { /* read-only directory: the beat still works */ }
+process.on("exit", (code) => { if (code === 0 && reached) try { fs.writeFileSync(file("heartbeat.ok"), ""); } catch { /* as above */ } });
 
 const steering = (...args) => JSON.parse(run("node", [file(`steering/${STEERING === "github-issues" ? "issues" : "tasks"}.mjs`), ...args]));
 const readyTickets = () => (STEERING === "github-issues" ? steering("ready") : steering("list", "ready"));
@@ -69,7 +79,7 @@ const pendingWork = () => {
 const terminalsByHost = {};
 for (const host of HOSTS) {
   try { terminalsByHost[host.name] = orca("terminal", "list", ...orcaEnvArgsOn(host)).result.terminals; }
-  catch (error) { terminalsByHost[host.name] = null; log(`terminal list failed on ${host.name}: ${short(error)}`); }
+  catch (error) { terminalsByHost[host.name] = null; reached = false; log(`terminal list failed on ${host.name}: ${short(error)}`); }
 }
 // Running and unknown workers in a workers.json object, and the dispatches of settled ones not kept open, from Orca's
 // dispatch state (lib.mjs workerStatus). Orca is asked at most once per run, and for the sidebar at most every 10 minutes:
@@ -103,8 +113,15 @@ const workerCounts = (records, fresh = fullCheck) => {
   fs.writeFileSync(file("heartbeat.workers.json"), JSON.stringify(counted));
   return counted;
 };
-// This script runs in the Controller directory, so its folder name is the one an agent CLI like pi puts in the title.
-const terminal = findControllerTerminal(terminalsByHost[config.hosts?.controller?.host ?? "local"], title, file("."));
+// Who is the Controller is settled by how it was made (controller-terminal.mjs): the handle `start` recorded from its own
+// `terminal create`, else a terminal that carries the Controller's name. An unnamed agent session, even the only one in the
+// project's checkout, is never taken (it may be a person's, or the Front agent's), and a record is never made here. A record
+// that is gone, orphaned or in another worktree is dropped. Unknown, unconfirmed or ambiguous means no wake.
+const controllerTerminals = terminalsByHost[config.hosts?.controller?.host ?? "local"];
+const [recorded = "", recordedWorktree = ""] = readText("controller-terminal.txt").split("\n").map((l) => l.trim());
+const located = locateController(controllerTerminals, { title, controllerDir: file("."), handle: recorded, dirs: controllerPlaces({ projectDir: PROJECT_DIR, controllerDir: file("."), recordedWorktree }) });
+const terminal = located.terminal;
+if (controllerTerminals !== null && recorded && located.record === "invalid") { try { fs.rmSync(file("controller-terminal.txt"), { force: true }); log(`dropped the recorded terminal ${recorded}: it is gone, orphaned, or not in this project`); } catch { /* retried next beat */ } }
 
 // A wave runs in its own terminal, is no worker and sends no message, so its end has to be read from the terminal.
 const readWave = () => {
@@ -155,10 +172,14 @@ const updateNotice = () => {
   showNotice(say("Nothing left to do: no workers, no ready tickets, no open question", "Nichts mehr zu tun: keine Worker, keine freigegebenen Tickets, keine offene Frage"), "completed", true);
 };
 try {
-  if (!terminal) showNotice(say("Controller is not running: run `agentic-factory start`", "Controller läuft nicht: bitte `agentic-factory start` ausführen"), "in-review", true);
+  // A terminal list that failed says nothing about the Controller: no "not running" comment from that.
+  if (!terminal && controllerTerminals === null) log("controller terminal unknown: the terminal list failed");
+  else if (!terminal && located.ambiguous.length) showNotice(say(`${located.ambiguous.length} terminals in this project look like the Controller and none is recorded, so nothing is woken: close the extra ones or run \`agentic-factory start\``, `${located.ambiguous.length} Terminals dieses Projekts kommen als Controller in Frage und keiner ist vermerkt, daher wird keiner geweckt: überzählige schließen oder \`agentic-factory start\` ausführen`), "in-review", true);
+  else if (!terminal && located.unconfirmed.length) showNotice(say(`A terminal named "${oneLine(located.unconfirmed[0].title ?? located.unconfirmed[0].paneTitle, 60)}" may be the Controller, but Orca does not show an agent running in this project there, so nothing is woken`, `Ein Terminal "${oneLine(located.unconfirmed[0].title ?? located.unconfirmed[0].paneTitle, 60)}" könnte der Controller sein, aber Orca zeigt dort keinen Agenten in diesem Projekt, daher wird nichts geweckt`), "in-review", true);
+  else if (!terminal) showNotice(say(`Controller is not running: run \`agentic-factory start\`${located.unnamed.length ? ` (${located.unnamed.length} other agent session${located.unnamed.length > 1 ? "s run" : " runs"} in this project's checkout, but none is named or recorded as the Controller, so none is woken)` : ""}`, `Controller läuft nicht: bitte \`agentic-factory start\` ausführen${located.unnamed.length ? ` (${located.unnamed.length} andere Agent-Sitzung(en) laufen im Checkout des Projekts, aber keine trägt den Namen des Controllers oder ist als solcher vermerkt, daher wird keine geweckt)` : ""}`), "in-review", true);
   else updateNotice();
 } catch (error) { log(`notice failed: ${short(error)}`); } // A display problem must not stop the wake below.
-if (!terminal) { log(`no terminal titled "${title}" or "π - …/${path.basename(file("."))}", nothing woken`); process.exit(0); }
+if (!terminal) { log(located.ambiguous.length ? `${located.ambiguous.length} confirmed terminals (${located.ambiguous.map((t) => t.handle).join(", ")}), none recorded: nothing woken` : located.unconfirmed.length ? `${located.unconfirmed.length} terminal(s) named like the Controller, but not confirmed as an agent running in this project: nothing woken` : `no terminal recorded or named as the Controller, nothing woken; ${located.unnamed.length} other agent session(s) in the checkout are never taken (titled "${title}" or "π - …/${path.basename(file("."))}" preferred), nothing woken`); process.exit(0); }
 
 // Every minute: react to a worker's message at once. A message stays unseen until a wake succeeded.
 // Workers are remembered: a Controller cycle may drop a worker from workers.json before its message was counted.
@@ -204,6 +225,11 @@ if (!reasons.length && needsHuman().length) process.exit(0);
 const lastWake = fs.existsSync(file("heartbeat.last")) ? fs.statSync(file("heartbeat.last")).mtimeMs : 0;
 if (!reasons.length && Date.now() - lastWake < IDLE_WAKE_MS) process.exit(0);
 
+
+// A Controller that has not written its first status.md has not started its first cycle: it may still sit at its agent CLI's
+// first-start dialog (trust this folder), and a line typed there is Enter on a default. Whatever the reason, nothing is typed yet.
+if (!fs.existsSync(file("status.md"))) { log(`no status.md yet, so the Controller has not started: nothing typed (${reasons.join(", ") || "hourly check"})`); process.exit(0); }
+
 // Output timestamps are no idle signal: an idle session still redraws. A timeout counts as busy.
 let idle = false;
 try {
@@ -221,7 +247,9 @@ if (!idle) {
   process.exit(0);
 }
 
-orca("terminal", "send", "--terminal", terminal.handle, "--text", MESSAGE, "--enter");
+// A count tells the Controller there is mail; what it says it reads itself, in step 1 of the loop.
+const text = fresh.length ? `Heartbeat: ${fresh.length} new worker message${fresh.length > 1 ? "s" : ""}. Run the next cycle of "The loop" in CONTROLLER.md now (step 1 reads the mail), then stop and wait for the next heartbeat.` : MESSAGE;
+orca("terminal", "send", "--terminal", terminal.handle, "--text", text, "--enter");
 fs.writeFileSync(file("heartbeat.last"), "");
 remember();
 if (newlySettled.length) fs.writeFileSync(file("heartbeat.settled.json"), JSON.stringify([...readJson("heartbeat.settled.json", []), ...newlySettled].slice(-500)));

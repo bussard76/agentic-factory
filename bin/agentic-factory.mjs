@@ -6,8 +6,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
-import { findControllerTerminal } from "../controller/controller-terminal.mjs";
-import { heartbeatCronScript, statusWatchCronScript, statusWatchLabel, statusWatchPlist } from "./heartbeat-cron.mjs";
+import { controllerPlaces, locateController } from "../controller/controller-terminal.mjs";
+import { heartbeatCronCheckScript, heartbeatCronScript, heartbeatLabel, heartbeatPlist, statusWatchCronScript, statusWatchLabel, statusWatchPlist } from "./heartbeat-cron.mjs";
 import { applyReadGrants } from "./read-grants.mjs";
 import { copyTreeAtomic, withLock, writeFileAtomic } from "./safe-write.mjs";
 
@@ -731,6 +731,16 @@ function doctor() {
   if (watchRequired(c) && readWatchProblem(c)) info(`status watch cannot reach the terminal: ${readWatchProblem(c)}`);
   // Under WSL the cron service does not always run, and then the schedule is there but nothing happens.
   if (watchRequired(c)) statusWatchRuns(c) ? ok("status watch running") : info(`status watch not running: without it, finished work and open questions do not reach the Front agent. Run start${/microsoft/i.test(os.release()) ? "; under WSL also check the cron service (sudo service cron start)" : ""}`);
+  if (heartbeatOn(c)) {
+    const hb = heartbeatStatus(c);
+    if (hb.unknown) info("heartbeat: the Controller's host did not answer, so it is not known whether it is scheduled");
+    else if (hb.scheduled && hb.problem) bad(`heartbeat scheduled (${hb.scheduled}), but ${hb.problem}`);
+    else if (hb.scheduled) ok(`heartbeat scheduled (${hb.scheduled}${hb.scheduled === "external" ? ", by the host's own scheduler" : ""}); ${hb.lastOkAt ? `ran fine at ${hb.lastOkAt} (${hb.lastOkMin} min ago)` : hb.state === "not-yet" ? "not run yet (installed a moment ago)" : "ran, but no record that a run got through yet"}`);
+    // Before the first start there is nothing to schedule yet: not a defect, like the Controller's status.md.
+    else if (!hb.installed) info("heartbeat not scheduled yet (the Controller is not started: run start)");
+    else bad("heartbeat not scheduled: nothing wakes the Controller from outside, so finished workers wait for a person (run start; if that fails it says why)");
+  }
+  else if (c.hosts.controller.heartbeat === false) info("heartbeat off (hosts.controller.heartbeat is false): you wake the Controller yourself");
   if (!["terminal", "orca-bot"].includes(frontKind(c))) bad(`hosts.frontAgent.kind "${frontKind(c)}" (terminal or orca-bot)`);
   if (frontKind(c) === "orca-bot") {
     const b = botWatchStatus(c);
@@ -865,13 +875,58 @@ const isAdopted = () => fs.existsSync("factory.config.json") && (fs.existsSync("
 const expandHome = (p) => String(p ?? "").replace(/^~(?=\/|$)/, os.homedir());
 const sshArgsFor = (h) => [...(h.sshConfig ? ["-F", expandHome(h.sshConfig)] : []), "-o", "ConnectTimeout=5", h.ssh];
 const controllerTitle = (c) => `${c.project.name} · Controller`;
-const hasControllerTerminal = (c) => {
-  const title = controllerTitle(c);
-  const host = c.hosts.workers.find((h) => h.name === c.hosts.controller.host);
-  const where = host?.kind === "remote" && host.orcaEnvironment ? ["--environment", host.orcaEnvironment] : [];
-  if (process.env.FACTORY_SKIP_ORCA === "1") return false;
-  try { const terminals = JSON.parse(sh(ORCA_BIN, ["terminal", "list", ...where, "--json"])).result?.terminals; return Boolean(findControllerTerminal(terminals, title, c.hosts.controller.controllerDir ?? "~/controller")); } catch { return false; }
+// The Controller's identity: the handle from the receipt of the `terminal create` that start itself performed, recorded at that
+// moment with the worktree it was created in (controller-terminal.txt in the Controller directory: handle, newline, worktree).
+// It is never taken from a lookup later (controller/controller-terminal.mjs), and a record that is gone, orphaned or in
+// another worktree is dropped. Empty where nothing was recorded.
+const HANDLE = /^[\w.:-]{1,100}$/;
+const controllerHost = (c) => c.hosts.workers.find((h) => h.name === c.hosts.controller.host);
+const handleFile = (c) => `${c.hosts.controller.controllerDir ?? "~/controller"}/controller-terminal.txt`.replace(/^~(?=\/|$)/, "$HOME");
+const localHandleFile = (c) => expandHome(handleFile(c).replace(/^\$HOME/, "~"));
+const recordedHandle = (c) => {
+  const host = controllerHost(c);
+  const text = !host || host.kind === "local" ? (() => { try { return fs.readFileSync(localHandleFile(c), "utf8"); } catch { return ""; } })() : sh("ssh", [...sshArgsFor(host), `cat "${handleFile(c)}" 2>/dev/null`]);
+  const [handle = "", worktree = ""] = String(text).split("\n").map((l) => l.trim());
+  return HANDLE.test(handle) ? { handle, worktree } : { handle: "", worktree: "" };
 };
+function recordHandle(c, ctl, handle, worktree) {
+  if (!HANDLE.test(String(handle ?? ""))) return;
+  const text = `${handle}\n${String(worktree ?? "").replace(/[\r\n]/g, "")}\n`;
+  try {
+    if (ctl.kind === "local") fs.writeFileSync(localHandleFile(c), text);
+    else spawnSync("ssh", [...sshArgsFor(ctl), `printf '%s\\n%s\\n' ${handle} '${String(worktree ?? "").replace(/'/g, "")}' > "${handleFile(c)}"`], { encoding: "utf8" });
+  } catch { /* the Controller's name still finds it */ }
+}
+function dropRecordedHandle(c, ctl) {
+  try {
+    if (ctl.kind === "local") fs.rmSync(localHandleFile(c), { force: true });
+    else spawnSync("ssh", [...sshArgsFor(ctl), `rm -f "${handleFile(c)}"`], { encoding: "utf8" });
+  } catch { /* retried at the next start */ }
+}
+// Where the Controller may show up, from the same function the heartbeat uses (controllerPlaces): the checkout start ran in,
+// the one recorded with the handle, the configured project directory and the Controller directory, on the Controller's host.
+function controllerDirs(c) {
+  const host = controllerHost(c);
+  const dir = c.hosts.controller.controllerDir ?? "~/controller";
+  const configured = host?.projectDir ?? (host?.projectsDir ? `${host.projectsDir}/${c.project.name}` : "");
+  const recordedWorktree = recordedHandle(c).worktree;
+  if (!host || host.kind === "local") return controllerPlaces({ cwd, projectDir: configured, controllerDir: dir, recordedWorktree, home: os.homedir() });
+  const home = /^~(?:\/|$)/.test(configured) || dir.startsWith("~") ? sh("ssh", [...sshArgsFor(host), 'printf "%s\\n" "$HOME"']) : "";
+  return controllerPlaces({ projectDir: configured, controllerDir: dir, recordedWorktree, home });
+}
+// What Orca lists for the Controller (controller/controller-terminal.mjs): the Controller, several that cannot be told apart,
+// ones named like it that are not confirmed, and the unnamed agent sessions that are never taken. The session that runs this
+// command is never a candidate: it is the Front agent's own. null where Orca was not asked or did not answer.
+const controllerTerminal = (c) => {
+  const host = controllerHost(c);
+  const where = host?.kind === "remote" && host.orcaEnvironment ? ["--environment", host.orcaEnvironment] : [];
+  if (process.env.FACTORY_SKIP_ORCA === "1") return null;
+  try {
+    const terminals = JSON.parse(sh(ORCA_BIN, ["terminal", "list", ...where, "--json"])).result?.terminals;
+    return Array.isArray(terminals) ? locateController(terminals, { title: controllerTitle(c), controllerDir: c.hosts.controller.controllerDir ?? "~/controller", handle: recordedHandle(c).handle, dirs: controllerDirs(c), exclude: [process.env.ORCA_TERMINAL_HANDLE].filter(Boolean) }) : null;
+  } catch { return null; }
+};
+const hasControllerTerminal = (c) => Boolean(controllerTerminal(c)?.terminal);
 const agentCommand = (agent, prompt, args) => `${agent}${args ? ` ${args}` : ""} ${JSON.stringify(prompt)}`;
 
 // Reads the Controller's status.md (local file or over ssh): age in minutes and the open "Needs <human>" items.
@@ -911,17 +966,20 @@ function collectStatus() {
   if (!s.initialised) { s.phase = prerequisites.every((p) => p.ok) ? "onboarding" : "prerequisites"; s.next = s.phase === "onboarding" ? "run the onboarding as a conversation: init --print-questions, then init --answers <file>" : "fix the missing prerequisites (they need the human)"; return s; }
   const userSkill = (n) => [".claude/skills", ".agents/skills"].some((d) => fs.existsSync(path.join(os.homedir(), d, n, "SKILL.md")));
   const ctl = controllerStatus(c);
-  const ctlTerminal = hasControllerTerminal(c);
+  const located = controllerTerminal(c);
+  const ctlTerminal = Boolean(located?.terminal);
+  const terminalProblem = located?.terminal ? null : located?.ambiguous.length ? `${located.ambiguous.length} terminals run an agent in this project and none is recorded as the Controller` : located?.unconfirmed.length ? "a terminal named like the Controller is not confirmed as an agent running in this project" : located?.unnamed.length ? `no Controller is recorded or named; ${located.unnamed.length} other agent session${located.unnamed.length > 1 ? "s run" : " runs"} in this project's checkout and ${located.unnamed.length > 1 ? "are" : "is"} never taken for it: run \`start\`` : null;
   s.setup = {
     hooksArmed: minimal(c) ? !checkHooks() : (c.hooks?.mode ?? "factory") === "own" || sh("git", ["config", "core.hooksPath"]) === (c.hooks?.hooksPath ?? ".githooks"),
     userSkills: ["orchestration", "orca-cli"].every(userSkill),
     frontAgentBundle: fs.existsSync(path.join(os.homedir(), "front-agent", c.project.name, "FRONT_AGENT.md")),
     statusWatch: statusWatchRuns(c),
     gate: { own: fs.existsSync(expandHome(`${c.hosts.controller.controllerDir ?? "~/controller"}/gate.mjs`)), sharedLeftover: fs.existsSync(path.join(os.homedir(), ".local/bin/gate")) },   // on this machine; the shared one is not used by this project
-    controller: { host: ctl.host, statusAgeMin: ctl.ageMin, terminal: ctlTerminal, running: ctlTerminal || (ctl.ageMin !== null && ctl.ageMin <= 25) },
+    controller: { host: ctl.host, statusAgeMin: ctl.ageMin, terminal: ctlTerminal, ...(terminalProblem ? { terminalProblem } : {}), running: ctlTerminal || (ctl.ageMin !== null && ctl.ageMin <= 25) },
+    heartbeat: heartbeatStatus(c),
   };
   // A bot Front agent: the bot and its watch automation instead of the terminal's status watch.
-  if (frontKind(c) === "orca-bot") { s.setup.frontAgent = { kind: "orca-bot", ...botWatchStatus(c) }; s.setup.statusWatch = s.setup.frontAgent.watchAutomation; }
+  if (frontKind(c) === "orca-bot") { s.setup.frontAgent = { kind: "orca-bot", ...botWatchStatus(c) }; s.setup.statusWatch = false; }   // a bot is woken by its automation (setup.frontAgent.watchAutomation), not by a status watch
   // The work: design exports, tickets by status, domain and architecture documents, open debt, open questions.
   const features = fs.existsSync("design") ? fs.readdirSync("design", { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) : [];
   const tickets = { total: 0, byStatus: {} };
@@ -955,6 +1013,9 @@ function collectStatus() {
   if (s.setup.frontAgentBundle && watchRequired(c) && !s.setup.statusWatch) s.next = `The status watch is not running, so finished work and open questions do not reach you: run \`start\`, and if that does not help, \`doctor\`. Then: ${s.next}`;
   else if (watchRequired(c) && readWatchProblem(c)) s.next = `The status watch runs but cannot reach your terminal (${readWatchProblem(c)}). Then: ${s.next}`;
   else if (s.setup.frontAgent && process.env.FACTORY_SKIP_ORCA !== "1" && c.agents.runner === "orca" && !(s.setup.frontAgent.botExists && s.setup.frontAgent.watchAutomation)) s.next = `${s.setup.frontAgent.botExists ? `The bot "${s.setup.frontAgent.bot}" has no watch automation, so finished work and open questions do not wake it: run \`start\`` : `The Front agent bot "${s.setup.frontAgent.bot ?? "(hosts.frontAgent.bot is empty)"}" is not in \`orca bot list\`: create it in Orca, then run \`start\``}. Then: ${s.next}`;
+  // The same kind of hint: a Controller nobody wakes from outside stays idle after each worker.
+  const hb = s.setup.heartbeat;
+  if (hb.enabled && !hb.unknown && s.phase !== "start" && (!hb.scheduled || hb.problem)) s.next = `${hb.scheduled ? `The heartbeat is scheduled but ${hb.problem}` : "The heartbeat is not scheduled"}, so nothing wakes the Controller when a worker finishes: run \`start\` (or set hosts.controller.heartbeat to false if you wake it yourself). Then: ${s.next}`;
   s.hints = [
     ...(s.setup.gate.sharedLeftover ? ["a shared gate is still in ~/.local/bin: this project does not use it (its gate is in its Controller directory); delete it once no older project on this host uses it"] : []),
     ...(!s.work.glossary ? ["the business terms are not written down yet (no GLOSSARY.md): capture them with domain-modeling while specifying"] : []),
@@ -977,7 +1038,8 @@ function status() {
     say(`${st.frontAgentBundle ? "OK     " : "MISSING"} Front agent bundle`);
     say(`${st.gate.own ? "OK     " : "info   "} gate: ${st.gate.own ? "this project's own (Controller directory)" : "not in the Controller directory on this machine"}${st.gate.sharedLeftover ? "; a shared ~/.local/bin/gate is left over and not used" : ""}`);
     if (st.frontAgent) say(`${st.frontAgent.botExists ? "OK     " : "MISSING"} Front agent bot ${st.frontAgent.bot ?? "(hosts.frontAgent.bot is empty)"}\n${st.frontAgent.watchAutomation ? "OK     " : "MISSING"} its watch automation`);
-    say(`${st.controller.running ? "OK     " : "MISSING"} Controller on ${st.controller.host}${st.controller.statusAgeMin !== null ? ` (status.md ${st.controller.statusAgeMin} min old)` : ""}`);
+    if (st.heartbeat.enabled) say(st.heartbeat.unknown ? "info    heartbeat: the Controller's host did not answer" : st.heartbeat.scheduled ? `${st.heartbeat.problem ? "MISSING" : "OK     "} heartbeat (${st.heartbeat.scheduled})${st.heartbeat.problem ? `: ${st.heartbeat.problem}` : st.heartbeat.lastOkAt ? `, ran fine at ${st.heartbeat.lastOkAt}` : ""}` : st.heartbeat.installed ? "MISSING heartbeat (run start)" : "info    heartbeat not scheduled yet (run start)");
+    say(`${st.controller.running ? "OK     " : "MISSING"} Controller on ${st.controller.host}${st.controller.statusAgeMin !== null ? ` (status.md ${st.controller.statusAgeMin} min old)` : ""}${st.controller.terminalProblem ? `: ${st.controller.terminalProblem}` : ""}`);
     const w = s.work;
     say(`\nDesigned features: ${w.designedFeatures.length ? w.designedFeatures.join(", ") : "none"}`);
     say(`Tickets: ${w.tickets.total ? Object.entries(w.tickets.byStatus).map(([k, v]) => `${v} ${k}`).join(", ") : w.tickets.unavailable ?? "none"}`);
@@ -988,14 +1050,112 @@ function status() {
   for (const h of s.hints ?? []) say(`Hint:  ${h}`);
 }
 
-// The heartbeat wakes the Controller from outside (controller/heartbeat.mjs). hosts.controller.heartbeat = false opts out.
+// The heartbeat wakes the Controller from outside (controller/heartbeat.mjs). hosts.controller.heartbeat: false opts out;
+// "external" says the host's own scheduler (systemd, a supervisor) runs it, so start schedules nothing and doctor only checks that it runs.
+// Scheduled like the status watch: launchd on a local macOS Controller (crontab can be refused there), cron elsewhere.
+// A cron line that is already there stays, so an existing installation keeps its schedule (its PATH is brought up to date).
+// Returns the number of failures.
+const heartbeatOn = (c) => process.env.FACTORY_SKIP_ORCA !== "1" && c.agents.runner === "orca" && c.hosts.controller.heartbeat !== false;
+const heartbeatDir = (c) => c.hosts.controller.controllerDir ?? "~/controller";
+const launchdPlistPath = (label) => path.join(os.homedir(), "Library/LaunchAgents", `${label}.plist`);
+const heartbeatJob = (c) => heartbeatLabel(c.project.name, path.resolve(expandHome(heartbeatDir(c))));
+const useLaunchd = (ctl) => ctl.kind === "local" && (process.env.FACTORY_SCHEDULER ?? (process.platform === "darwin" ? "launchd" : "cron")) === "launchd";
+const onController = (ctl, script) => (ctl.kind === "local" ? spawnSync("sh", ["-c", script], { encoding: "utf8" }) : spawnSync("ssh", [...sshArgsFor(ctl), script], { encoding: "utf8" }));
+const HEARTBEAT_SILENT_MIN = 3;   // heartbeat.mjs touches heartbeat.alive on every run, and runs every minute
+// Minutes since the newest of these files in the Controller directory was written; null: none exists, undefined: the host did
+// not answer. heartbeat.alive is written when a run starts, heartbeat.ok when one got through (controller/heartbeat.mjs).
+function fileAgeMin(ctl, dir, names) {
+  if (ctl.kind === "local") {
+    const t = Math.max(0, ...names.map((n) => { try { return fs.statSync(path.join(expandHome(dir), n)).mtimeMs; } catch { return 0; } }));
+    return t ? (Date.now() - t) / 60000 : null;
+  }
+  const d = dir.replace(/^~(?=\/|$)/, "$HOME");
+  const r = spawnSync("ssh", [...sshArgsFor(ctl), `for n in ${names.join(" ")}; do stat -c %Y "${d}/$n" 2>/dev/null || stat -f %m "${d}/$n" 2>/dev/null; done | sort -n | tail -1`], { encoding: "utf8" });
+  const t = Number((r.stdout ?? "").trim());
+  return r.status !== 0 ? undefined : t ? (Date.now() / 1000 - t) / 60 : null;
+}
+const clock = (minAgo) => new Date(Date.now() - minAgo * 60000).toTimeString().slice(0, 5);
+// What schedules it: "cron", "launchd" or nothing (with the launchd job's last exit code); unknown where the host did not answer.
+function heartbeatScheduled(c, ctl, dir) {
+  const check = onController(ctl, heartbeatCronCheckScript(dir));
+  if (ctl.kind !== "local" && check.status !== 0) return { unknown: true };
+  if (check.stdout?.trim() === "exists") return { how: "cron" };
+  const label = heartbeatJob(c);
+  if (ctl.kind !== "local" || !fs.existsSync(launchdPlistPath(label))) return {};
+  const printed = spawnSync("launchctl", ["print", `gui/${process.getuid()}/${label}`], { encoding: "utf8" });
+  return printed.status === 0 ? { how: "launchd", lastExit: Number(/last exit code = (-?\d+)/.exec(printed.stdout ?? "")?.[1] ?? 0) } : {};
+}
+// What doctor and status report. scheduled: cron, launchd, or "external" (it ran in the last minutes although neither is set up:
+// the host's own scheduler runs it). state, for a job that is scheduled: "not-yet" (just installed), "never-ran", "silent" (no
+// run for a while), "failed" (it starts, but no run got through, or launchd says the last one failed), or "ok" with the time of
+// the last run that got through. problem: the sentence for the first four.
+function heartbeatStatus(c) {
+  if (!heartbeatOn(c)) return { enabled: false, scheduled: null };
+  const ctl = controllerHost(c) ?? { kind: "local", name: "local" };
+  const dir = heartbeatDir(c);
+  const by = c.hosts.controller.heartbeat === "external" ? {} : heartbeatScheduled(c, ctl, dir);
+  if (by.unknown) return { enabled: true, scheduled: null, installed: false, unknown: true };
+  const started = fileAgeMin(ctl, dir, ["heartbeat.alive"]), seen = fileAgeMin(ctl, dir, ["heartbeat.alive", "heartbeat.known.json"]);
+  const ok = fileAgeMin(ctl, dir, ["heartbeat.ok"]), installed = fileAgeMin(ctl, dir, ["heartbeat.mjs"]);
+  if ([started, seen, ok, installed].includes(undefined)) return { enabled: true, scheduled: null, installed: false, unknown: true };
+  const runs = seen !== null && seen <= HEARTBEAT_SILENT_MIN;
+  const scheduled = by.how ?? (runs ? "external" : null);
+  let state = null, problem = null;
+  if (scheduled && scheduled !== "external") {
+    if (seen === null) [state, problem] = installed !== null && installed > HEARTBEAT_SILENT_MIN ? ["never-ran", `it has never run (it was installed ${Math.round(installed)} minutes ago; see heartbeat.log, and run start to schedule it again)`] : ["not-yet", null];
+    else if (!runs) [state, problem] = ["silent", `it has not run for ${Math.round(seen)} minutes (see heartbeat.log; run start to schedule it again)`];
+  }
+  // Only a copy that writes heartbeat.alive can tell "started" from "got through".
+  if (!problem && started !== null && (scheduled || runs) && (ok === null ? started > 1 : ok - started > 2)) [state, problem] = ["failed", `its last run did not get through (it starts but ends in an error or without Orca: see heartbeat.log)`];
+  if (!problem && by.lastExit) [state, problem] = ["failed", `its last run failed (exit code ${by.lastExit}; see heartbeat.log, and run start to schedule it again)`];
+  if (scheduled && !problem && state !== "not-yet") state = ok === null ? "ok-unknown" : "ok";
+  return { enabled: true, scheduled, state, installed: Boolean(scheduled) || onController(ctl, `[ -f "${dir.replace(/^~(?=\/|$)/, "$HOME")}/heartbeat.mjs" ] && echo yes`).stdout?.trim() === "yes", lastRunMin: seen === null ? null : Math.round(seen), lastOkMin: ok === null ? null : Math.round(ok), lastOkAt: ok === null ? null : clock(ok), problem };
+}
+function removeHeartbeatJob(c, ctl) {
+  const label = heartbeatJob(c), plist = launchdPlistPath(label);
+  if (ctl.kind === "local" && fs.existsSync(plist)) {
+    spawnSync("launchctl", ["bootout", `gui/${process.getuid()}/${label}`], { encoding: "utf8" });
+    fs.rmSync(plist, { force: true });
+    say("Heartbeat: opted out, the launchd job was removed");
+  }
+  if (onController(ctl, heartbeatCronCheckScript(heartbeatDir(c))).stdout?.trim() === "exists") say("Heartbeat: opted out, but a cron line for it is still there: remove it with `crontab -e` (start never edits it away)");
+}
 function armHeartbeat(c, ctl, dir) {
-  if (process.env.FACTORY_SKIP_ORCA === "1" || c.agents.runner !== "orca" || c.hosts.controller.heartbeat === false) return;
-  const script = heartbeatCronScript(dir, c.project.name);
-  const r = ctl.kind === "local" ? spawnSync("sh", ["-c", script], { encoding: "utf8" }) : spawnSync("ssh", [...sshArgsFor(ctl), script], { encoding: "utf8" });
+  if (process.env.FACTORY_SKIP_ORCA === "1" || c.agents.runner !== "orca") return 0;
+  if (c.hosts.controller.heartbeat === false) { removeHeartbeatJob(c, ctl); return 0; }
+  if (c.hosts.controller.heartbeat === "external") { say("Heartbeat: external (hosts.controller.heartbeat): nothing is scheduled here. `doctor` checks that it runs: node heartbeat.mjs every minute in " + dir); return 0; }
+  const where = ctl.kind === "local" ? "" : ` on ${ctl.name}`;
+  const optOut = "Or, if you wake the Controller yourself, set hosts.controller.heartbeat to false in factory.config.json.";
+  // node's directory on the job's PATH (#22): this process's node here; on an ssh host the one its login finds, when that is a plain path.
+  const remoteNode = ctl.kind === "local" ? "" : sh("ssh", [...sshArgsFor(ctl), 'dirname "$(command -v node)" 2>/dev/null']);
+  const nodeDir = ctl.kind === "local" ? path.dirname(process.execPath) : /^\/[\w.\/@+-]*$/.test(remoteNode) ? remoteNode : "";
+  // A host whose own scheduler already runs it (not cron, not launchd) is no failure: a working installation stays green.
+  const age = fileAgeMin(ctl, dir, ["heartbeat.alive", "heartbeat.known.json"]);
+  const alreadyRuns = age !== null && age !== undefined && age <= HEARTBEAT_SILENT_MIN;
+  const failure = (what, extra) => {
+    if (alreadyRuns) { say(`Heartbeat: ${what}, but it ran ${Math.round(age)} min ago, so something else schedules it: left alone. Set hosts.controller.heartbeat to "external" to say so.`); return 0; }
+    say(`Heartbeat: ${what}. Without it nothing wakes the Controller from outside. ${extra}\n${optOut}\nA host with neither cron nor launchd: run \`node heartbeat.mjs\` every minute in ${dir} from its own scheduler (systemd timer, supervisor), then set hosts.controller.heartbeat to "external".`);
+    return 1;
+  };
+  if (onController(ctl, heartbeatCronCheckScript(dir)).stdout?.trim() === "exists") {
+    // Bring its PATH up to date (node's directory under nvm, #22); an existing line that cannot be edited stays as it is.
+    const r = onController(ctl, heartbeatCronScript(dir, c.project.name, nodeDir));
+    say(`Heartbeat: already in cron${where}${(r.stdout ?? "").trim() === "updated" ? " (its PATH was brought up to date)" : ""}`);
+    return 0;
+  }
+  if (useLaunchd(ctl)) {
+    const label = heartbeatJob(c);
+    const orcaFound = spawnSync("sh", ["-c", `command -v ${JSON.stringify(ORCA_BIN)}`], { encoding: "utf8" }).stdout?.trim();
+    const r = installLaunchAgent(label, heartbeatPlist(path.resolve(expandHome(dir)), c.project.name, process.execPath, os.homedir(), orcaFound?.startsWith("/") ? path.dirname(orcaFound) : ""));
+    if (r.status === 0) { say("Heartbeat: scheduled with launchd, every minute"); return 0; }
+    return failure(`could not schedule it with launchd (${(r.stderr || r.error?.message || "").trim().slice(0, 200)})`, `Make ${launchdPlistPath(label).replace(os.homedir(), "~")} writable, and check that launchctl works in a login session of this user (a session without the desktop, such as plain ssh, has no \`gui/\` domain), then run start again.`);
+  }
+  const script = heartbeatCronScript(dir, c.project.name, nodeDir);
+  const r = onController(ctl, script);
   const out = (r.stdout ?? "").trim();
-  if (out === "added" || out === "exists") say(`Heartbeat: ${out === "added" ? "cron line added" : "already in cron"}${ctl.kind === "local" ? "" : ` on ${ctl.name}`}`);
-  else say(`Heartbeat: could not add the cron line (${(r.stderr || "").trim().slice(0, 200)}). Without it nothing wakes the Controller from outside. Run this on the Controller's host:\n${script}`);
+  if (out === "added" || out === "updated" || out === "exists") { say(`Heartbeat: cron line ${out === "exists" ? "already there" : out}${where}`); return 0; }
+  const none = r.status === 127 || /not found/i.test(r.stderr ?? "");
+  return failure(`could not add the cron line (${none ? "no crontab on this host" : (r.stderr || "").trim().slice(0, 200)})`, `Run this on the Controller's host, then start again:\n${script}`);
 }
 
 // Names the Front agent's own terminal and, if its name is still automatic, its sidebar entry (docs/orca.md, "Naming").
@@ -1014,11 +1174,15 @@ function nameFrontAgent(c) {
 // in front. launchd on macOS, cron elsewhere. Like the heartbeat, a schedule that fails is reported and stops nothing.
 function scheduleStatusWatch(c, frontAgentDir) {
   if ((process.env.FACTORY_SCHEDULER ?? (process.platform === "darwin" ? "launchd" : "cron")) !== "launchd") return spawnSync("sh", ["-c", statusWatchCronScript(frontAgentDir, c.project.name, path.dirname(process.execPath))], { encoding: "utf8" });
-  const label = statusWatchLabel(c.project.name), domain = `gui/${process.getuid()}`;
+  return installLaunchAgent(statusWatchLabel(c.project.name), statusWatchPlist(frontAgentDir, c.project.name, process.execPath, os.homedir()));
+}
+// Writes the job's plist and (re)loads it; a failure is returned, never thrown.
+function installLaunchAgent(label, text) {
+  const domain = `gui/${process.getuid()}`;
   const plist = path.join(os.homedir(), "Library/LaunchAgents", `${label}.plist`);
   try {
     fs.mkdirSync(path.dirname(plist), { recursive: true });
-    fs.writeFileSync(plist, statusWatchPlist(frontAgentDir, c.project.name, process.execPath, os.homedir()));
+    fs.writeFileSync(plist, text);
   } catch (error) { return { status: 1, stderr: error.message }; }
   spawnSync("launchctl", ["bootout", `${domain}/${label}`], { encoding: "utf8" });
   // A run that is still ending can make the first attempt fail.
@@ -1114,6 +1278,10 @@ function armStatusWatch(c, frontAgentDir) {
   say("Status watch: scheduled, every 5 minutes");
 }
 
+// Claude Code asks this once for a new directory and does nothing until it is answered. start cannot answer it:
+// Orca's text send did not select the option in a real run.
+const TRUST_HINT = "The agent may ask in that terminal whether you trust the Controller's folder (Claude Code does this on its first start) or for permissions: answer it there yourself, in Orca (pick the \"Yes\" option with the arrow keys and Enter; a typed number does not select it). Until then the Controller does nothing; the heartbeat does not type into it before it has written its first status.md.";
+
 async function start() {
   const c = readConfig();
   if (!c || !isAdopted()) { say("Not initialised: run init first (the Front agent does this as a conversation)."); process.exit(1); }
@@ -1172,18 +1340,33 @@ async function start() {
     if (cp.status === 0) say(`Gate on ${h.name}: ${dir}/gate (this project's own)`);
     else { failed++; say(`Gate on ${h.name}: could not copy it to ${dir} (${(cp.stderr || "").trim().slice(0, 200)}). Gates run there too, so this start failed.`); }
   }
-  armHeartbeat(c, ctl, dir);
+  failed += armHeartbeat(c, ctl, dir);
   // The Controller's own agent session, in an Orca terminal so the Front agent can read it and send it text.
-  if (hasControllerTerminal(c)) say(`Controller session: already running (Orca terminal "${title}")`);
+  const located = controllerTerminal(c);
+  const running = located?.terminal;
+  // Record what Orca's list confirms; a record that is no longer a confirmed Controller goes, so start repairs it.
+  // A record is only ever made from the receipt of the create below; one that is gone, orphaned or elsewhere is dropped here.
+  if (recordedHandle(c).handle && located?.record === "invalid") dropRecordedHandle(c, ctl);
+  // Never a second Controller next to one that exists, or may exist: say what was found instead.
+  if (!running && located?.ambiguous.length) { failed++; say(`Controller session: ${located.ambiguous.length} terminals (${located.ambiguous.map((t) => t.handle).join(", ")}) run an agent in this project and none is recorded as the Controller, so none is started. Close the extra ones, then run start again.`); }
+  else if (!running && located?.unconfirmed.length) { failed++; say(`Controller session: a terminal named "${String(located.unconfirmed[0].title ?? located.unconfirmed[0].paneTitle).slice(0, 60)}" (${located.unconfirmed[0].handle}) may be the Controller, but Orca does not show an agent running in this project there, so a second one is not started. Close it or fix it, then run start again.`); }
+  else if (running) { say(`Controller session: already running (Orca terminal "${title}")`); }
   else if (process.env.FACTORY_SKIP_ORCA === "1" || c.agents.runner !== "orca") say(`Controller session: start it in a terminal${ctl.kind === "local" ? "" : ` on ${ctl.name}`}:\n  ${session}`);
   else {
+    // Agent sessions in the project's checkout are never taken for the Controller, so a new one is opened; if one of them is an
+    // old Controller whose CLI rewrote its name, two now work on one project. Say so instead of leaving it to be found.
+    if (located?.unnamed.length) say(`Controller session: ${located.unnamed.length} other agent session${located.unnamed.length > 1 ? "s" : ""} (${located.unnamed.map((t) => t.handle).join(", ")}) already run${located.unnamed.length > 1 ? "" : "s"} in this project's checkout and none is named or recorded as the Controller. A new Controller is opened; if one of them is an earlier Controller, close it.`);
     const remoteHome = ctl.kind === "remote" ? sh("ssh", [...sshArgsFor(ctl), 'printf "%s\\n" "$HOME"']) : "";
     const remotePath = ctl.projectDir ?? `${ctl.projectsDir}/${c.project.name}`;
     if (ctl.kind === "remote" && (!ctl.orcaEnvironment || !remoteHome.startsWith("/") || (!remotePath.startsWith("/") && !/^~(?:\/|$)/.test(remotePath)))) { failed++; say(`Controller session: set hosts.workers[].orcaEnvironment to the saved Orca environment name and configure an absolute or ~/ remote project path; ensure ssh can resolve the remote home. Start it by hand:\n  ${session}`); }
     else {
     const where = ctl.kind === "local" ? ["--worktree", `path:${cwd}`] : ["--environment", ctl.orcaEnvironment, "--worktree", `path:${path.posix.resolve(remotePath.replace(/^~(?=\/|$)/, remoteHome))}`];
     const r = spawnSync(ORCA_BIN, ["terminal", "create", ...where, "--title", title, "--command", session, "--json"], { encoding: "utf8" });
-    if (r.status === 0 && /"ok":\s*true/.test(r.stdout)) say(`Controller session: started (Orca terminal "${title}"). It may ask once for permissions there.`);
+    if (r.status === 0 && /"ok":\s*true/.test(r.stdout)) {
+      let created; try { const j = JSON.parse(r.stdout).result; created = j?.terminal?.handle ?? j?.handle; } catch { /* the title finds it */ }
+      if (created) recordHandle(c, ctl, created, ctl.kind === "local" ? cwd : path.posix.resolve(remotePath.replace(/^~(?=\/|$)/, remoteHome)));
+      say(`Controller session: started (Orca terminal "${title}"). ${TRUST_HINT}`);
+    }
     else { failed++; say(`Controller session: Orca could not create the terminal (${(r.stderr || r.stdout || "").trim().slice(0, 200)}). Start it by hand:\n  ${session}`); }
     }
   }

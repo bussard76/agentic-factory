@@ -182,7 +182,7 @@ The rhythm is a setting (`rhythm.mode`), not a rule:
 
 ## The Controller's cycle
 
-One cycle per wake-up, with no timer of its own: a worker event printed by `wait.mjs`, or the heartbeat (at once for a worker message, a finished wave or an inbox entry, at each tenth minute while work is pending, about hourly otherwise). The Controller waits on these events and does not poll workers itself.
+One cycle per wake-up, with no timer of its own. The heartbeat is what wakes an idle Controller, on every agent CLI: within a minute for a worker message, a finished wave or an inbox entry, at each tenth minute while work is pending, about hourly otherwise. A worker event printed by `wait.mjs` reaches a Controller that is mid-cycle; it does not reliably wake an idle one. The Controller does not poll workers itself.
 
 1. **Read events:** worker completions, questions and escalations, new inbox entries from the human, current `main`.
 2. **React:** Developer done → Tester. Tester failed → while rounds are left, rework in the same worktree and the next round (one tier higher after two failures, when more than two rounds are allowed); after the last round no rework but a final functional re-evaluation (`mkspec reeval`) of the commit that round reviewed: a working feature is integrated at that commit with open points as debt plus an acceptance item, otherwise a question to the human. A fix after a passing round (failed conformance, red wave, merge conflict) is no failed round: rework and re-check as usual, allowed beyond the limit only after a round that says `Verdict: pass`. Tester passed → conformance for level 2/3, else the next wave. Worker question → decide it if covered by the rules (level 1/2) and write the decision down, else ask the human.

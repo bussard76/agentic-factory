@@ -219,7 +219,7 @@ test("start schedules the watch and runs it once; status shows whether it runs, 
   assert.match(calls[0], /^bootout gui\/\d+\/de\.agentic-factory\.statuswatch\.demo\.[0-9a-f]{6}$/);
   assert.match(calls[1], /^bootstrap gui\/\d+ .*LaunchAgents\/de\.agentic-factory\.statuswatch\.demo\.[0-9a-f]{6}\.plist$/);
   const agents = path.join(home, "Library/LaunchAgents");
-  const plistFile = path.join(agents, fs.readdirSync(agents)[0]);
+  const plistFile = path.join(agents, fs.readdirSync(agents).find((n) => /statuswatch/.test(n)));
   const plist = fs.readFileSync(plistFile, "utf8");
   assert.ok(plist.includes("<string>/usr/bin/env</string><string>node</string>"), "survives an upgrade that removes a versioned path");
   assert.ok(plist.includes(`<string>${path.dirname(process.execPath)}:`), "with the running node first on PATH");
