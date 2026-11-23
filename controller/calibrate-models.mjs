@@ -1,11 +1,13 @@
 // Model calibration (docs/capacity.md, "Models"): the configured tiers are starting values. This script reads the
 // journal and recommends a tier per role from measured outcomes: pass rate and review rounds per role and model.
+// Usage: node calibrate-models.mjs [--days <n>] [--apply]     --days <n>: the journal window in days, default 7
 //   node calibrate-models.mjs            → prints the table and writes model-tiers.json (role → tier) when agents.calibration is auto
 //   node calibrate-models.mjs --apply    → also when calibration is manual (the human agreed)
-// start.mjs uses model-tiers.json when no --tier is given. Rules (per role, at least 6 finished runs in the window):
+// start.mjs uses model-tiers.json when no tier is given. Rules (per role, at least 6 finished runs in the window):
 //   pass rate ≥ 0.85 and ≤ 1.3 rounds on the current tier → try one tier down (never below small, never for ADR/level-3 work)
 //   pass rate < 0.6 or ≥ 2 rounds on average               → one tier up
 //   otherwise keep. Changes are logged (type decision) so the audit can verify them.
+import "./cli.mjs";
 import fs from "node:fs";
 import { MODELS, config, file, journal, readJson, writeJson } from "./lib.mjs";
 

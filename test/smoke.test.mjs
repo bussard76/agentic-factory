@@ -633,7 +633,7 @@ test("a worker's setup or shell terminal does not keep its worktree from cleanup
 
 test("stallwatch watches a worker's own terminal, not its setup or shell terminal", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-stall-"));
-  for (const f of ["stallwatch.mjs", "lib.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
+  for (const f of ["stallwatch.mjs", "cli.mjs", "lib.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
   fs.writeFileSync(path.join(dir, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local" }] } }));
   const ws = path.join(os.homedir(), "orca/workspaces/p/");
   const terminals = [{ handle: "worker", title: "T1 · Worker Developer", worktreePath: ws + "t1" }, { handle: "setup", title: "T1 · Worker Developer · Setup", worktreePath: ws + "t1" }, { handle: "shell", title: "T1 · Worker Developer · Shell", worktreePath: ws + "t1" },
@@ -655,7 +655,7 @@ console.log(JSON.stringify({ ok: true, result: { terminals: ${JSON.stringify(ter
 
 test("names.mjs corrects only automatic names, by role, and leaves an unknown entry alone", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-names-"));
-  for (const f of ["names.mjs", "lib.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
+  for (const f of ["names.mjs", "cli.mjs", "lib.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
   fs.writeFileSync(path.join(dir, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "server" }, workers: [{ name: "server", kind: "remote", ssh: "s", orcaEnvironment: "Server", orcaRepoId: "r" }] } }));
   fs.writeFileSync(path.join(dir, "workers.json"), JSON.stringify({ t1: { name: "T1 · Worker Developer", host: "server", worktree: "~/w/p/t1" } }));
   const worktrees = [

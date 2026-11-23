@@ -112,6 +112,8 @@ agentic-factory doctor                       # check setup
 agentic-factory update                       # refresh; preserves local edits
 ```
 
+Every command takes `--help` (or `-h`): it prints the command's arguments and does nothing else. The Controller's and the Front agent's scripts do the same, for example `node cleanup.mjs --help`, and print the comment at the top of the script. An argument a command or script does not know stops it with exit code 2 before it does anything. Two exceptions: `gate` runs everything after it as the command, and the git guardrails (`tools/factory-guardrails.mjs`) stop a hook with exit code 1 on an unknown subcommand.
+
 Answers are an object keyed by question ID; keep the file outside the repository. `init` can also be run interactively on its own. If there is no remote, it creates a local bare `origin` under `~/.factory-remotes/<project>-<hash>.git`; replace it later with `git remote set-url origin <url>`. It commits and pushes the adoption files as `Adopt agentic-factory (ADR-0001)` (using the next free ADR number when needed).
 
 | Files written by `init` | Purpose |

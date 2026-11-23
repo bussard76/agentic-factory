@@ -1,9 +1,10 @@
-// node docsonly.mjs <task> <branch> → does the pushed task branch change documentation only (docs/testing.md)?
+// Usage: node docsonly.mjs <task> <branch> → does the pushed task branch change documentation only (docs/testing.md)?
 // Runs main's docs-only check (tools/factory-guardrails.mjs docs-only from origin/<main>, or this clone's installed
 // standard; never the branch's own copy) in the Controller's checkout on origin/<main>..origin/<branch>, with the
 // settings of origin/<main>'s factory.config.json, and prints its evidence. Exit 0: docs-only, no Tester
 // (CONTROLLER.md); the evidence is recorded in the journal as the task's review event, the review it replaces. Any
 // other exit: review as usual, and nothing is journaled (the Tester's review is the task's review event).
+import "./cli.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

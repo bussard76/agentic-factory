@@ -23,6 +23,7 @@ This applies on every remote, before anything is accepted, whoever or whatever w
 
 ## Before merging
 
+- **A script a human or the Controller runs takes `--help` and rejects unknown arguments.** Its first import is `import "./cli.mjs";`, and the comment at its top has a `Usage:` line naming every option and positional argument. That comment is the help text and the list of accepted arguments, so it cannot drift from what the script prints. Read options with `process.argv.includes/indexOf("--x")` and positionals from `process.argv.slice(2)`: `test/cli-args.test.mjs` fails on any other way of reading `process.argv`, on an option the script reads that its `Usage:` line does not name, and on an option literal that is neither in the `Usage:` line nor listed there as passed to another program.
 - **No project or personal names, real URLs or paths,** in code, docs, commit messages or the request's text. This repository is public. Rewrite the text first; its old version can stay visible in the remote's history.
 
 ## After every change to `main`

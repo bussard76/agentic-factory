@@ -3,6 +3,7 @@
 // Idle counts only after the screen stopped changing for 90 s. Nudge idle workers with a message into their terminal.
 // Only this project's own workers are read, never another project's on a shared host.
 // Runs until killed. Usage: node stallwatch.mjs
+import "./cli.mjs";
 import fs from "node:fs";
 import { HOSTS, ORCA, RUNNER, file, isHelperTerminal, journal, onHost, orcaEnvArgsOn, readJson, trySh, workspacesOn } from "./lib.mjs";
 // A shared host lists every project's terminals, and a title does not tell them apart. A terminal is this project's when workers.json

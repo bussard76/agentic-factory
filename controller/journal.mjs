@@ -1,4 +1,5 @@
-// node journal.mjs <type> <task> [key=value ...] → appends one JSON line to journal.ndjson (docs/improvement.md)
+// Usage: node journal.mjs <type> <task> [key=value ...] → appends one JSON line to journal.ndjson (docs/improvement.md)
+import "./cli.mjs";
 import { journal } from "./lib.mjs";
 const [type, task, ...kv] = process.argv.slice(2);
 const types = ["start", "done", "review", "rerun", "stall", "nudge", "wave", "escalation", "decision", "retro", "gate", "capacity", "cleanup"];

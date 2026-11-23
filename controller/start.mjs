@@ -1,7 +1,8 @@
 // Start a worker from a spec file on a worker host. Reads the runner and hosts from factory.config.json.
-// Usage: node start.mjs "<Task> · Worker <Role>" <spec-file> <key> [--on <host>] [--agent codex|claude|pi]
-//        [--tier small|default|large] [--model <m>] [--worktree <dir>|new] [--readonly] [--effort high] [--force]
+// Usage: node start.mjs "<Task> · Worker <Role>" <spec-file> <key> [--on <host>] [--agent <codex|claude|pi>]
+//        [--tier <small|default|large>] [--model <m>] [--worktree <dir>|new] [--readonly] [--effort <level>] [--force]
 // Records the host and terminal handle (orca) or pid (terminal runner) under <key> in workers.json.
+import "./cli.mjs";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

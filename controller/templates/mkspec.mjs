@@ -1,9 +1,9 @@
 // Spec templates per role. Always generate a spec from here with parameters; never derive one by editing another
 // task's spec (that once produced a Tester pointed at the wrong branch). Writes specs/<key>.txt and prints its path.
-//
-//   node templates/mkspec.mjs dev     <T> <task-ref> <branch> [--level 1|2] [--review <branch>:<file>] [--extra "…"]
-//   node templates/mkspec.mjs rework  <T> <n> <task-ref> <branch> <review-branch>:<review-file> [--level 1|2] [--extra "…"]
-//   node templates/mkspec.mjs test    <T> <task-ref> <branch> <sha> [--round n] [--review <branch>:<file>]
+// Usage:
+//   node templates/mkspec.mjs dev     <T> <task-ref> <branch> [--level <1|2>] [--review <branch>:<file>] [--extra "…"]
+//   node templates/mkspec.mjs rework  <T> <n> <task-ref> <branch> [<review-branch>:<review-file>] [--reason "<what failed>"] [--level <1|2>] [--extra "…"]
+//   node templates/mkspec.mjs test    <T> <task-ref> <branch> <sha> [--round <n>] [--review <branch>:<file>]
 //   node templates/mkspec.mjs baseline
 //   node templates/mkspec.mjs steward "<wave title>"
 //   node templates/mkspec.mjs reeval  <T> <task-ref> <branch> <sha> <last-review-branch>:<file>
@@ -13,6 +13,7 @@
 //   node templates/mkspec.mjs retro   <T> <n> "<trigger>" "<worktrees>" "<sources>"
 //
 // <task-ref> is the task file path (orca-tasks mode) or "#<issue>" (github-issues mode).
+import "../cli.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { BRANCH_PREFIX, CMDS, HUMAN, MAIN, PROJECT, PROJECT_DIR, STEERING, config, file, sh, trySh } from "../lib.mjs";

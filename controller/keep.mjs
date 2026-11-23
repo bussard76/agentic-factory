@@ -2,6 +2,7 @@
 // only keep cleanup honours for workers that start.mjs started in a new worktree, because Orca keeps those open by default
 // and a keep-open set in Orca by hand looks the same. --off removes the marker. Journaled as a decision.
 // Usage: node keep.mjs <key from workers.json> [--off] [--by "<why>"]
+import "./cli.mjs";
 import { journal, readJson, writeJson } from "./lib.mjs";
 
 const [key] = process.argv.slice(2).filter((a, i, all) => !a.startsWith("--") && all[i - 1] !== "--by");

@@ -4,6 +4,7 @@
 // stay short, and falls on pressure or load timeouts. State per host in capacity-state.<host>.json; every change is a
 // `decision` event in the journal. --set-suite <n> --by "<the human's words>" sets the suite cap by hand (journaled; the
 // automatic step-down on pressure still applies). Usage: node capacity.mjs [--on <host>] [--verbose] [--reset] [--set-suite <n> --by "<quote>"]
+import "./cli.mjs";
 import fs from "node:fs";
 import { CONTROLLER_HOME, ORCA, PROJECT, RUNNER, argHost, dispatchStates, file, journal, onHost, orcaEnvArgsOn, readJson, readState, trySh, workerStatus, writeJson } from "./lib.mjs";
 

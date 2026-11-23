@@ -19,7 +19,7 @@ function watchSetup() {
   const dir = tmp("af-botwatch-");
   const watch = path.join(dir, "watch"), bin = path.join(dir, "bin");
   for (const d of [watch, bin]) fs.mkdirSync(d);
-  for (const f of ["botwatch.mjs", "hosts.mjs"]) fs.copyFileSync(path.join(ROOT, "front-agent", f), path.join(watch, f));
+  for (const f of ["botwatch.mjs", "hosts.mjs", "cli.mjs"]) fs.copyFileSync(path.join(ROOT, "front-agent", f), path.join(watch, f));
   // A fake ssh: prints the "remote" status file the way the precheck's remote command does, or fails like a lost host.
   const remoteStatus = path.join(dir, "remote-status.md"), down = path.join(dir, "down");
   fs.writeFileSync(path.join(bin, "ssh"), `#!/bin/sh\n[ -f ${down} ] && { echo "ssh: connect to host srv: timed out" >&2; exit 255; }\nif [ -f ${remoteStatus} ]; then stat -c %Y ${remoteStatus} 2>/dev/null || stat -f %m ${remoteStatus}; cat ${remoteStatus}; else echo 0; fi\n`, { mode: 0o755 });
@@ -186,6 +186,30 @@ else if (a[0] === "automations" && a[1] === "create") {
   return { base, home, tab, orcaState, project, creates, done: () => fs.rmSync(base, { recursive: true, force: true }) };
 }
 
+test("a bundle older than the factory stops only the bot watch, with a message; a precheck that cannot run wakes the bot once", () => {
+  const m = machine();
+  try {
+    const alpha = m.project("alpha", { kind: "orca-bot", bot: "front-bot" });
+    // A bundle from an older factory has no cli.mjs (a pull of the factory without `update`).
+    fs.rmSync(path.join(alpha.dir, ".factory/front-agent/cli.mjs"));
+    const stale = alpha.cli("start");
+    assert.match(stale.stdout, /bundle has no cli\.mjs.*Run `agentic-factory update`/, stale.stdout + stale.stderr);
+    assert.doesNotMatch(stale.stderr, /ENOENT|at armBotWatch/);
+    assert.ok(fs.existsSync(path.join(m.home, "controller-alpha/CONTROLLER.md")), "the rest of start still ran");
+    assert.equal(m.creates().length, 0, "no automation for a watch that cannot run");
+    assert.equal(alpha.cli("update").status, 0);
+    assert.match(alpha.cli("start").stdout, /Bot watch: automation .* created/);
+    // The precheck's module goes missing later: the bot is woken once with the error, then the precheck is quiet again.
+    const watchDir = path.join(m.home, "front-agent/.bots", fs.readdirSync(path.join(m.home, "front-agent/.bots"))[0]);
+    fs.rmSync(path.join(watchDir, "cli.mjs"));
+    const first = spawnSync("sh", [path.join(watchDir, "botwatch.sh")], { encoding: "utf8" });
+    assert.equal(first.status, 0, "a failing precheck wakes the bot");
+    assert.match(fs.readFileSync(path.join(watchDir, "wake.md"), "utf8"), /precheck failed[\s\S]*cli\.mjs[\s\S]*agentic-factory update/);
+    const second = spawnSync("sh", [path.join(watchDir, "botwatch.sh")], { encoding: "utf8" });
+    assert.notEqual(second.status, 0, "the same error does not wake the bot every 5 minutes");
+  } finally { m.done(); }
+});
+
 test("start with a bot creates one automation with the precheck instead of the terminal watch; a second project shares it", () => {
   const m = machine();
   // lean-ctx is installed on this machine: start gives the Controller read access to the project and its workspaces.
@@ -207,7 +231,7 @@ test("start with a bot creates one automation with the precheck instead of the t
   const watchDir = path.join(m.home, "front-agent/.bots", fs.readdirSync(path.join(m.home, "front-agent/.bots"))[0]);
   assert.equal(arg("--precheck"), `sh ${JSON.stringify(path.join(watchDir, "botwatch.sh"))}`);
   assert.match(arg("--prompt"), /wake\.md/);
-  for (const f of ["botwatch.mjs", "hosts.mjs", "botwatch.sh"]) assert.ok(fs.existsSync(path.join(watchDir, f)), f);
+  for (const f of ["botwatch.mjs", "hosts.mjs", "cli.mjs", "botwatch.sh"]) assert.ok(fs.existsSync(path.join(watchDir, f)), f);
   assert.ok(fs.readFileSync(path.join(watchDir, "botwatch.sh"), "utf8").includes(path.dirname(process.execPath)), "node is found without this session's PATH");
   assert.match(fs.readFileSync(path.join(m.home, "front-agent/alpha/FRONT_BOT.md"), "utf8"), /Orca bot `front-bot`/);
   const ctl = fs.readFileSync(path.join(m.home, "controller-alpha/CONTROLLER.md"), "utf8");

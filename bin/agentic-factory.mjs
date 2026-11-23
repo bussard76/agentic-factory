@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
+import { check } from "../controller/cli.mjs";
 import { controllerPlaces, locateController } from "../controller/controller-terminal.mjs";
 import { heartbeatCronCheckScript, heartbeatCronScript, heartbeatLabel, heartbeatPlist, statusWatchCronScript, statusWatchLabel, statusWatchPlist } from "./heartbeat-cron.mjs";
 import { applyReadGrants } from "./read-grants.mjs";
@@ -16,6 +17,20 @@ const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"))
 const cwd = process.cwd();
 const args = process.argv.slice(2);
 const cmd = args[0];
+// Each command's arguments and what it does: the overview and `agentic-factory <command> --help` print this text, and
+// cli.mjs rejects an argument the text does not name (exit 2) before anything runs. --yes is accepted by every command.
+const USAGE = {
+  init: ["[--print-questions] [--answers <file>] [--keep-own-hooks] [--untracked-standard] [--experimental-terminal-runner]", "onboarding: ask the project's questions, write factory.config.json, copy handbooks, hooks, skills and bundles (--print-questions: the questions as JSON, nothing written; --answers <file>: answers as {id: value}; --keep-own-hooks: leave the project's hooks untouched, hooks.mode own; --untracked-standard: keep the standard out of the project's history; --experimental-terminal-runner: the unsupported plain-terminal runner)"],
+  deviate: ["<path>", "make a generated file of the untracked standard the project's own: a tracked file that wins over the standard"],
+  update: ["[--keep-own-hooks]", "re-render from a newer factory; locally changed files are kept, new versions land in .factory/new/"],
+  "install-skills": ["[--all] [--force]", "install the Orca and coordination skills at user level (~/.claude/skills, ~/.agents/skills) on this host; required wherever a Controller or Front agent runs. --all for every vendored skill, --force to replace"],
+  doctor: ["", "check config, hooks, tools, user-level skills, hosts and the controller's status"],
+  selfcheck: ["", "(factory repo) syntax and placeholder check"],
+  status: ["[--json]", "prerequisites, setup, the work in the repo and the phase with the next step (--json for the Front agent)"],
+  start: ["[--keep-own-hooks]", "user-level skills, Front agent and Controller bundles, gate, load log and the Controller's session in Orca"],
+};
+const commandHelp = (c) => `Usage: agentic-factory ${c}${USAGE[c][0] ? ` ${USAGE[c][0]}` : ""}\n  ${USAGE[c][1]}\nEvery command also takes --yes (take defaults).`;
+if (Object.hasOwn(USAGE, cmd)) check(args.slice(1), commandHelp(cmd), `agentic-factory ${cmd}`);
 const flag = (f) => args.includes(f);
 const opt = (f, d) => { const i = args.indexOf(f); return i >= 0 ? args[i + 1] : d; };
 const yes = flag("--yes");
@@ -325,7 +340,7 @@ async function init() {
     if (!fs.existsSync(".claude")) fs.mkdirSync(".claude");
     if (!fs.existsSync(".claude/skills")) fs.symlinkSync("../.agents/skills", ".claude/skills");
   }
-  // Bundles for the Controller host and the Front agent (copied by the human or by `doctor --install`).
+  // Bundles for the Controller host and the Front agent (copied to their hosts by `start`).
   for (const rel of walk(path.join(ROOT, "controller"))) write(path.join(".factory/controller", rel), render(fs.readFileSync(path.join(ROOT, "controller", rel), "utf8"), vars), /gate$|\.sh$/.test(rel) ? 0o755 : undefined);
   write(".factory/controller/factory.config.json", JSON.stringify(c, null, 2) + "\n");
   // The user-level skills the Controller and Front agent need on their host travel with the bundles.
@@ -863,6 +878,8 @@ function selfcheck() {
   const c = JSON.parse(fs.readFileSync(path.join(ROOT, "factory.config.example.json"), "utf8"));
   const vars = templateVars(c);
   for (const dir of ["templates", "controller", "front-agent"]) for (const rel of walk(path.join(ROOT, dir))) { const out = render(fs.readFileSync(path.join(ROOT, dir, rel), "utf8"), vars); const left = out.match(/\{\{[A-Z_]+\}\}/g); if (left) { say(`UNRESOLVED ${dir}/${rel}: ${[...new Set(left)].join(" ")}`); fail++; } }
+  // The argument check ships in both bundles and must be the same file.
+  if (fs.readFileSync(path.join(ROOT, "controller/cli.mjs"), "utf8") !== fs.readFileSync(path.join(ROOT, "front-agent/cli.mjs"), "utf8")) { say("DIFFERENT controller/cli.mjs and front-agent/cli.mjs: copy the first over the second"); fail++; }
   // Runtime state must never ship in the bundles.
   for (const rel of walk(path.join(ROOT, "controller"))) if (/^(journal\.ndjson|workers\.json|quota\.json|model-tiers\.json|gate-slots.*\.json|capacity-state.*\.json|released-terminals\.json|dispatch-asked\.json|dispatch-settled\.json|wave-handle\.txt|specs\/|logs\/|events\/)/.test(rel)) { say(`RUNTIME STATE in controller/: ${rel}`); fail++; }
   say(fail ? `${fail} problems` : "selfcheck ok");
@@ -1232,11 +1249,32 @@ function armBotWatch(c, frontAgentDir) {
   const name = c.hosts.frontAgent?.bot;
   if (!name) { say("Front agent bot: hosts.frontAgent.kind is orca-bot, but hosts.frontAgent.bot names no bot. Set it in factory.config.json, run update, then start again."); return 1; }
   const dir = botWatchDir(name);
+  // The precheck and the modules it imports come from one bundle; a bundle from an older factory lacks some of them.
+  const files = ["cli.mjs", "hosts.mjs", "botwatch.mjs"], missing = files.filter((f) => !fs.existsSync(path.join(frontAgentDir, f)));
+  if (missing.length) { say(`Front agent bot: the Front agent bundle has no ${missing.join(", ")}; it is older than this factory. Run \`agentic-factory update\`, then start again. The bot watch was not changed.`); return 1; }
   fs.mkdirSync(dir, { recursive: true });
   // The directory is shared by every project that names the bot and Orca reads it every 5 minutes: whole files, never half of one.
-  for (const f of ["botwatch.mjs", "hosts.mjs"]) writeFileAtomic(path.join(dir, f), fs.readFileSync(path.join(frontAgentDir, f), "utf8"), 0o644);
+  // Dependencies first, so a precheck that runs in between finds the modules it imports.
+  for (const f of files) writeFileAtomic(path.join(dir, f), fs.readFileSync(path.join(frontAgentDir, f), "utf8"), 0o644);
   // Orca runs the precheck without this session's PATH; under nvm and the like node is on no fixed path.
-  writeFileAtomic(path.join(dir, "botwatch.sh"), `#!/bin/sh\nPATH=${JSON.stringify(`${path.dirname(process.execPath)}:${os.homedir()}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin`)}\nexport PATH\ncd "$(dirname "$0")" && exec node botwatch.mjs\n`, 0o755);
+  // A precheck that fails (an error on stderr) wakes the bot once per distinct error with the error in wake.md, so a
+  // broken watch is never silent; "no news" exits 1 without output and stays quiet.
+  writeFileAtomic(path.join(dir, "botwatch.sh"), [
+    "#!/bin/sh",
+    `PATH=${JSON.stringify(`${path.dirname(process.execPath)}:${os.homedir()}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin`)}`,
+    "export PATH",
+    'cd "$(dirname "$0")" || exit 1',
+    "node botwatch.mjs 2> botwatch.err; s=$?",
+    'if [ "$s" -ne 0 ] && [ -s botwatch.err ]; then',
+    "  cmp -s botwatch.err botwatch.err.last && exit \"$s\"",
+    "  cp botwatch.err botwatch.err.last",
+    `  { printf '# The bot watch precheck failed (exit %s)\\n\\n' "$s"; cat botwatch.err; printf '\\nTell the human. In each watched project, run agentic-factory update, then agentic-factory start.\\n'; } > wake.md`,
+    "  exit 0",
+    "fi",
+    "rm -f botwatch.err.last",
+    'exit "$s"',
+    "",
+  ].join("\n"), 0o755);
   const listFile = path.join(dir, "projects.json");
   let projects = [];
   // Two projects starting at the same moment must not drop each other's entry: read, change and write under one lock.
@@ -1376,5 +1414,10 @@ async function start() {
 }
 
 const commands = { init, update, doctor, selfcheck, status, start, deviate, "install-skills": installSkills };
-if (!commands[cmd]) { say(`agentic-factory ${PKG.version}\n  init            onboarding: ask the project's questions, write factory.config.json, copy handbooks, hooks, skills and bundles (--keep-own-hooks: leave the project's hooks untouched, hooks.mode own; --untracked-standard: keep the standard out of the project's history)\n  deviate <path>  make a generated file of the untracked standard the project's own: a tracked file that wins over the standard\n  update          re-render from a newer factory; locally changed files are kept, new versions land in .factory/new/\n  install-skills  install the Orca and coordination skills at user level (~/.claude/skills, ~/.agents/skills) on this host; required wherever a Controller or Front agent runs. --all for every vendored skill, --force to replace\n  doctor          check config, hooks, tools, user-level skills, hosts and the controller's status\n  selfcheck       (factory repo) syntax and placeholder check\n  status          prerequisites, setup, the work in the repo and the phase with the next step (--json for the Front agent)\n  start           user-level skills, Front agent and Controller bundles, gate, load log and the Controller's session in Orca\nFlags: --yes (take defaults), --print-questions (init: the questions as JSON, nothing written), --answers <file> (init: answers as {id: value})\n\nUsually you run none of this yourself: start an agent in your project with\n  claude "Read ${path.join(ROOT, "START.md").replace(os.homedir(), "~")} and set up this project."`); process.exit(cmd ? 1 : 0); }
+if (!commands[cmd]) {
+  const known = !cmd || cmd === "--help" || cmd === "-h";
+  if (!known) console.error(`agentic-factory: unknown command ${JSON.stringify(cmd)}`);
+  say(`agentic-factory ${PKG.version}\n${Object.entries(USAGE).map(([c, [a, what]]) => `  ${`${c}${c === "deviate" ? ` ${a}` : ""}`.padEnd(15)} ${what}`).join("\n")}\nFlags: --yes (take defaults). \`agentic-factory <command> --help\` shows a command's arguments.\n\nUsually you run none of this yourself: start an agent in your project with\n  claude "Read ${path.join(ROOT, "START.md").replace(os.homedir(), "~")} and set up this project."`);
+  process.exit(known ? 0 : 2);
+}
 await commands[cmd]();

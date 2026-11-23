@@ -50,7 +50,7 @@ function beatSetup(terminals, extra = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-wake-"));
   const ctl = path.join(dir, "ctl"), project = path.join(dir, "p");
   fs.mkdirSync(path.join(ctl, "steering"), { recursive: true }); fs.mkdirSync(path.join(project, "docs/tasks"), { recursive: true });
-  for (const f of ["heartbeat.mjs", "controller-terminal.mjs", "lib.mjs", "steering/tasks.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
+  for (const f of ["heartbeat.mjs", "cli.mjs", "controller-terminal.mjs", "lib.mjs", "steering/tasks.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
   fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main", humanName: "Alex" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local", projectDir: project, orcaRepoId: "r" }] } }));
   fs.writeFileSync(path.join(ctl, "status.md"), "# Status\n");
   const state = path.join(dir, "state.json"), calls = path.join(dir, "calls.log"), fake = path.join(dir, "fake.mjs");

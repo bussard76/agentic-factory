@@ -11,7 +11,7 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
 function controllerDir(config) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-wait-rounds-"));
   fs.mkdirSync(path.join(dir, "templates"));
-  for (const f of ["wait.mjs", "lib.mjs", "templates/mkspec.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
+  for (const f of ["wait.mjs", "cli.mjs", "lib.mjs", "templates/mkspec.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
   fs.writeFileSync(path.join(dir, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main", humanName: "Alex" }, agents: { runner: "orca" }, commands: { verify: "npm run verify" }, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local" }] }, ...config }));
   return dir;
 }

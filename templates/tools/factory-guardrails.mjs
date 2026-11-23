@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Git guardrails installed by agentic-factory. Called from .githooks with a subcommand.
+// Usage: node tools/factory-guardrails.mjs <subcommand> [<commit-message-file>]
 //   test-count       the indexed test count must not drop
 //   staged-safety    whitespace and conflict markers, a staged-secret scan, no .env
 //   static-checks    the project's typecheck and lint (factory.config.json → commands), skipped for docs-only commits
@@ -15,6 +16,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+// This file is installed alone (tools/, the hooks directory), so it prints its leading comment itself, before the config is read.
+if (["--help", "-h"].includes(process.argv[2])) { const l = readFileSync(new URL(import.meta.url), "utf8").split("\n").slice(1); console.log(l.slice(0, l.findIndex((x) => !x.startsWith("//"))).map((x) => x.replace(/^\/\/ ?/, "")).join("\n")); process.exit(0); }
 const config = existsSync("factory.config.json") ? JSON.parse(readFileSync("factory.config.json", "utf8")) : {};
 const MAIN = config.project?.mainBranch ?? "main";
 const commands = config.commands ?? {};

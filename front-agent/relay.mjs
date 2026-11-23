@@ -1,6 +1,7 @@
 // Transition helper: forwards Orca worker events addressed to this machine to the Controller's events.md (local file
 // or over ssh on the controller host), filtered for secrets, and acknowledges them here. Needed only while workers
-// started from this machine are still running and the Controller lives elsewhere. Runs until killed.
+// started from this machine are still running and the Controller lives elsewhere. Runs until killed. Usage: node relay.mjs
+import "./cli.mjs";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
