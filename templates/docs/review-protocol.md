@@ -8,7 +8,7 @@ Every task branch is reviewed by an **independent Tester** before it is integrat
 2. The Controller starts a Tester with this protocol and the task spec.
 3. The Tester records the full 40-character SHA of the reviewed branch tip, writes `docs/reviews/<task>-review-<round>.md` with that `Reviewed commit`, and commits only that file on a review branch created from the reviewed head. Never `--no-verify`.
 4. On `fail`, every `blocker` and `major` goes unchanged to the builder as rework. Debt candidates do not.
-5. A new round gets a fresh Tester that knows only the previous findings file.
+5. A new round gets a fresh Tester that knows only the previous findings file, and re-checks only those findings and the rework (see "Later rounds").
 6. After {{MAX_ROUNDS}} rounds a working feature is integrated; open points become debt plus an acceptance item for {{HUMAN}}.
 7. On `pass`, level-2/3 tasks also get a fresh Architect's coarse conformance check (`docs/architect-protocol.md`).
 
@@ -20,7 +20,22 @@ Missing or weak tests, coverage gaps, edge cases, security, load and style are *
 
 **An assumption is no decision:** hold work only to a decision with {{HUMAN}}'s quoted statement and a date. Report an `Assumption:` that matters as a question.
 
-**Always checked, in every round:** code quality (`ponytail-review` on the full diff, `CODING_STANDARDS.md`) and architecture conformance (the stated level; every new export, dependency, data flow and import against the spec and the architecture docs). A wrong level or an unannounced architectural change is a `blocker`. Quality findings are `minor` unless trivial to fix now. **Not in daily rounds:** load tests, dependency audits and deep security hunting; they belong to the hardening phase and the release gate.
+**Always checked, in every round** (from round 2 on the changes that round re-checks, see "Later rounds"): code quality (`ponytail-review` on the full diff in round 1, on the task's own changes since the last reviewed commit in later rounds; `CODING_STANDARDS.md`) and architecture conformance (the stated level; every new export, dependency, data flow and import against the spec and the architecture docs). A wrong level or an unannounced architectural change is a `blocker`. Quality findings are `minor` unless trivial to fix now. **Not in daily rounds:** load tests, dependency audits and deep security hunting; they belong to the hardening phase and the release gate.
+
+## Later rounds
+
+**Rounds are bounded at {{MAX_ROUNDS}}.** A round that fails while rounds are left gets a rework and a new round. After round {{MAX_ROUNDS}} fails there is no rework and no further round (`mkspec` refuses both). The Controller runs the final functional re-evaluation (`mkspec reeval`) on the commit that round reviewed, as `CONTROLLER.md` says under "Tester failed". On `pass` exactly that commit is integrated. The task branch must not move past it, because the push gate accepts nothing after a reviewed commit except `docs/reviews/`. A failing re-evaluation, or more rounds (a higher `reviews.maxRounds`, a whole number of at least 1), is {{HUMAN}}'s decision.
+
+**A fix after a pass is no failed round:** the limit counts failed review rounds. Beyond it, `mkspec rework` and `mkspec test` are allowed only when the round before says `Verdict: pass`. `mkspec` fetches that review branch from origin first and refuses when the fetch fails, the findings file is missing, or the file has not exactly one line that reads `Verdict: pass` or `Verdict: fail`; that one line is the verdict. So when the last round passed and the task then needs a fix (a failed conformance review, a red wave, a merge conflict), rework and re-check as usual; without a findings file, give `mkspec rework` `--reason "<what failed>"` (the wave log, the conflicting files) in place of the review argument. The limit is a guardrail for a Controller that follows these rules, not an enforcement against one that does not: round numbers come from the caller, and the push gate and the independent Testers are what protect `{{MAIN}}`.
+
+**From round 2 the Tester narrows what it reviews, not which checks it applies.** Let A be the previous findings file's `Reviewed commit` and the head be the SHA under review. It reviews:
+
+- every `blocker` and `major` of the previous round's findings file: fixed or not, with the test that proves it;
+- the task's own changes since A: the commits of `git log --no-merges -p A..<head> ^origin/{{MAIN}}` (`^origin/{{MAIN}}` leaves out every commit that came in from `{{MAIN}}`), and for each merge commit of `git log --merges A..<head> ^origin/{{MAIN}}` what the merge itself changed (`git show --remerge-diff <merge>`). If that errors (git before 2.36) or skips the merge (an octopus merge prints `Skipping remerge-diff for octopus merges`), use `git show --cc <merge>` and review every file it shows.
+
+If A is not an ancestor of the head (the branch was rebased or rewritten), the second point becomes the whole diff, as in round 1; the first point stays.
+
+Every check of round 1 and every item under "Always checked" applies to these changes. A new `blocker` or `major` is raised only for a functional defect, a safety problem (a change that could reach a real external system, data loss, a secret, real data), or a wrong level or unannounced architectural change in these changes; anything else is a `minor` or a debt candidate. Code outside these changes was reviewed in an earlier round and is not reviewed again. The full gates still run on current `{{MAIN}}` plus the branch, and the new head gets its own `Reviewed commit`, so product code keeps its independent review before every push.
 
 ## Reviewer rules
 
@@ -28,7 +43,7 @@ Missing or weak tests, coverage gaps, edge cases, security, load and style are *
 - **Trust nothing reported.** Rerun the gates yourself: `{{VERIFY}}` always, `{{E2E}}` when the change can affect user flows. Run them through `gate`, as `gate bash -c '<command>'` because `gate` starts a program without a shell. Docker gates run only at release.
 - **On current `{{MAIN}}` plus the branch.** Use a clean worktree: merge current `{{MAIN}}` into a temporary branch from the reviewed head (abort and note conflicts if any). Failures present only on the stale branch tip are not findings; failures on the merged tree are.
 - **Clean checkout.** No leftover ignored build output from earlier runs; a test that passes only because of leftovers is a finding.
-- **Full diff** against `origin/{{MAIN}}`, not a sample. Run `ponytail-review` on it and merge its findings with the severities below.
+- **Full diff** against `origin/{{MAIN}}` in round 1, not a sample; in later rounds the scope under "Later rounds". Run `ponytail-review` on it and merge its findings with the severities below.
 - **Flakes.** An unchanged test that fails only by timeout under load and passes alone is load debt: keep the original failure in the report, list each such file, judge on the isolated pass. Failures caused by foreign host load (network changes from another project's containers) count as environment: rerun, count the reruns, state the count.
 - **Every finding is concrete:** `file:line`, what is wrong and the spec point or rule it violates, the required fix, and **the test that must prove the fix**.
 - No real data, no real model calls, no real external services. Do not print secrets.
