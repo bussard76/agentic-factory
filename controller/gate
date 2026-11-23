@@ -1,5 +1,19 @@
 #!/usr/bin/env bash
-# gate <command…>: thin shim; the implementation is gate.mjs next to this file (`start` installs both; or in ~/controller). Needs node only.
-here="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)"
-impl="$here/gate.mjs"; [ -f "$impl" ] || impl="$HOME/controller/gate.mjs"
+# gate-shim: 2
+# gate <command…>: dispatcher. ~/.local/bin/gate is shared by every project on a host, so it carries no project's gate.mjs:
+# it runs the gate.mjs of the Controller directory of the project it is called in (factory.config.json from FACTORY_CONFIG,
+# else from the working directory upward; hosts.controller.controllerDir). Each project keeps the gate.mjs of its own factory
+# version, and two projects on one host cannot change each other's gate. Fallbacks: a gate.mjs next to this file (an install
+# from before the dispatcher), then ~/controller/gate.mjs. Needs node only. `start` installs this file only when it differs
+# and never over a higher "gate-shim" number.
+impl=$(node -e '
+const fs = require("fs"), p = require("path"), h = process.env.HOME;
+let c = process.env.FACTORY_CONFIG;
+if (!c) for (let d = process.cwd(); ; d = p.dirname(d)) { const f = p.join(d, "factory.config.json"); if (fs.existsSync(f)) { c = f; break; } if (d === p.dirname(d)) break; }
+try { const j = JSON.parse(fs.readFileSync(c, "utf8")); const g = p.join((j.hosts?.controller?.controllerDir ?? "~/controller").replace(/^~(?=\/|$)/, h), "gate.mjs"); if (fs.existsSync(g)) console.log(g); } catch {}
+' 2>/dev/null)
+if [ -z "$impl" ]; then
+  here="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)"
+  impl="$here/gate.mjs"; [ -f "$impl" ] || impl="$HOME/controller/gate.mjs"
+fi
 exec node "$impl" "$@"

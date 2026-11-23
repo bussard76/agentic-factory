@@ -5,8 +5,9 @@
 // newer gates cannot overtake older ones. Stale tickets and slots (dead pid) are removed. Slot counts come from
 // <controller dir>/gate-slots.json (written by capacity.mjs) or GATE_SLOTS / GATE_E2E_SLOTS, default 2 / 1.
 // Wait and run time go to the journal (type gate) when <controller dir>/journal.mjs exists.
-// One gate serves every project on a host: the project and its controller dir come from the factory.config.json
-// in the working directory or above it (FACTORY_CONFIG wins), else from ~/controller.
+// Each project runs the gate.mjs of its own Controller directory (the shared ~/.local/bin/gate only dispatches to it), and its
+// queue and slots are its own: the project and its controller dir come from the factory.config.json in the working directory
+// or above it (FACTORY_CONFIG wins), else from ~/controller.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";

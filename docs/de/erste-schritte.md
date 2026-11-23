@@ -65,8 +65,33 @@ Probiere das integrierte Verhalten mit dem Front-Agenten auf der Preview aus. Is
 | Voraussetzung oder Hook schlägt fehl | Lies die Meldung und den vorgeschlagenen Schritt; Hooks nicht umgehen. |
 | Controller tut nichts | Prüfe `~/controller/status.md`, `inbox.md` und `node capacity.mjs --verbose`. |
 | Worker steht still | Prüfe `node stallwatch.mjs` und sein Orca-Terminal. |
-| Tests wackeln unter Last | Prüfe `~/load.log` und das Gate-Journal; senke `capacity.calibration.startSuite`. |
+| Tests wackeln unter Last | Prüfe `~/load.log` (die Zeilen mit `project=<dein Projekt>` am Ende) und das Gate-Journal; senke `capacity.calibration.startSuite`. |
 | Update behält deine Änderung | Führe die neue Version aus `.factory/new/` zusammen. |
+
+## Was `start` auf deinem Rechner schreibt
+
+Im Projekt schreiben `init` und `update`, was die Tabelle im Anhang aufführt. `start` (und `install-skills`, `update`, die Bot-Einrichtung) schreiben außerdem die folgenden Dateien **außerhalb** des Projekts. Sonst wird außerhalb nichts geschrieben, abgesehen von dem, was Orca und dein Agent (zum Beispiel Claude Codes eigene `~/.claude.json`) für sich selbst ablegen. `~` ist das Home des Benutzers, der Orca ausführt: siehe „Ein eigenes HOME isoliert keine zweite Fabrik“ unten. Auf einem entfernten Controller-Host gilt dieselbe Liste auf diesem Host.
+
+| Wo | Was | Zwei Projekte auf einem Host | Entfernen |
+|---|---|---|---|
+| `~/.claude/skills/<name>`, `~/.agents/skills/<name>` | Die Benutzer-Skills, die Controller und Front-Agent brauchen (`orchestration`, `orca-cli`, `retro`, …; `install-skills --all` fügt alle mitgelieferten Skills hinzu) | Absichtlich geteilt. Ein vorhandener Skill bleibt, wird nie überschrieben (`--force` ersetzt ihn); ein zweites Projekt ändert also nichts am Installierten des ersten. | Lösche die Skill-Ordner, die du nicht mehr willst; andere Projekte und Agenten der Maschine nutzen sie vielleicht. |
+| `~/front-agent/<projekt>/` | Das Front-Agent-Bundle, Zustand und Log der Status-Überwachung | Ein Ordner je Projektname | Ordner löschen (nach dem Entfernen des Zeitplans unten). |
+| `~/front-agent/.bots/<bot>-<id>/` | Mit einem Orca-Bot als Front-Agent: die Bot-Überwachung (`botwatch.sh`, Zustand, `projects.json`, `wake.md`) | Ein Ordner je Bot, geteilt von allen Projekten, die den Bot nennen (eine Automation weckt den Bot für alle); jedes Projekt ist ein Eintrag in `projects.json` | Die Automation `agentic-factory watch · <bot>` in Orca löschen, dann den Ordner. |
+| `<hosts.controller.controllerDir>` (Standard `~/controller`) | Das Controller-Bundle: Skripte, `CONTROLLER.md`, Zustand, `heartbeat.log` | Ein Verzeichnis je Projekt. `start` verweigert ein Verzeichnis, das einem anderen Projekt gehört, und sagt, dass `controllerDir` zu setzen ist. | Controller-Sitzung beenden, Verzeichnis löschen. |
+| `~/.local/bin/gate` | Der Gate-Verteiler: eine kleine Shell-Datei, die das `gate.mjs` aus dem Controller-Verzeichnis des Projekts startet, in dem sie aufgerufen wird | Geteilt und gefahrlos teilbar. Sie enthält kein `gate.mjs` eines Projekts: jedes Projekt behält das `gate.mjs` seiner eigenen Fabrik-Version und seine eigene Warteschlange samt Slots (`$TMPDIR/<projekt>-gate-<pool>`). `start` schreibt sie nur, wenn sich der Inhalt unterscheidet, über eine temporäre Datei und ein Umbenennen (ein laufendes `gate` liest nie eine halbe Datei), und nie über einen Verteiler einer neueren Fabrik. | `~/.local/bin/gate` löschen, wenn kein Projekt die Fabrik mehr nutzt. Ein `~/.local/bin/gate.mjs` eines älteren `start` wird nicht mehr benutzt oder aktualisiert; lösche es, sobald jedes Projekt auf dem Host `update` und `start` ausgeführt hat. |
+| `~/load.log` | Eine Zeile pro Minute von `loadlog.sh`: Last, Speicher, Druck, Zahl der Agenten- und Test-Prozesse, die Gate-Wartenden dieses Projekts und am Ende `project=<name>` | Geteilt. Der Logger jedes Projekts hängt an dieselbe Datei an; jede Zeile trägt ihr Projekt, `start` übergibt den Namen. Die Maschinenwerte sind in jeder Zeile einer Minute gleich; `gatewaiters` gehört dem Projekt. Zeilen deines Projekts: `grep ' project=<name>$' ~/load.log`. | Logger beenden (`pkill -f '<controllerDir>/loadlog.sh'`), Datei löschen. |
+| Crontab (auf macOS ein launchd-Agent in `~/Library/LaunchAgents/de.agentic-factory.statuswatch.<projekt>.<id>.plist`) | Die Status-Überwachung (alle 5 Minuten, Front-Agent im Terminal) und der Heartbeat des Controllers | Ein Eintrag je Projekt und Verzeichnis, jeweils mit dem Projektnamen markiert; `start` fügt nur den eigenen hinzu und lässt den Rest der Crontab unberührt | `crontab -e` und die mit `# agentic-factory … : <projekt>` markierten Zeilen löschen; auf macOS `launchctl bootout gui/$(id -u)/<label>` und die Plist löschen. |
+| `~/.lean-ctx/config.toml` | Nur wenn lean-ctx installiert ist: `allow_paths` bekommt das Projekt, seinen Checkout auf dem Controller-Host und seine Worker-Workspaces, damit der Controller sie lesen darf | Geteilte Datei; Pfade werden nur hinzugefügt, nie entfernt oder umsortiert, und nur wenn einer fehlt. Fehlt keiner, wird nichts geschrieben. Das Schreiben ist atomar (temporäre Datei und Umbenennen, die Datei behält ihre Rechte, ein Symlink bleibt einer); ist `allow_paths` keine einfache Liste, bleibt die Datei unberührt und es gibt eine Meldung. | Die Pfade des Projekts aus `allow_paths` löschen. |
+| `<controllerDir>/.claude/settings.local.json` | Nur mit pi-Paket `context-mode`: `Read(<pfad>/**)`-Rechte für dieselben Pfade | Im eigenen Controller-Verzeichnis des Projekts | Einträge oder Datei löschen. |
+| Orca | Ein Repo-Eintrag, Controller- und Worker-Terminals und -Worktrees (`~/orca/workspaces/<projekt>/`), mit Bot die Automation oben | Nach Projekt benannt | `cleanup.mjs` entfernt fertige Worktrees; den Repo-Eintrag in Orcas Oberfläche entfernen (die CLI kann ihn nur ausblenden). |
+
+**Nie von `start` geschrieben:** die `.env` des Projekts, Controller, Worktrees, Worker oder Bots anderer Projekte und der launchd-Agent der Preview (`preview.plist.template` lädst du selbst).
+
+### Ein eigenes HOME isoliert keine zweite Fabrik
+
+Terminals, die Orca startet (Controller, Worker, das Gate, die Agenten-CLIs), laufen mit dem **echten Home des Benutzers, der Orca ausführt**, egal welches `HOME` du dem `agentic-factory`-Befehl gegeben hast. So verhält sich Orca; die Fabrik kann das nicht ändern. Ein zweites `HOME` verschiebt daher nur, was `start` selbst schreibt (Skills, `~/front-agent`, den Verteiler, das Load-Log); alles, was Controller und Worker später ausführen, liest und schreibt weiter im echten Home, und `~` in einem Pfad wird dort aufgelöst.
+
+Trenne zwei Fabriken auf einer Maschine stattdessen über Namen und **absolute Pfade**: gib jedem Projekt ein eigenes `hosts.controller.controllerDir` (zum Beispiel `/home/du/controller-<projekt>`, nicht `~/…`) und halte Workspaces und Projekt-Checkouts nach Projektname getrennt. Alles, was die Fabrik auf einer Maschine teilt, steht in der Tabelle oben und ist gefahrlos teilbar: die Skills, der Verteiler, das markierte Load-Log und die `allow_paths`-Liste.
 
 ## Anhang: Was der Agent für dich tut (und wie es von Hand geht)
 
@@ -102,8 +127,8 @@ Um die Sitzungen nach `init` von Hand zu starten, installiere die Skills, kopier
 ```bash
 agentic-factory install-skills
 mkdir -p ~/controller && cp -R .factory/controller/. ~/controller/
-mkdir -p ~/.local/bin && install -m 755 ~/controller/gate ~/.local/bin/gate
-(cd ~/controller && nohup bash loadlog.sh >/dev/null 2>&1 &)
+mkdir -p ~/.local/bin && install -m 755 ~/controller/gate ~/.local/bin/gate   # der Verteiler; das gate.mjs des Projekts bleibt in dessen Controller-Verzeichnis
+(cd ~/controller && FACTORY_PROJECT=dein-projektname nohup bash loadlog.sh >/dev/null 2>&1 &)
 PROJECT=dein-projektname
 mkdir -p ~/front-agent && cp -R .factory/front-agent "$HOME/front-agent/$PROJECT"
 ```

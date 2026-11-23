@@ -4,11 +4,14 @@
 // To support another tool, add an entry to GRANTS: { name, detect(home), apply(home, paths, controllerDir) → message }.
 import fs from "node:fs";
 import path from "node:path";
+import { writeFileAtomic } from "./safe-write.mjs";
 
 const quote = (p) => JSON.stringify(p);
 
 // ~/.lean-ctx/config.toml: allow_paths = [ … ] is a top-level key, so a new one goes before the first [table].
 export function addTomlAllowPaths(text, paths) {
+  // A key that is not a plain list (a string, a table's own key) cannot be extended safely: a second key would break the file.
+  if (/^allow_paths\s*=/m.test(text) && !/^allow_paths\s*=\s*\[/m.test(text)) throw new Error("allow_paths is not a plain list");
   const m = /^allow_paths\s*=\s*\[([\s\S]*?)\]/m.exec(text);
   if (m) {
     const have = [...m[1].matchAll(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g)].map((x) => (x[1] !== undefined ? JSON.parse(`"${x[1]}"`) : x[2]));
@@ -31,8 +34,8 @@ export const GRANTS = [
     apply(home, paths) {
       const file = path.join(home, ".lean-ctx", "config.toml");
       const { text, added } = addTomlAllowPaths(fs.readFileSync(file, "utf8"), paths);
-      if (!added.length) return "allow_paths already has them";
-      fs.writeFileSync(file, text);
+      if (!added.length) return "allow_paths already has them";   // nothing changes: the live file is not touched
+      writeFileAtomic(file, text, fs.statSync(file).mode & 0o777);   // the tool may read it at any moment: whole file or none
       return `allow_paths += ${added.join(", ")}`;
     },
   },
@@ -48,8 +51,7 @@ export const GRANTS = [
       const add = paths.map((p) => `Read(${p}/**)`).filter((r) => !allow.includes(r));
       if (!add.length) return `${file} already allows them`;
       allow.push(...add);
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
+      writeFileAtomic(file, JSON.stringify(settings, null, 2) + "\n");
       return `${file}: ${add.join(", ")}`;
     },
   },

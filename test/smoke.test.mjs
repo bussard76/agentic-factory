@@ -60,7 +60,7 @@ test("two projects on one host: own controller dir everywhere, a foreign one is 
   for (const f of ["wave.mjs", "runscript.mjs", "integ-wave.sh"]) assert.doesNotMatch(fs.readFileSync(path.join(ctl, f), "utf8"), /\/tmp\/(wave|integ-wave)/, `${f}: a fixed /tmp file would mix two projects' waves`);
   // The shared gate serves this project from inside its checkout: its slots and its pool, not the other project's.
   fs.writeFileSync(path.join(ctl, "gate-slots.json"), JSON.stringify({ unit: 1, e2e: 1 }));
-  const gate = path.join(twoHome, ".local/bin/gate"); assert.ok(fs.existsSync(path.join(twoHome, ".local/bin/gate.mjs")));
+  const gate = path.join(twoHome, ".local/bin/gate"); assert.ok(fs.existsSync(path.join(ctl, "gate.mjs")), "each project keeps its own gate.mjs"); assert.ok(!fs.existsSync(path.join(twoHome, ".local/bin/gate.mjs")), "the shared place holds no project's gate.mjs");
   const tmpDir = path.join(base, "tmp"); fs.mkdirSync(tmpDir);
   r = spawnSync(gate, ["sh", "-c", "ls \"$TMPDIR\""], { cwd: project, encoding: "utf8", env: { ...env, TMPDIR: tmpDir } });
   assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /second-gate-unit/); assert.doesNotMatch(r.stdout, /first-gate/);
@@ -144,7 +144,7 @@ test("agent entry questions, answers, status and start in an isolated home", asy
     config.hosts.workers = [{ name: "remote", kind: "remote", ssh: "fake", projectsDir: "~/projects", orcaEnvironment: "saved-server" }]; config.hosts.controller.host = "remote";
     fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
     r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
-    assert.equal(r.status, 0, r.stdout + r.stderr); const sshCalls = fs.readFileSync(`${calls}.ssh`, "utf8"); assert.match(sshCalls, /pgrep -f "\[b\]ash loadlog\.sh"/); assert.match(sshCalls, /node heartbeat\.mjs/);
+    assert.equal(r.status, 0, r.stdout + r.stderr); const sshCalls = fs.readFileSync(`${calls}.ssh`, "utf8"); assert.match(sshCalls, /pgrep -f "\[b\]ash \$HOME\/controller\/loadlog\.sh"/); assert.match(sshCalls, /FACTORY_PROJECT=project nohup bash \$HOME\/controller\/loadlog\.sh/); assert.match(sshCalls, /gate-shim/); assert.match(sshCalls, /node heartbeat\.mjs/);
     const orcaArgs = fs.readFileSync(`${calls}.orca`, "utf8"); assert.match(orcaArgs, /saved-server/); assert.match(orcaArgs, /path:\/remote\/home\/projects\/project/);
     config.hosts.workers[0].orcaEnvironment = ""; fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
     r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
@@ -592,7 +592,10 @@ test("stallwatch watches a worker's own terminal, not its setup or shell termina
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-stall-"));
   for (const f of ["stallwatch.mjs", "lib.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
   fs.writeFileSync(path.join(dir, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local" }] } }));
-  const terminals = [{ handle: "worker", title: "T1 · Worker Developer" }, { handle: "setup", title: "T1 · Worker Developer · Setup" }, { handle: "shell", title: "T1 · Worker Developer · Shell" }];
+  const ws = path.join(os.homedir(), "orca/workspaces/p/");
+  const terminals = [{ handle: "worker", title: "T1 · Worker Developer", worktreePath: ws + "t1" }, { handle: "setup", title: "T1 · Worker Developer · Setup", worktreePath: ws + "t1" }, { handle: "shell", title: "T1 · Worker Developer · Shell", worktreePath: ws + "t1" },
+    // another project's worker on the same host: same title pattern, its own workspace directory
+    { handle: "foreign", title: "T1 · Worker Developer", worktreePath: path.join(os.homedir(), "orca/workspaces/other/t1") }, { handle: "prefix", title: "T9 · Worker Developer", worktreePath: path.join(os.homedir(), "orca/workspaces/p-two/t9") }];
   const log = path.join(dir, "reads.log");
   const fake = path.join(dir, "fake-orca.mjs");
   fs.writeFileSync(fake, `#!/usr/bin/env node

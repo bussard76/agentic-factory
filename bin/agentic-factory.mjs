@@ -8,6 +8,7 @@ import path from "node:path";
 import readline from "node:readline/promises";
 import { findControllerTerminal } from "../controller/controller-terminal.mjs";
 import { heartbeatCronScript, statusWatchCronScript, statusWatchLabel, statusWatchPlist } from "./heartbeat-cron.mjs";
+import { installGate } from "./gate-install.mjs";
 import { applyReadGrants } from "./read-grants.mjs";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
@@ -1083,20 +1084,20 @@ async function start() {
   if (ctl.kind === "local") {
     const d = expandHome(dir);
     fs.mkdirSync(d, { recursive: true }); fs.cpSync(".factory/controller", d, { recursive: true, force: true }); say(`Controller bundle: ${dir}`);
-    const bin = path.join(os.homedir(), ".local/bin"); fs.mkdirSync(bin, { recursive: true }); fs.copyFileSync(path.join(d, "gate"), path.join(bin, "gate")); fs.chmodSync(path.join(bin, "gate"), 0o755); fs.copyFileSync(path.join(d, "gate.mjs"), path.join(bin, "gate.mjs")); say("Gate: ~/.local/bin/gate");
+    try { say(installGate(path.join(d, "gate"), os.homedir()).message); } catch (e) { failed++; say(`Gate: could not install ~/.local/bin/gate (${e.message.split("\n")[0]})`); }
     const loadlog = path.join(d, "loadlog.sh");
     if (sh("ps", ["-ax", "-o", "command"]).split("\n").some((l) => l.includes(loadlog))) say("Load log: already running");
-    else { spawn("bash", [loadlog], { cwd: d, detached: true, stdio: "ignore" }).unref(); say("Load log: started (~/load.log)"); }
+    else { spawn("bash", [loadlog], { cwd: d, detached: true, stdio: "ignore", env: { ...process.env, FACTORY_PROJECT: c.project.name } }).unref(); say(`Load log: started (~/load.log, each line tagged project=${c.project.name})`); }
     // Optional: only for the tools found here, and a grant that cannot be written never fails start.
     const readable = [cwd, ctl.projectDir ?? (ctl.projectsDir ? path.join(ctl.projectsDir, c.project.name) : ""), ctl.workspacesDir ? `${ctl.workspacesDir}/${c.project.name}` : ""].filter(Boolean).map((p) => path.resolve(expandHome(p)));
     for (const line of applyReadGrants({ home: os.homedir(), paths: readable, controllerDir: d })) say(`Read access: ${line}`);
   } else {
-    const remoteDir = dir;
+    const remoteDir = dir, remoteLoadlog = `${dir.replace(/^~(?=\/|$)/, "$HOME")}/loadlog.sh`;   // one logger per Controller directory, not one per host
     const r = spawnSync("rsync", ["-a", "-e", `ssh ${sshArgsFor(ctl).slice(0, -1).map((a) => JSON.stringify(a)).join(" ")}`, ".factory/controller/", `${ctl.ssh}:${remoteDir}/`], { encoding: "utf8" });
     if (r.status !== 0) { failed++; say(`Controller bundle: copy to ${ctl.name} failed: ${(r.stderr || "").trim().slice(0, 200)}`); }
     else {
       say(`Controller bundle: ${ctl.name}:${remoteDir}`);
-      const s = spawnSync("ssh", [...sshArgsFor(ctl), `mkdir -p ~/.local/bin && install -m 755 ${remoteDir}/gate ~/.local/bin/gate && install -m 644 ${remoteDir}/gate.mjs ~/.local/bin/gate.mjs && for s in ${remoteDir}/skills/*; do n=$(basename "$s"); for t in ~/.claude/skills ~/.agents/skills; do mkdir -p "$t"; [ -e "$t/$n" ] || cp -R "$s" "$t/"; done; done; pgrep -f "[b]ash loadlog.sh" >/dev/null || (cd ${remoteDir} && nohup bash loadlog.sh >/dev/null 2>&1 &); echo ok`], { encoding: "utf8" });
+      const s = spawnSync("ssh", [...sshArgsFor(ctl), `mkdir -p ~/.local/bin && v() { sed -n 's/^# gate-shim: *\\([0-9]*\\).*/\\1/p' "$1" 2>/dev/null | head -1; } && n=$(v ${remoteDir}/gate) && o=$(v ~/.local/bin/gate) && { { [ -n "$o" ] && [ -n "$n" ] && [ "$o" -gt "$n" ]; } || cmp -s ${remoteDir}/gate ~/.local/bin/gate || { install -m 755 ${remoteDir}/gate ~/.local/bin/.gate.$$ && mv -f ~/.local/bin/.gate.$$ ~/.local/bin/gate; }; } && for s in ${remoteDir}/skills/*; do n=$(basename "$s"); for t in ~/.claude/skills ~/.agents/skills; do mkdir -p "$t"; [ -e "$t/$n" ] || cp -R "$s" "$t/"; done; done; pgrep -f "[b]ash ${remoteLoadlog}" >/dev/null || (cd ${remoteDir} && FACTORY_PROJECT=${c.project.name} nohup bash ${remoteLoadlog} >/dev/null 2>&1 &); echo ok`], { encoding: "utf8" });
       s.stdout?.trim().endsWith("ok") ? say(`Gate, user-level skills and load log on ${ctl.name}: ok`) : (failed++, say(`Gate, skills or load log on ${ctl.name} failed: ${(s.stderr || "").trim().slice(0, 200)}`));
     }
   }
