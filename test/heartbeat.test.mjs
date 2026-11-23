@@ -18,7 +18,10 @@ function setup({ state = {} } = {}) {
   const fake = path.join(dir, "fake-orca.mjs");
   const stateFile = path.join(dir, "state.json");
   const calls = path.join(dir, "calls.log");
-  fs.writeFileSync(stateFile, JSON.stringify({ terminals: [{ handle: "term_c", title: "p · Controller" }], messages: [], idle: true, ...state }));
+  // Orca's listing: an agent running in the project's worktree is what makes a terminal the Controller (controller-terminal.mjs).
+  const listed = (state.terminals ?? [{ handle: "term_c", title: "p · Controller" }]).map((t) => ({ worktreePath: project, agentIdentity: "claude", ...t }));
+  fs.writeFileSync(path.join(ctl, "status.md"), "# Status\n");
+  fs.writeFileSync(stateFile, JSON.stringify({ messages: [], idle: true, ...state, terminals: listed }));
   fs.writeFileSync(fake, `#!/usr/bin/env node
 import fs from "node:fs";
 const a = process.argv.slice(2), s = JSON.parse(fs.readFileSync(${JSON.stringify(stateFile)}, "utf8"));
@@ -130,14 +133,14 @@ test("a Controller terminal that pi renamed to its cwd is still found and woken"
     assert.match(h.beat(), /woke term_pi/, piTitle);
     h.done();
   }
-  const h = setup({ state: { terminals: [{ handle: "term_x", title: "π - ~/other-ctl" }] } });
+  const h = setup({ state: { terminals: [{ handle: "term_x", title: "π - ~/other-ctl", worktreePath: "/elsewhere" }] } });
   assert.match(h.beat(), /nothing woken/, "another directory's pi terminal is not this Controller");
   h.done();
 });
 
 test("no Controller terminal: nothing is woken and it says so", () => {
   const h = setup({ state: { terminals: [] } });
-  assert.match(h.beat(), /no terminal titled "p · Controller" or "π - …\/ctl", nothing woken/);
+  assert.match(h.beat(), /no terminal recorded or named as the Controller, nothing woken/);
   assert.equal(h.sent().length, 0);
   h.done();
 });

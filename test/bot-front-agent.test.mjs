@@ -216,7 +216,7 @@ test("start with a bot creates one automation with the precheck instead of the t
   assert.ok(fs.readFileSync(path.join(m.home, ".lean-ctx/config.toml"), "utf8").includes(JSON.stringify(alpha.dir)));
   const after = JSON.parse(alpha.cli("status", "--json").stdout);
   assert.equal(after.setup.frontAgent.watchAutomation, true);
-  assert.equal(after.setup.statusWatch, true);
+  assert.equal(after.setup.statusWatch, false, "no status watch is used under a bot: its automation is setup.frontAgent.watchAutomation");
   assert.doesNotMatch(after.next, /status watch|watch automation/);
   const doctor = alpha.cli("doctor").stdout;
   assert.match(doctor, /OK {6}Front agent bot front-bot/);

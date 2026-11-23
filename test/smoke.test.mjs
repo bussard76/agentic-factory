@@ -151,22 +151,22 @@ test("agent entry questions, answers, status and start in an isolated home", asy
     config.steering.mode = "github-issues"; fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
     r = run("status", "--json"); updated = JSON.parse(r.stdout); assert.equal(updated.work.tickets.byStatus["needs-human"], 1); assert.deepEqual(updated.work.needsHuman, ["Issue #7: Choose"]); assert.equal(updated.phase, "decisions");
     const fakeOrca = path.join(bin, "orca");
-    const writeOrca = (title) => fs.writeFileSync(fakeOrca, `#!/bin/sh\nif [ "$1" = status ]; then printf '%s\\n' '{"ok":true}'; else printf '%s\\n' '${JSON.stringify({ result: { terminals: [{ title }] } })}'; fi\n`, { mode: 0o755 });
-    fs.unlinkSync(statusFile); writeOrca(`other-${config.project.name} · Controller`);
+    const writeOrca = (title, worktreePath = project) => fs.writeFileSync(fakeOrca, `#!/bin/sh\nif [ "$1" = status ]; then printf '%s\\n' '{"ok":true}'; else printf '%s\\n' '${JSON.stringify({ result: { terminals: [{ title, worktreePath, agentIdentity: "claude" }] } })}'; fi\n`, { mode: 0o755 });
+    fs.unlinkSync(statusFile); writeOrca(`other-${config.project.name} · Controller`, "/another/checkout");
     const withOrca = () => spawnSync("node", [CLI, "status", "--json"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
     assert.equal(JSON.parse(withOrca().stdout).setup.controller.terminal, false);
     writeOrca(`${config.project.name} · Controller`); assert.equal(JSON.parse(withOrca().stdout).setup.controller.terminal, true);
     // pi overwrites the title with "π - <cwd>": the Controller directory's folder name still identifies it, another folder does not.
     const ctlFolder = (config.hosts.controller.controllerDir ?? "~/controller").split("/").pop();
     writeOrca(`π - ~/${ctlFolder}`); assert.equal(JSON.parse(withOrca().stdout).setup.controller.terminal, true, "pi title");
-    writeOrca(`π - ~/${ctlFolder}-other`); assert.equal(JSON.parse(withOrca().stdout).setup.controller.terminal, false, "another folder's pi title");
+    writeOrca(`π - ~/${ctlFolder}-other`, "/another/checkout"); assert.equal(JSON.parse(withOrca().stdout).setup.controller.terminal, false, "another folder's pi title");
     const calls = path.join(base, "calls");
     fs.writeFileSync(fakeOrca, `#!/bin/sh\nif [ "$1" = terminal ] && [ "$2" = create ]; then printf '%s\\n' "$@" > '${calls}.orca'; printf '%s\\n' '{"ok":true}'; else printf '%s\\n' '{"result":{"terminals":[]}}'; fi\n`, { mode: 0o755 });
     fs.writeFileSync(path.join(bin, "rsync"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}.rsync'\ncase "$*" in *bad:*) echo 'rsync: boom' >&2; exit 23;; esac\nexit 0\n`, { mode: 0o755 });
     // start schedules the status watch on this machine: a test must never reach the real crontab.
     fs.writeFileSync(path.join(bin, "crontab"), "#!/bin/sh\n[ \"$1\" = -l ] && exit 0\ncat > /dev/null\n", { mode: 0o755 });
     fs.writeFileSync(path.join(bin, "launchctl"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    fs.writeFileSync(path.join(bin, "ssh"), `#!/bin/sh\ncase "$*" in *'printf '*) printf '/remote/home\\n';; *) printf '%s\\n' "$*" >> '${calls}.ssh'; printf 'ok\\n';; esac\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "ssh"), `#!/bin/sh\ncase "$*" in *'| crontab -'*) printf '%s\\n' "$*" >> '${calls}.ssh'; printf 'added\\n';; *'printf '*) printf '/remote/home\\n';; *) printf '%s\\n' "$*" >> '${calls}.ssh'; printf 'ok\\n';; esac\n`, { mode: 0o755 });
     config.hosts.workers = [{ name: "remote", kind: "remote", ssh: "fake", projectsDir: "~/projects", orcaEnvironment: "saved-server" }]; config.hosts.controller.host = "remote";
     fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
     r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
