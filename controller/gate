@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
-# gate <command…>: thin shim; the implementation is gate.mjs next to this file (`start` installs both; or in ~/controller). Needs node only.
-here="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)"
-impl="$here/gate.mjs"; [ -f "$impl" ] || impl="$HOME/controller/gate.mjs"
-exec node "$impl" "$@"
+# gate <command…>: this project's gate. Call it by its absolute path, <controller dir>/gate; the implementation is the gate.mjs
+# next to this file, and nothing else is ever looked up (no PATH, no ~/.local/bin, no config in the working directory).
+# `start` copies it into the Controller directory over the old one while gates may be running, so the whole body is one group:
+# bash has read all of it before it runs any of it, and every way out is an explicit exit. Needs node only.
+{
+  here="$(cd "$(dirname "$0")" && pwd)" || exit 1
+  [ -f "$here/gate.mjs" ] || { echo "gate: no gate.mjs next to $0" >&2; exit 1; }
+  exec node "$here/gate.mjs" "$@"
+  echo "gate: could not start node" >&2
+  exit 1
+}
+echo "gate: ended unexpectedly" >&2
+exit 1

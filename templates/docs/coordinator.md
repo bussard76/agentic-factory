@@ -36,7 +36,7 @@ New features go from the outside in. Nothing is built until {{HUMAN}} has signed
 - Developer: targeted checks only (typecheck, lint, affected suites, the browser specs covering the change). No full suites.
 - Tester and wave: full `{{VERIFY}}` and `{{E2E}}` on current `{{MAIN}}` plus the branch.
 - Release only: `{{RELEASE}}`. Never per task or per wave.
-- Every full gate runs through `gate` (fair slots, pooled by unit and browser), as `gate bash -c '<command>'` because `gate` starts a program without a shell.
+- Every full gate runs through this project's own gate (fair slots, pooled by unit and browser), as `{{CONTROLLER_DIR}}/gate bash -c '<command>'` because the gate starts a program without a shell. Never a bare `gate` from the PATH: on a host with other factories it would be another project's.
 
 ## Capacity by measurement (decided by {{HUMAN}}, {{DATE}})
 

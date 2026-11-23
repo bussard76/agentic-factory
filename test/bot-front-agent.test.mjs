@@ -133,7 +133,7 @@ test("read grants are written only for the tools that are there, once, and never
 test("an existing allow_paths keeps its entries and gains only the missing ones", () => {
   const { text, added } = addTomlAllowPaths(`a = 1\nallow_paths = [\n    "/one",\n    '/two',\n]\nb = 2\n`, ["/two", "/three"]);
   assert.deepEqual(added, ["/three"]);
-  assert.equal(text, `a = 1\nallow_paths = [\n    "/one",\n    "/two",\n    "/three",\n]\nb = 2\n`);
+  assert.equal(text, `a = 1\nallow_paths = [\n    "/one",\n    '/two',\n    "/three",\n]\nb = 2\n`, "what is there stays as it is");
   assert.equal(addTomlAllowPaths("", ["/x"]).text, `allow_paths = [\n    "/x",\n]\n`);
 });
 

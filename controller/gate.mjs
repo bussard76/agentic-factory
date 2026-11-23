@@ -5,20 +5,28 @@
 // newer gates cannot overtake older ones. Stale tickets and slots (dead pid) are removed. Slot counts come from
 // <controller dir>/gate-slots.json (written by capacity.mjs) or GATE_SLOTS / GATE_E2E_SLOTS, default 2 / 1.
 // Wait and run time go to the journal (type gate) when <controller dir>/journal.mjs exists.
-// One gate serves every project on a host: the project and its controller dir come from the factory.config.json
-// in the working directory or above it (FACTORY_CONFIG wins), else from ~/controller.
+// Each project has its own gate: this file in its Controller directory, called by its absolute path (<controller dir>/gate). Its project,
+// its queue, its slots and its journal come from that directory (factory.config.json next to this file), never from a config
+// in the worktree it is called in: the code that judges a branch is not chosen by the branch. A call from another project's
+// worktree is refused.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const args = process.argv.slice(2);
 if (!args.length) { console.error("usage: gate <command…>"); process.exit(2); }
-const home = os.homedir();
-const findConfig = (from) => { for (let d = from; ; d = path.dirname(d)) { const p = path.join(d, "factory.config.json"); if (fs.existsSync(p)) return p; if (d === path.dirname(d)) return null; } };
-const cfgPath = process.env.FACTORY_CONFIG ?? findConfig(process.cwd()) ?? path.join(home, "controller/factory.config.json");
-const cfg = fs.existsSync(cfgPath) ? JSON.parse(fs.readFileSync(cfgPath, "utf8")) : {};
-const controllerDir = (cfg.hosts?.controller?.controllerDir ?? "~/controller").replace(/^~(?=\/|$)/, home);
+const controllerDir = path.dirname(fileURLToPath(import.meta.url));
+const cfgPath = path.join(controllerDir, "factory.config.json");
+let cfg = {};
+try { if (fs.existsSync(cfgPath)) cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")); } catch (e) { console.error(`gate: cannot read ${cfgPath} (${e.message})`); process.exit(1); }
+// Only to refuse a mix-up: the working directory's config is read for its project name, never to choose anything.
+for (let d = process.cwd(); cfg.project?.name; d = path.dirname(d)) {
+  const f = path.join(d, "factory.config.json");
+  if (fs.existsSync(f)) { let name; try { name = JSON.parse(fs.readFileSync(f, "utf8")).project?.name; } catch {} if (name && name !== cfg.project.name) { console.error(`gate: this is the gate of the project ${cfg.project.name} (${controllerDir}), but it was called in a worktree of ${name} (${d}). Use that project's own gate. Nothing was run.`); process.exit(1); } break; }
+  if (d === path.dirname(d)) break;
+}
 const project = process.env.FACTORY_PROJECT ?? cfg.project?.name ?? "factory";
 const pool = /e2e|playwright|cypress/.test(args.join(" ")) ? "e2e" : "unit";
 const slotsFile = path.join(controllerDir, "gate-slots.json");
@@ -51,7 +59,7 @@ const t1 = Date.now();
 const release = () => { try { fs.unlinkSync(path.join(dir, slot)); } catch {} };
 process.on("exit", release); process.on("SIGINT", () => { release(); process.exit(130); }); process.on("SIGTERM", () => { release(); process.exit(143); });
 const r = spawnSync(args[0], args.slice(1), { stdio: "inherit", shell: false });
-if (r.error) console.error(`gate: cannot start "${args[0]}" (${r.error.code}). gate starts a program without a shell; for shell syntax use: gate bash -c '<command>'`);
+if (r.error) console.error(`gate: cannot start "${args[0]}" (${r.error.code}). gate starts a program without a shell; for shell syntax use: ${path.join(controllerDir, "gate")} bash -c '<command>'`);
 const t2 = Date.now();
 release();
 const journal = path.join(controllerDir, "journal.mjs");

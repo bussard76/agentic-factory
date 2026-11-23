@@ -9,6 +9,7 @@ import readline from "node:readline/promises";
 import { findControllerTerminal } from "../controller/controller-terminal.mjs";
 import { heartbeatCronScript, statusWatchCronScript, statusWatchLabel, statusWatchPlist } from "./heartbeat-cron.mjs";
 import { applyReadGrants } from "./read-grants.mjs";
+import { copyTreeAtomic, withLock, writeFileAtomic } from "./safe-write.mjs";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
@@ -754,9 +755,21 @@ function doctor() {
       const sk = spawnSync("ssh", [...sshArgs, "for s in orchestration orca-cli writing-for-agents retro; do [ -f ~/.claude/skills/$s/SKILL.md ] || [ -f ~/.agents/skills/$s/SKILL.md ] || echo $s; done"], { encoding: "utf8" }).stdout.trim();
       sk ? bad(`${h.name}: user-level skills missing: ${sk.split("\n").join(", ")} (copy ${c.hosts.controller.controllerDir ?? "~/controller"}/skills/* into ~/.claude/skills and ~/.agents/skills there)`) : ok(`${h.name}: user-level skills present`);
     }
+    if (r.stdout?.trim() === "ok") {
+      // Gates run on every worker host (their workers, their waves; capacity.mjs writes their slots): the project's gate must be there.
+      const gd = c.hosts.controller.controllerDir ?? "~/controller";
+      const g = spawnSync("ssh", [...sshArgs, `[ -x ${gd}/gate ] && [ -f ${gd}/gate.mjs ] && [ -f ${gd}/factory.config.json ] && echo ok`], { encoding: "utf8" });
+      g.stdout?.trim() === "ok" ? ok(`${h.name}: this project's gate (${gd}/gate)`) : bad(`${h.name}: this project's gate is missing in ${gd} (run \`agentic-factory start\`: it copies gate, gate.mjs and factory.config.json to every worker host)`);
+    }
     if (c.agents.runner === "orca" && !h.orcaRepoId) info(`${h.name}: orcaRepoId not set yet`);
   }
   const ctl = c.hosts.workers.find((h) => h.name === c.hosts.controller.host);
+  if (!ctl || ctl.kind === "local") {
+    // This project's gate is its own file in its Controller directory; the shared ~/.local/bin/gate of older factories is not used by it.
+    const own = expandHome(`${c.hosts.controller.controllerDir ?? "~/controller"}/gate`);
+    fs.existsSync(own) && fs.existsSync(`${own}.mjs`) ? ok(`gate: this project's own (${own.replace(os.homedir(), "~")})`) : !fs.existsSync(path.dirname(own)) ? info("gate: not installed yet (start copies the Controller bundle, and the gate with it)") : bad(`gate: ${own.replace(os.homedir(), "~")} is missing (run \`agentic-factory start\`)`);
+    if (fs.existsSync(path.join(os.homedir(), ".local/bin/gate"))) info("a shared gate is still in ~/.local/bin (gate, gate.mjs): this project does not use it. Older projects on this host may; delete it once none does");
+  }
   if (ctl) {
     const statusAge = ctl.kind === "local" ? (fs.existsSync(expandHome(`${c.hosts.controller.controllerDir ?? "~/controller"}/status.md`)) ? (Date.now() - fs.statSync(expandHome(`${c.hosts.controller.controllerDir ?? "~/controller"}/status.md`)).mtimeMs) / 60000 : null) : Number(sh("ssh", [...(ctl.sshConfig ? ["-F", ctl.sshConfig.replace(/^~/, os.homedir())] : []), ctl.ssh, `stat -c %Y ${c.hosts.controller.controllerDir ?? "~/controller"}/status.md 2>/dev/null`]) ? (Date.now() / 1000 - Number(sh("ssh", [...(ctl.sshConfig ? ["-F", ctl.sshConfig.replace(/^~/, os.homedir())] : []), ctl.ssh, "stat -c %Y ~/controller/status.md"]))) / 60 : null);
     statusAge === null ? info(`controller status.md not found on ${ctl.name} (controller not started yet)`) : statusAge > 25 ? bad(`controller status.md is ${Math.round(statusAge)} min old`) : ok(`controller status.md ${Math.round(statusAge)} min old`);
@@ -904,6 +917,7 @@ function collectStatus() {
     userSkills: ["orchestration", "orca-cli"].every(userSkill),
     frontAgentBundle: fs.existsSync(path.join(os.homedir(), "front-agent", c.project.name, "FRONT_AGENT.md")),
     statusWatch: statusWatchRuns(c),
+    gate: { own: fs.existsSync(expandHome(`${c.hosts.controller.controllerDir ?? "~/controller"}/gate.mjs`)), sharedLeftover: fs.existsSync(path.join(os.homedir(), ".local/bin/gate")) },   // on this machine; the shared one is not used by this project
     controller: { host: ctl.host, statusAgeMin: ctl.ageMin, terminal: ctlTerminal, running: ctlTerminal || (ctl.ageMin !== null && ctl.ageMin <= 25) },
   };
   // A bot Front agent: the bot and its watch automation instead of the terminal's status watch.
@@ -942,6 +956,7 @@ function collectStatus() {
   else if (watchRequired(c) && readWatchProblem(c)) s.next = `The status watch runs but cannot reach your terminal (${readWatchProblem(c)}). Then: ${s.next}`;
   else if (s.setup.frontAgent && process.env.FACTORY_SKIP_ORCA !== "1" && c.agents.runner === "orca" && !(s.setup.frontAgent.botExists && s.setup.frontAgent.watchAutomation)) s.next = `${s.setup.frontAgent.botExists ? `The bot "${s.setup.frontAgent.bot}" has no watch automation, so finished work and open questions do not wake it: run \`start\`` : `The Front agent bot "${s.setup.frontAgent.bot ?? "(hosts.frontAgent.bot is empty)"}" is not in \`orca bot list\`: create it in Orca, then run \`start\``}. Then: ${s.next}`;
   s.hints = [
+    ...(s.setup.gate.sharedLeftover ? ["a shared gate is still in ~/.local/bin: this project does not use it (its gate is in its Controller directory); delete it once no older project on this host uses it"] : []),
     ...(!s.work.glossary ? ["the business terms are not written down yet (no GLOSSARY.md): capture them with domain-modeling while specifying"] : []),
     ...(c.architecture?.mode === undefined ? ["no decision on ARCHITECTURE.md yet: ask the human, then set architecture.mode to architect or off in factory.config.json and run update"] : []),
     ...(c.architecture?.mode === "architect" && !s.work.architecture ? ["no ARCHITECTURE.md yet: the Controller starts the baseline (mkspec baseline)"] : []),
@@ -960,6 +975,7 @@ function status() {
     say(`${st.hooksArmed ? "OK     " : "MISSING"} hooks armed`);
     say(`${st.userSkills ? "OK     " : "MISSING"} user-level skills (orchestration, orca-cli)`);
     say(`${st.frontAgentBundle ? "OK     " : "MISSING"} Front agent bundle`);
+    say(`${st.gate.own ? "OK     " : "info   "} gate: ${st.gate.own ? "this project's own (Controller directory)" : "not in the Controller directory on this machine"}${st.gate.sharedLeftover ? "; a shared ~/.local/bin/gate is left over and not used" : ""}`);
     if (st.frontAgent) say(`${st.frontAgent.botExists ? "OK     " : "MISSING"} Front agent bot ${st.frontAgent.bot ?? "(hosts.frontAgent.bot is empty)"}\n${st.frontAgent.watchAutomation ? "OK     " : "MISSING"} its watch automation`);
     say(`${st.controller.running ? "OK     " : "MISSING"} Controller on ${st.controller.host}${st.controller.statusAgeMin !== null ? ` (status.md ${st.controller.statusAgeMin} min old)` : ""}`);
     const w = s.work;
@@ -1053,15 +1069,19 @@ function armBotWatch(c, frontAgentDir) {
   if (!name) { say("Front agent bot: hosts.frontAgent.kind is orca-bot, but hosts.frontAgent.bot names no bot. Set it in factory.config.json, run update, then start again."); return 1; }
   const dir = botWatchDir(name);
   fs.mkdirSync(dir, { recursive: true });
-  for (const f of ["botwatch.mjs", "hosts.mjs"]) fs.copyFileSync(path.join(frontAgentDir, f), path.join(dir, f));
+  // The directory is shared by every project that names the bot and Orca reads it every 5 minutes: whole files, never half of one.
+  for (const f of ["botwatch.mjs", "hosts.mjs"]) writeFileAtomic(path.join(dir, f), fs.readFileSync(path.join(frontAgentDir, f), "utf8"), 0o644);
   // Orca runs the precheck without this session's PATH; under nvm and the like node is on no fixed path.
-  fs.writeFileSync(path.join(dir, "botwatch.sh"), `#!/bin/sh\nPATH=${JSON.stringify(`${path.dirname(process.execPath)}:${os.homedir()}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin`)}\nexport PATH\ncd "$(dirname "$0")" && exec node botwatch.mjs\n`, { mode: 0o755 });
+  writeFileAtomic(path.join(dir, "botwatch.sh"), `#!/bin/sh\nPATH=${JSON.stringify(`${path.dirname(process.execPath)}:${os.homedir()}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin`)}\nexport PATH\ncd "$(dirname "$0")" && exec node botwatch.mjs\n`, 0o755);
   const listFile = path.join(dir, "projects.json");
   let projects = [];
-  try { projects = JSON.parse(fs.readFileSync(listFile, "utf8")); } catch {}
-  if (!Array.isArray(projects)) projects = [];
-  projects = [...projects.filter((p) => p?.name !== c.project.name), { name: c.project.name, dir: frontAgentDir, projectDir: cwd }];
-  fs.writeFileSync(listFile, JSON.stringify(projects, null, 2) + "\n");
+  // Two projects starting at the same moment must not drop each other's entry: read, change and write under one lock.
+  withLock(listFile, () => {
+    try { projects = JSON.parse(fs.readFileSync(listFile, "utf8")); } catch {}
+    if (!Array.isArray(projects)) projects = [];
+    projects = [...projects.filter((p) => p?.name !== c.project.name), { name: c.project.name, dir: frontAgentDir, projectDir: cwd }];
+    writeFileAtomic(listFile, JSON.stringify(projects, null, 2) + "\n");
+  });
   say(`Front agent bot "${name}": watches ${projects.map((p) => p.name).join(", ")} (${dir.replace(os.homedir(), "~")})`);
   if (process.env.FACTORY_SKIP_ORCA === "1" || c.agents.runner !== "orca") { say(`Bot watch: create the automation in Orca for the bot "${name}": every 5 minutes, precheck sh ${path.join(dir, "botwatch.sh")}`); return 0; }
   const { reachable, bot } = findBot(name);
@@ -1081,7 +1101,7 @@ function armStatusWatch(c, frontAgentDir) {
   // Inside an Orca terminal, its command is found through a PATH that cron does not have, so the full path is recorded.
   const orcaFound = spawnSync("sh", ["-c", `command -v ${JSON.stringify(ORCA_BIN)}`], { encoding: "utf8" }).stdout?.trim();
   const orcaCommand = orcaFound?.startsWith("/") ? orcaFound : process.env.ORCA_CLI_BIN_DIR ? path.join(process.env.ORCA_CLI_BIN_DIR, ORCA_BIN) : ORCA_BIN;
-  fs.writeFileSync(path.join(frontAgentDir, "front-agent.json"), JSON.stringify({ projectDir: cwd, handle: process.env.ORCA_TERMINAL_HANDLE ?? null, orcaCommand }, null, 2) + "\n");
+  writeFileAtomic(path.join(frontAgentDir, "front-agent.json"), JSON.stringify({ projectDir: cwd, handle: process.env.ORCA_TERMINAL_HANDLE ?? null, orcaCommand }, null, 2) + "\n");
   // Opted out, or a bot took over: a job from before must not go on alerting without any hint.
   const oldPlist = path.join(os.homedir(), "Library/LaunchAgents", `${statusWatchLabel(c.project.name)}.plist`);
   if ((c.hosts.frontAgent?.statusWatch === false || frontKind(c) !== "terminal") && process.env.FACTORY_SKIP_ORCA !== "1" && fs.existsSync(oldPlist)) { spawnSync("launchctl", ["bootout", `gui/${process.getuid()}/${statusWatchLabel(c.project.name)}`], { encoding: "utf8" }); fs.rmSync(oldPlist, { force: true }); }
@@ -1100,7 +1120,8 @@ async function start() {
   if (!fs.existsSync(".factory/controller/CONTROLLER.md") || !fs.existsSync(".factory/front-agent/FRONT_AGENT.md") || (minimal(c) && !fs.existsSync(".factory/standard/standard.json"))) { say("Bundles missing (a fresh clone): regenerating them from factory.config.json."); await initNonInteractiveRefresh(); }
   say("\nUser-level skills:"); installSkills();
   const fa = path.join(os.homedir(), "front-agent", c.project.name);
-  fs.mkdirSync(fa, { recursive: true }); fs.cpSync(".factory/front-agent", fa, { recursive: true, force: true }); say(`\nFront agent bundle: ${fa.replace(os.homedir(), "~")}`);
+  fs.mkdirSync(fa, { recursive: true }); copyTreeAtomic(".factory/front-agent", fa);   // statuswatch and botwatch run from here on a schedule: whole files only
+   say(`\nFront agent bundle: ${fa.replace(os.homedir(), "~")}`);
   armStatusWatch(c, fa);
   let failed = 0;
   if (!["terminal", "orca-bot"].includes(frontKind(c))) { failed++; say(`Front agent: hosts.frontAgent.kind is "${frontKind(c)}"; it must be "terminal" or "orca-bot".`); }
@@ -1120,23 +1141,36 @@ async function start() {
   if (owner && owner !== c.project.name) { say(`Controller directory ${dir}${ctl.kind === "local" ? "" : ` on ${ctl.name}`} belongs to the project ${owner}. Set hosts.controller.controllerDir in factory.config.json to a directory of its own (for example ~/controller-${c.project.name}), run \`agentic-factory update\`, then start again. Nothing was copied.`); process.exit(1); }
   if (ctl.kind === "local") {
     const d = expandHome(dir);
-    fs.mkdirSync(d, { recursive: true }); fs.cpSync(".factory/controller", d, { recursive: true, force: true }); say(`Controller bundle: ${dir}`);
-    const bin = path.join(os.homedir(), ".local/bin"); fs.mkdirSync(bin, { recursive: true }); fs.copyFileSync(path.join(d, "gate"), path.join(bin, "gate")); fs.chmodSync(path.join(bin, "gate"), 0o755); fs.copyFileSync(path.join(d, "gate.mjs"), path.join(bin, "gate.mjs")); say("Gate: ~/.local/bin/gate");
+    fs.mkdirSync(d, { recursive: true }); copyTreeAtomic(".factory/controller", d); say(`Controller bundle: ${dir}`);
+    say(`Gate: ${dir}/gate (this project's own; the shared ~/.local/bin/gate is neither used nor touched)`);
     const loadlog = path.join(d, "loadlog.sh");
-    if (sh("ps", ["-ax", "-o", "command"]).split("\n").some((l) => l.includes(loadlog))) say("Load log: already running");
-    else { spawn("bash", [loadlog], { cwd: d, detached: true, stdio: "ignore" }).unref(); say("Load log: started (~/load.log)"); }
+    // A logger of this directory that was started without the project name writes untagged lines for as long as it runs: it goes.
+    const loggers = sh("ps", ["-ax", "-o", "pid=,command="]).split("\n").map((l) => /^\s*(\d+)\s+(.*)$/.exec(l)).map((m) => m && { pid: Number(m[1]), cmd: new RegExp(`^(?:\\S*/)?bash\\s+${loadlog.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s+(\\S.*))?$`).exec(m[2].trim()) }).filter((m) => m?.cmd).map((m) => ({ pid: m.pid, tagged: Boolean(m.cmd[1]) }));
+    for (const l of loggers.filter((l) => !l.tagged)) try { process.kill(l.pid); } catch {}
+    if (loggers.some((l) => l.tagged)) say("Load log: already running");
+    else { spawn("bash", [loadlog, c.project.name], { cwd: d, detached: true, stdio: "ignore" }).unref(); say(`Load log: started (~/load.log, each line ends in project=${c.project.name})`); }
     // Optional: only for the tools found here, and a grant that cannot be written never fails start.
     const readable = [cwd, ctl.projectDir ?? (ctl.projectsDir ? path.join(ctl.projectsDir, c.project.name) : ""), ctl.workspacesDir ? `${ctl.workspacesDir}/${c.project.name}` : ""].filter(Boolean).map((p) => path.resolve(expandHome(p)));
     for (const line of applyReadGrants({ home: os.homedir(), paths: readable, controllerDir: d })) say(`Read access: ${line}`);
   } else {
-    const remoteDir = dir;
+    // One logger per Controller directory, not one per host. The trailing space is the project argument: a logger from before it was
+    // passed (started as "bash loadlog.sh" in this directory, writing untagged lines) is stopped, found by its working directory (Linux).
+    const remoteDir = dir, remoteLoadlog = `${dir.replace(/^~(?=\/|$)/, "$HOME")}/loadlog.sh`, quoted = `'${c.project.name.replace(/'/g, "'\\''")}'`;
     const r = spawnSync("rsync", ["-a", "-e", `ssh ${sshArgsFor(ctl).slice(0, -1).map((a) => JSON.stringify(a)).join(" ")}`, ".factory/controller/", `${ctl.ssh}:${remoteDir}/`], { encoding: "utf8" });
     if (r.status !== 0) { failed++; say(`Controller bundle: copy to ${ctl.name} failed: ${(r.stderr || "").trim().slice(0, 200)}`); }
     else {
       say(`Controller bundle: ${ctl.name}:${remoteDir}`);
-      const s = spawnSync("ssh", [...sshArgsFor(ctl), `mkdir -p ~/.local/bin && install -m 755 ${remoteDir}/gate ~/.local/bin/gate && install -m 644 ${remoteDir}/gate.mjs ~/.local/bin/gate.mjs && for s in ${remoteDir}/skills/*; do n=$(basename "$s"); for t in ~/.claude/skills ~/.agents/skills; do mkdir -p "$t"; [ -e "$t/$n" ] || cp -R "$s" "$t/"; done; done; pgrep -f "[b]ash loadlog.sh" >/dev/null || (cd ${remoteDir} && nohup bash loadlog.sh >/dev/null 2>&1 &); echo ok`], { encoding: "utf8" });
-      s.stdout?.trim().endsWith("ok") ? say(`Gate, user-level skills and load log on ${ctl.name}: ok`) : (failed++, say(`Gate, skills or load log on ${ctl.name} failed: ${(s.stderr || "").trim().slice(0, 200)}`));
+      const s = spawnSync("ssh", [...sshArgsFor(ctl), `for s in ${remoteDir}/skills/*; do n=$(basename "$s"); for t in ~/.claude/skills ~/.agents/skills; do mkdir -p "$t"; [ -e "$t/$n" ] || cp -R "$s" "$t/"; done; done; for p in $(pgrep -f "[b]ash loadlog.sh$" 2>/dev/null); do [ "$(readlink /proc/$p/cwd 2>/dev/null)" = "$(cd ${remoteDir} && pwd)" ] && kill $p; done; pgrep -f "[b]ash ${remoteLoadlog} " >/dev/null || (cd ${remoteDir} && nohup bash ${remoteLoadlog} ${quoted} >/dev/null 2>&1 &); echo ok`], { encoding: "utf8" });
+      s.stdout?.trim().endsWith("ok") ? say(`User-level skills and load log on ${ctl.name}: ok`) : (failed++, say(`User-level skills or load log on ${ctl.name} failed: ${(s.stderr || "").trim().slice(0, 200)}`));
     }
+  }
+  // Gates run on every other worker host too (its workers, its waves; capacity.mjs writes its slots there): the project's gate goes
+  // with them, the same files in the same directory, written by rsync (temporary file and rename).
+  for (const h of c.hosts.workers.filter((h) => h.kind === "remote" && h.name !== c.hosts.controller.host)) {
+    const mk = spawnSync("ssh", [...sshArgsFor(h), `mkdir -p ${dir}`], { encoding: "utf8" });
+    const cp = mk.status === 0 ? spawnSync("rsync", ["-a", "-e", `ssh ${sshArgsFor(h).slice(0, -1).map((a) => JSON.stringify(a)).join(" ")}`, ".factory/controller/gate", ".factory/controller/gate.mjs", ".factory/controller/factory.config.json", `${h.ssh}:${dir}/`], { encoding: "utf8" }) : mk;
+    if (cp.status === 0) say(`Gate on ${h.name}: ${dir}/gate (this project's own)`);
+    else { failed++; say(`Gate on ${h.name}: could not copy it to ${dir} (${(cp.stderr || "").trim().slice(0, 200)}). Gates run there too, so this start failed.`); }
   }
   armHeartbeat(c, ctl, dir);
   // The Controller's own agent session, in an Orca terminal so the Front agent can read it and send it text.

@@ -19,7 +19,7 @@ import { BRANCH_PREFIX, CMDS, HUMAN, MAIN, PROJECT, PROJECT_DIR, STEERING, confi
 
 const MAINTAINED = config.architecture?.mode === "architect";
 // gate starts a program without a shell, so a command with shell syntax only runs through bash.
-const gated = (cmd) => `gate bash -c '${cmd.replace(/'/g, "'\\''")}'`;
+const gated = (cmd) => `{{CONTROLLER_DIR}}/gate bash -c '${cmd.replace(/'/g, "'\\''")}'`;
 
 const [role, ...a] = process.argv.slice(2);
 const opt = (flag, def) => { const i = a.indexOf(flag); return i >= 0 ? a[i + 1] : def; };
@@ -54,7 +54,7 @@ const taskWhere = (ref) => (STEERING === "github-issues" ? `GitHub issue ${ref} 
 const reportFor = (ref) => `docs/reports/${STEERING === "github-issues" ? `issue-${ref.replace("#", "")}` : path.basename(ref, ".md")}.md`;
 const RULES = `Rules: invented data only, demo or mock only, never send or write anything real, never --no-verify, never print secrets, never push to ${MAIN}.`;
 const FLAKES = `Known load flakes may be rerun once alone and recorded as unrelated debt. An unchanged test that fails only by timeout under load and passes alone is load debt, not a finding. Failures from foreign host load (network changes) count as environment: rerun and state the count.`;
-const DEV_CHECKS = `Checks (Developer stage): ${[CMDS.typecheck, CMDS.lint].filter(Boolean).join(" && ") || "typecheck and lint"}, the affected suites (${CMDS.unit ?? "the unit runner"} <files>) and the browser specs covering your change (through 'gate'). Do NOT run the full '${CMDS.verify ?? "verify"}' or the full '${CMDS.e2e ?? "e2e"}': the independent Tester and the wave run them.`;
+const DEV_CHECKS = `Checks (Developer stage): ${[CMDS.typecheck, CMDS.lint].filter(Boolean).join(" && ") || "typecheck and lint"}, the affected suites (${CMDS.unit ?? "the unit runner"} <files>) and the browser specs covering your change (through '{{CONTROLLER_DIR}}/gate'). Do NOT run the full '${CMDS.verify ?? "verify"}' or the full '${CMDS.e2e ?? "e2e"}': the independent Tester and the wave run them.`;
 const REVIEW_RULE = `Review rule (decided by ${HUMAN}, functional-only): the verdict is 'fail' ONLY for a real functional defect: a specified flow does not work or gives wrong results, data is lost, or a change could reach a real external system (production, real accounts, the human's real data). Missing or weak tests, coverage gaps, edge cases, security, load and style are 'debt candidates' (category tests|edge-case|security|load|style, severity, one-line proposal) and never fail the review. After ${maxRounds} rounds a working feature is integrated; open points become debt plus a preview acceptance item for ${HUMAN}.`;
 // The round-1 checklist; later rounds apply it to the changes they re-check.
 const CHECKS = `Check the level is kept, tests go through public entry points and fail without the implementation, untrusted content is escaped, invented data only, no secrets, no changes to real external systems.`;
@@ -175,7 +175,7 @@ Reply: worker_done with branch, sha, the number of drifts and the debt items add
   audit() {
     const [since] = pos;
     return `You are the read-only Pipeline Auditor for the ${PROJECT} agentic factory on this host. Change nothing except your audit file.
-Inputs since ${since}: {{CONTROLLER_DIR}}/journal.ndjson (one JSON event per line), ~/load.log, {{CONTROLLER_DIR}}/status.md and inbox-done.md, the reviews and reports in the project repo changed since then (git log --since), docs/debt.md, docs/coordinator.md (the rules in force), and the previous audits in {{CONTROLLER_DIR}}/audits.
+Inputs since ${since}: {{CONTROLLER_DIR}}/journal.ndjson (one JSON event per line), ~/load.log (shared by the projects on this host: read the lines ending in project=<this project's name>; a line without project= is from a logger started before the tag existed, so it is this project's only when no other project runs on this host), {{CONTROLLER_DIR}}/status.md and inbox-done.md, the reviews and reports in the project repo changed since then (git log --since), docs/debt.md, docs/coordinator.md (the rules in force), and the previous audits in {{CONTROLLER_DIR}}/audits.
 Questions: Where is time lost (gate waits, reruns, review rounds, stalls, early stops)? Which failure reasons cluster, by role, model and agent? Which rules or templates cause rework? Which risks grow (debt, flaky tests, load, quotas)? Did the improvements from the previous audit meet their success metrics? Does more parallelism raise throughput or only waiting (gate wait vs run minutes)?
 Output: {{CONTROLLER_DIR}}/audits/$(date +%F)-<n>.md with: data basis (counts), top 3 improvements and top 3 risks, each with a measured value, cause, concrete proposal, level (1 = docs/templates/scripts/tests, otherwise 'needs ${HUMAN}') and a checkable success metric, plus the verdict on previous improvements. Max 1 page. No real data, no secrets.
 Reply: worker_done with the file path and the three improvements in one line each.`;
