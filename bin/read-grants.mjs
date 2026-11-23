@@ -69,7 +69,7 @@ export function scanAllowPaths(text) {
     if (!key) throw new Error("a line that is not understood");
     let j = i + key[0].length;
     while (WS.test(text[j] ?? "")) j++;
-    if (key[0] === "allow_paths" && text[j] === "=") {
+    if (key[0].replace(/^["']|["']$/g, "") === "allow_paths" && text[j] === "=") {   // "allow_paths" and 'allow_paths' are the same key
       if (arr) throw new Error("allow_paths appears twice");
       j++; while (WS.test(text[j] ?? "")) j++;
       if (text[j] !== "[") throw new Error("allow_paths is not a plain list");

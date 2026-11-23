@@ -17,7 +17,7 @@ Docker runs **only** at release. Not per task, not per wave. This was corrected 
 
 ## Gates run in fair slots
 
-Every full gate goes through `gate <command>` (`controller/gate.mjs`, Node only; `~/.local/bin/gate` is a dispatcher that runs the `gate.mjs` of the Controller directory of the project it is called in, so projects on one host do not share a gate implementation; the queue and the slots were always per project, so there is no host-wide limit on full gates, before or after the dispatcher). Gates are pooled: unit gates and browser gates have separate slot counts. Waiters queue as ticket files per pool; only the oldest live ticket may take a free slot, so newer gates cannot overtake older ones, and tickets of dead processes are swept. The slot counts are adapted to measured pressure by `capacity.mjs` (see [capacity.md](capacity.md)).
+Every full gate goes through `gate <command>` (`controller/gate.mjs`, Node only; it is called by its absolute path, `<controllerDir>/gate`, so projects on one host do not share a gate file; the queue and the slots were always per project, so there is no host-wide limit on full gates). Gates are pooled: unit gates and browser gates have separate slot counts. Waiters queue as ticket files per pool; only the oldest live ticket may take a free slot, so newer gates cannot overtake older ones, and tickets of dead processes are swept. The slot counts are adapted to measured pressure by `capacity.mjs` (see [capacity.md](capacity.md)).
 
 Developers' focused checks run **without** the gate; they are cheap.
 

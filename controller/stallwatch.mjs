@@ -8,8 +8,7 @@ import { HOSTS, ORCA, RUNNER, file, isHelperTerminal, journal, onHost, orcaEnvAr
 // A shared host lists every project's terminals, and a title does not tell them apart. A terminal is this project's when workers.json
 // names its handle (start.mjs records it for every worker), or when its worktree lies in this project's workspace directory on that
 // host. A remote host's configured path can start with ~, so there the last two segments (<workspaces dir>/<project>) decide.
-// When worker terminals exist but none can be told to be this project's (a layout neither rule knows), all of them are watched, with a
-// notice: watching too much is better than a stall that nobody sees.
+// A terminal that is neither is somebody else's and is left alone: no worker of this project running means nothing to watch.
 const real = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
 const underWorkspaces = (host, wt) => {
   if (!wt) return false;
@@ -22,9 +21,7 @@ const notices = new Map();
 const notice = (key, text) => { if (notices.get(key) !== text) { notices.set(key, text); console.log(`${new Date().toTimeString().slice(0, 5)} NOTICE ${text}`); } };
 function ownWorkers(host, workers) {
   const mine = workers.filter((t) => isMine(host, t));
-  if (!workers.length || mine.length === workers.length) { notices.delete(host.name); return mine; }
-  if (!mine.length) { notice(host.name, `${workers.length} worker terminal(s) on ${host.name} and none can be told to be this project's (not in workers.json, worktree not under ${workspacesOn(host)}): watching all of them`); return workers; }
-  notice(host.name, `${workers.length - mine.length} worker terminal(s) on ${host.name} ignored: not this project's`);
+  if (mine.length < workers.length) notice(host.name, `${workers.length - mine.length} worker terminal(s) on ${host.name} ignored: not this project's`); else notices.delete(host.name);
   return mine;
 }
 

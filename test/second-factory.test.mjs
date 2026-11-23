@@ -5,7 +5,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { gateState, installGate, remoteGateScript } from "../bin/gate-install.mjs";
 import { applyReadGrants } from "../bin/read-grants.mjs";
 import { withLock, writeFileAtomic } from "../bin/safe-write.mjs";
 import { addTomlAllowPaths, scanAllowPaths } from "../bin/read-grants.mjs";
@@ -14,49 +13,92 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
 const tmp = (name) => fs.mkdtempSync(path.join(os.tmpdir(), `af-${name}-`));
 const SHIM = path.join(ROOT, "controller/gate");
 
-test("the shared gate is installed only when it differs, atomically, and never over a newer dispatcher", () => {
-  const home = tmp("gate-home"), dst = path.join(home, ".local/bin/gate");
-  let r = installGate(SHIM, home);
-  assert.equal(r.changed, true); assert.equal(fs.statSync(dst).mode & 0o777, 0o755); assert.equal(fs.readFileSync(dst, "utf8"), fs.readFileSync(SHIM, "utf8"));
-  const before = fs.statSync(dst);
-  r = installGate(SHIM, home);
-  assert.equal(r.changed, false, "same content: nothing is written");
-  assert.equal(fs.statSync(dst).ino, before.ino); assert.equal(fs.statSync(dst).mtimeMs, before.mtimeMs);
-  // The shim of an older factory (no number) is replaced; a higher number from a newer factory stays.
-  fs.writeFileSync(dst, "#!/bin/sh\nexec node \"$HOME/.local/bin/gate.mjs\" \"$@\"\n", { mode: 0o755 });
-  assert.equal(installGate(SHIM, home).changed, true); assert.equal(fs.readFileSync(dst, "utf8"), fs.readFileSync(SHIM, "utf8"));
-  const newer = "#!/bin/sh\n# gate-shim: 99\nexit 0\n"; fs.writeFileSync(dst, newer, { mode: 0o755 });
-  r = installGate(SHIM, home);
-  assert.equal(r.kept, true); assert.equal(fs.readFileSync(dst, "utf8"), newer); assert.match(r.message, /newer dispatcher/);
-  assert.deepEqual(fs.readdirSync(path.dirname(dst)).filter((f) => f.endsWith(".tmp")), [], "no temporary file is left");
+// --- the gate is the project's own file, called by its own path --------------------------------------------
+// A Controller directory as start leaves it: gate, gate.mjs, factory.config.json. `body` replaces gate.mjs when a test needs a fake.
+const controllerDir = (home, name, body) => {
+  const ctl = path.join(home, `controller-${name}`); fs.mkdirSync(ctl, { recursive: true });
+  fs.copyFileSync(SHIM, path.join(ctl, "gate")); fs.chmodSync(path.join(ctl, "gate"), 0o755);
+  fs.writeFileSync(path.join(ctl, "gate.mjs"), body ?? fs.readFileSync(path.join(ROOT, "controller/gate.mjs"), "utf8"));
+  fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name }, hosts: { controller: { controllerDir: ctl } } }));
+  const repo = path.join(home, name); fs.mkdirSync(repo, { recursive: true });
+  fs.writeFileSync(path.join(repo, "factory.config.json"), JSON.stringify({ project: { name }, hosts: { controller: { controllerDir: ctl } } }));
+  return { ctl, repo, gate: path.join(ctl, "gate") };
+};
+
+test("two projects on one host each run their own gate, queue and slots, and neither knows the shared one", () => {
+  const home = tmp("gate-own"), sharedDir = path.join(home, ".local/bin"); fs.mkdirSync(sharedDir, { recursive: true });
+  // What an older factory left in the shared place.
+  fs.writeFileSync(path.join(sharedDir, "gate"), "#!/bin/sh\nexec node \"$HOME/.local/bin/gate.mjs\" \"$@\"\n", { mode: 0o755 });
+  fs.writeFileSync(path.join(sharedDir, "gate.mjs"), `console.log("SHARED OLD GATE"); process.exit(0);\n`);
+  const a = controllerDir(home, "alpha"), b = controllerDir(home, "beta");
+  const run = (p, cwd, ...cmd) => spawnSync(p.gate, cmd, { cwd, encoding: "utf8", env: { ...process.env, HOME: home, TMPDIR: path.join(home, "tmp") } });
+  fs.mkdirSync(path.join(home, "tmp"));
+  let r = run(a, a.repo, "sh", "-c", "echo RAN; exit 3"); assert.equal(r.status, 3); assert.match(r.stdout, /RAN/); assert.doesNotMatch(r.stdout, /SHARED/);
+  assert.equal(run(b, b.repo, "sh", "-c", "exit 4").status, 4);
+  assert.deepEqual(fs.readdirSync(path.join(home, "tmp")).sort(), ["alpha-gate-unit", "beta-gate-unit"], "a queue each");
+  // slots come from the project's own directory
+  fs.writeFileSync(path.join(a.ctl, "gate-slots.json"), JSON.stringify({ unit: 1, e2e: 1 }));
+  assert.equal(run(a, a.repo, "true").status, 0);
+  // another project's worktree is refused, nothing runs
+  r = run(a, b.repo, "touch", path.join(home, "ran")); assert.equal(r.status, 1); assert.match(r.stderr, /gate of the project alpha.*worktree of beta/); assert.equal(fs.existsSync(path.join(home, "ran")), false);
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-test("the shared gate runs the gate.mjs of the project it is called in", () => {
-  const home = tmp("gate-two");
-  installGate(SHIM, home);
-  const gate = path.join(home, ".local/bin/gate");
-  const project = (name, dirName) => {
-    const repo = path.join(home, name, "worktree/sub"); fs.mkdirSync(repo, { recursive: true });
-    const ctl = path.join(home, dirName); fs.mkdirSync(ctl);
-    fs.writeFileSync(path.join(ctl, "gate.mjs"), `console.log("gate of ${name}", process.argv.slice(2).join(" "));\n`);
-    fs.writeFileSync(path.join(home, name, "factory.config.json"), JSON.stringify({ project: { name }, hosts: { controller: { controllerDir: `~/${dirName}` } } }));
-    return repo;
-  };
-  const a = project("alpha", "controller-alpha"), b = project("beta", "controller-beta");
-  const run = (cwd, env = {}) => spawnSync(gate, ["x", "y"], { cwd, encoding: "utf8", env: { ...process.env, HOME: home, ...env } });
-  assert.equal(run(a).stdout.trim(), "gate of alpha x y");
-  assert.equal(run(b).stdout.trim(), "gate of beta x y");
-  assert.equal(run(home, { FACTORY_CONFIG: path.join(home, "beta/factory.config.json") }).stdout.trim(), "gate of beta x y", "FACTORY_CONFIG wins over the working directory");
-  // Outside any project it never guesses, not even from a stale gate.mjs or ~/controller: a failure with a message, nothing run.
-  fs.mkdirSync(path.join(home, "controller")); fs.writeFileSync(path.join(home, "controller/gate.mjs"), `console.log("fallback");\n`);
-  fs.writeFileSync(path.join(home, ".local/bin/gate.mjs"), `console.log("stale");\n`);
-  const none = run(home); assert.equal(none.status, 1); assert.equal(none.stdout, ""); assert.match(none.stderr, /cannot tell which project/);
-  // A project whose Controller directory has no gate.mjs.
-  fs.mkdirSync(path.join(home, "gone")); fs.writeFileSync(path.join(home, "gone/factory.config.json"), JSON.stringify({ project: { name: "gone" }, hosts: { controller: { controllerDir: "~/nowhere" } } }));
-  const missing = run(path.join(home, "gone")); assert.equal(missing.status, 1); assert.match(missing.stderr, /no gate\.mjs for the project gone/);
+test("a config in the worktree being judged cannot choose the gate: not exit 0, not a loop", () => {
+  const home = tmp("gate-worktree"), a = controllerDir(home, "alpha");
+  const evil = path.join(home, "evil"); fs.mkdirSync(evil);
+  fs.writeFileSync(path.join(evil, "gate.mjs"), "process.exit(0);\n");
+  // the branch's own config names a Controller directory with a gate that always passes, and the directory of the old shared files
+  for (const dir of [evil, path.join(home, ".local/bin")]) {
+    fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, "gate.mjs"), "process.exit(0);\n");
+    fs.writeFileSync(path.join(a.repo, "factory.config.json"), JSON.stringify({ project: { name: "alpha" }, hosts: { controller: { controllerDir: dir } } }));
+    const r = spawnSync(a.gate, ["false"], { cwd: a.repo, encoding: "utf8", env: { ...process.env, HOME: home }, timeout: 20000 });
+    assert.equal(r.status, 1, `controllerDir ${dir}: the gate ran \`false\` and failed`);
+  }
   fs.rmSync(home, { recursive: true, force: true });
 });
+
+test("a gate call that sits in the gate shim while it is replaced in place never ends with 0 without running", async () => {
+  const home = tmp("gate-race"), a = controllerDir(home, "alpha", `process.exit(7);\n`);
+  // A dirname that is slow: the shim runs it inside its body, so the call certainly sits in the shim while the file is replaced.
+  const fake = path.join(home, "fakebin"); fs.mkdirSync(fake);
+  fs.writeFileSync(path.join(fake, "dirname"), `#!/bin/sh\n: > ${JSON.stringify(path.join(home, "entered"))}\nsleep 1.5\nexec /usr/bin/dirname "$@"\n`, { mode: 0o755 });
+  const child = spawn(a.gate, ["anything"], { cwd: a.repo, env: { ...process.env, HOME: home, PATH: `${fake}:${process.env.PATH}` }, stdio: ["ignore", "ignore", "inherit"] });
+  const done = new Promise((r) => child.on("exit", (code) => r(code)));
+  for (let i = 0; i < 200 && !fs.existsSync(path.join(home, "entered")); i++) await new Promise((r) => setTimeout(r, 50));
+  // what start does to the Controller directory on every run: copy the bundle's file over the old one, in place
+  const before = fs.statSync(a.gate).ino; fs.writeFileSync(a.gate, "#!/usr/bin/env bash\nexit 0\n");
+  assert.equal(fs.statSync(a.gate).ino, before, "the same inode, other content");
+  assert.equal(await done, 7, "the project's gate ran and its status came back");
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test("the gate shim fails with a message when it cannot run the gate, and the command does not run", () => {
+  const home = tmp("gate-fail"), a = controllerDir(home, "alpha"), marker = path.join(home, "ran");
+  fs.rmSync(path.join(a.ctl, "gate.mjs"));
+  let r = spawnSync(a.gate, ["touch", marker], { cwd: a.repo, encoding: "utf8" }); assert.equal(r.status, 1); assert.match(r.stderr, /no gate\.mjs next to/);
+  fs.copyFileSync(path.join(ROOT, "controller/gate.mjs"), path.join(a.ctl, "gate.mjs")); fs.writeFileSync(path.join(a.ctl, "factory.config.json"), "{ not json");
+  r = spawnSync(a.gate, ["touch", marker], { cwd: a.repo, encoding: "utf8" }); assert.equal(r.status, 1); assert.match(r.stderr, /cannot read/);
+  fs.writeFileSync(path.join(a.ctl, "factory.config.json"), JSON.stringify({ project: { name: "alpha" } }));
+  r = spawnSync("/bin/bash", [a.gate, "x"], { cwd: a.repo, encoding: "utf8", env: { HOME: home, PATH: "/nonexistent" } }); assert.notEqual(r.status, 0);
+  r = spawnSync(a.gate, ["/no/such/program"], { cwd: a.repo, encoding: "utf8" }); assert.equal(r.status, 1);
+  assert.equal(spawnSync(a.gate, [], { cwd: a.repo, encoding: "utf8" }).status, 2);
+  assert.equal(fs.existsSync(marker), false);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test("the callers use the project's own gate by an absolute path from its own configuration", () => {
+  const src = (f) => fs.readFileSync(path.join(ROOT, f), "utf8");
+  for (const f of ["controller/wave.mjs", "controller/integ-wave.sh", "controller/templates/mkspec.mjs", "controller/CONTROLLER.md", "controller/runscript.mjs"]) assert.doesNotMatch(src(f), /\.local\/bin\/gate/, `${f} does not name the shared gate`);
+  assert.match(src("controller/wave.mjs"), /GATE: `\$\{CONTROLLER_HOME\.replace/);
+  assert.match(src("controller/templates/mkspec.mjs"), /\{\{CONTROLLER_DIR\}\}\/gate bash -c/);
+  // the wave script never guesses a gate on the PATH or in ~/.local/bin: without GATE it uses the gate next to it, or stops
+  const dir = tmp("wave-gate"); fs.copyFileSync(path.join(ROOT, "controller/integ-wave.sh"), path.join(dir, "integ-wave.sh"));
+  const r = spawnSync("bash", [path.join(dir, "integ-wave.sh"), "t", "s", "origin/x"], { encoding: "utf8", env: { PATH: process.env.PATH, HOME: dir } });
+  assert.notEqual(r.status, 0); assert.match(r.stderr, /GATE is not set/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 
 test("the load log tags every line with its project, from start's FACTORY_PROJECT or from its own Controller directory", () => {
   const home = tmp("loadlog"); fs.mkdirSync(path.join(home, "controller-one"));
@@ -104,94 +146,7 @@ test("writeFileAtomic does not touch a file that already has the content and mod
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-// --- review of PR 59: probes that were run in throwaway homes ---------------------------------------------
-const project = (home, name, dirName, gateBody) => {
-  const repo = path.join(home, name); fs.mkdirSync(repo, { recursive: true });
-  const ctl = path.join(home, dirName); fs.mkdirSync(ctl, { recursive: true });
-  fs.writeFileSync(path.join(ctl, "gate.mjs"), gateBody);
-  fs.writeFileSync(path.join(repo, "factory.config.json"), JSON.stringify({ project: { name }, hosts: { controller: { controllerDir: `~/${dirName}` } } }));
-  return { repo, ctl };
-};
-
-test("a gate call that sits in the dispatcher while the file is overwritten in place never ends with 0 without running", async () => {
-  const home = tmp("gate-race"); installGate(SHIM, home);
-  const gate = path.join(home, ".local/bin/gate"), p = project(home, "alpha", "ctl-alpha", `process.exit(7);\n`);
-  // A node that is slow only for the dispatcher's own lookup (node -e), so the call surely sits inside the dispatcher.
-  const fake = path.join(home, "fakebin"); fs.mkdirSync(fake);
-  fs.writeFileSync(path.join(fake, "node"), `#!/bin/sh\nif [ "$1" = -e ]; then : > ${JSON.stringify(path.join(home, "entered"))}; sleep 1.5; fi\nexec ${JSON.stringify(process.execPath)} "$@"\n`, { mode: 0o755 });
-  const child = spawn(gate, ["anything"], { cwd: p.repo, env: { ...process.env, HOME: home, PATH: `${fake}:${process.env.PATH}` }, stdio: ["ignore", "ignore", "inherit"] });
-  const done = new Promise((r) => child.on("exit", (code) => r(code)));
-  for (let i = 0; i < 200 && !fs.existsSync(path.join(home, "entered")); i++) await new Promise((r) => setTimeout(r, 50));   // the call is inside the dispatcher
-  // What an older factory's start does: copyFileSync onto the same inode, with a shorter file.
-  const old = "#!/usr/bin/env bash\nexec node \"$HOME/.local/bin/gate.mjs\" \"$@\"\n";
-  const before = fs.statSync(gate).ino; fs.copyFileSync(writeTmp(home, old), gate);
-  assert.equal(fs.statSync(gate).ino, before, "the same inode, shorter content");
-  assert.equal(await done, 7, "the project's gate ran and its status came back");
-  fs.rmSync(home, { recursive: true, force: true });
-});
-const writeTmp = (dir, text) => { const f = path.join(dir, `tmp-${Math.random().toString(36).slice(2)}`); fs.writeFileSync(f, text); return f; };
-
-test("every way the dispatcher can fail is a non-zero exit with a message, and the command does not run", () => {
-  const home = tmp("gate-fail"); installGate(SHIM, home);
-  const gate = path.join(home, ".local/bin/gate"), marker = path.join(home, "ran");
-  const bad = path.join(home, "bad.json"); fs.writeFileSync(bad, "{ not json");
-  const run = (env, cwd = home) => spawnSync(gate, ["touch", marker], { cwd, encoding: "utf8", env: { ...process.env, HOME: home, ...env } });
-  for (const [name, r] of [["no project", run({})], ["unreadable config", run({ FACTORY_CONFIG: bad })], ["missing config", run({ FACTORY_CONFIG: path.join(home, "nope.json") })]]) { assert.equal(r.status, 1, name); assert.match(r.stderr, /^gate: /m, name); }
-  // node cannot be found at all
-  const r = spawnSync("/bin/bash", [gate, "x"], { cwd: home, encoding: "utf8", env: { HOME: home, PATH: "/nonexistent" } });
-  assert.notEqual(r.status, 0); assert.equal(fs.existsSync(marker), false);
-  // a gate.mjs that cannot run the command: the gate says so and fails (gate.mjs: process.exit(r.status ?? 1))
-  const p = project(home, "beta", "ctl-beta", fs.readFileSync(path.join(ROOT, "controller/gate.mjs"), "utf8"));
-  const missing = spawnSync(gate, ["/no/such/program"], { cwd: p.repo, encoding: "utf8", env: { ...process.env, HOME: home } });
-  assert.equal(missing.status, 1);
-  fs.rmSync(home, { recursive: true, force: true });
-});
-
-test("an older factory's shim that was put back is forwarded to the project's gate, with a loud warning, and never exits 0 on its own", () => {
-  const home = tmp("gate-forward"); installGate(SHIM, home, path.join(ROOT, "controller/gate-forward.mjs"));
-  // The shim of factory versions before the dispatcher.
-  const oldShim = path.join(home, ".local/bin/gate");
-  fs.writeFileSync(oldShim, `#!/usr/bin/env bash\nhere="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)"\nimpl="$here/gate.mjs"; [ -f "$impl" ] || impl="$HOME/controller/gate.mjs"\nexec node "$impl" "$@"\n`, { mode: 0o755 });
-  const p = project(home, "alpha", "ctl-alpha", `console.log("alpha's gate", process.argv.slice(2).join(" ")); process.exit(Number(process.argv[2] ?? 0));\n`);
-  const run = (cwd, ...a) => spawnSync(oldShim, a, { cwd, encoding: "utf8", env: { ...process.env, HOME: home } });
-  let r = run(p.repo, "0"); assert.equal(r.status, 0); assert.match(r.stdout, /alpha's gate 0/); assert.match(r.stderr, /WARNING: this call came through an older factory/);
-  assert.equal(run(p.repo, "3").status, 3, "the gate's own status");
-  r = run(home, "0"); assert.equal(r.status, 1, "no project: a failure"); assert.doesNotMatch(r.stdout, /alpha/);
-  fs.rmSync(home, { recursive: true, force: true });
-});
-
-test("doctor and status can tell which gate is installed", () => {
-  const home = tmp("gate-state");
-  assert.equal(gateState(home, SHIM).state, "missing");
-  fs.mkdirSync(path.join(home, ".local/bin"), { recursive: true });
-  fs.writeFileSync(path.join(home, ".local/bin/gate"), "#!/usr/bin/env bash\nexec node \"$HOME/.local/bin/gate.mjs\" \"$@\"\n");
-  assert.equal(gateState(home, SHIM).state, "older");
-  fs.writeFileSync(path.join(home, ".local/bin/gate"), "#!/usr/bin/env bash\n# gate-shim: 1\n"); assert.equal(gateState(home, SHIM).state, "outdated");
-  installGate(SHIM, home); assert.deepEqual([gateState(home, SHIM).state, gateState(home, SHIM).number > 1], ["dispatcher", true]);
-  // a file that only mentions the marker somewhere is not a dispatcher
-  fs.writeFileSync(path.join(home, ".local/bin/gate"), "#!/usr/bin/env bash\necho hi\n# gate-shim: 99\n"); assert.equal(gateState(home, SHIM).state, "older");
-  assert.equal(installGate(SHIM, home).replaced, true, "and it is replaced, not kept as 'newer'");
-  fs.rmSync(home, { recursive: true, force: true });
-});
-
-test("the remote command prints ok only when the gate files are in place or deliberately kept", { skip: process.getuid?.() === 0 }, () => {
-  const home = tmp("remote-gate"), rd = path.join(home, "ctl"); fs.mkdirSync(path.join(rd, "skills"), { recursive: true });
-  fs.copyFileSync(SHIM, path.join(rd, "gate")); fs.copyFileSync(path.join(ROOT, "controller/gate-forward.mjs"), path.join(rd, "gate-forward.mjs"));
-  fs.writeFileSync(path.join(rd, "loadlog.sh"), "#!/bin/sh\nexit 0\n");
-  const run = () => spawnSync("sh", ["-c", remoteGateScript(rd, path.join(rd, "loadlog.sh"), "'p'")], { encoding: "utf8", env: { ...process.env, HOME: home } });
-  let r = run(); assert.equal(r.stdout.trim(), "ok", r.stderr); assert.equal(fs.readFileSync(path.join(home, ".local/bin/gate"), "utf8"), fs.readFileSync(SHIM, "utf8"));
-  assert.ok(fs.existsSync(path.join(home, ".local/bin/gate.mjs")));
-  // an older shim is replaced; a higher number is kept (and that is fine)
-  fs.writeFileSync(path.join(home, ".local/bin/gate"), "#!/bin/sh\nold\n"); assert.equal(run().stdout.trim(), "ok"); assert.equal(fs.readFileSync(path.join(home, ".local/bin/gate"), "utf8"), fs.readFileSync(SHIM, "utf8"));
-  fs.writeFileSync(path.join(home, ".local/bin/gate"), "#!/bin/sh\n# gate-shim: 99\n"); assert.equal(run().stdout.trim(), "ok"); assert.match(fs.readFileSync(path.join(home, ".local/bin/gate"), "utf8"), /99/);
-  // the install fails (the directory cannot be written, the shim is the old one): no ok, so start fails
-  fs.writeFileSync(path.join(home, ".local/bin/gate"), "#!/bin/sh\nold\n"); fs.chmodSync(path.join(home, ".local/bin"), 0o555);
-  r = run(); fs.chmodSync(path.join(home, ".local/bin"), 0o755);
-  assert.doesNotMatch(r.stdout, /ok/); assert.equal(fs.readFileSync(path.join(home, ".local/bin/gate"), "utf8"), "#!/bin/sh\nold\n");
-  fs.rmSync(home, { recursive: true, force: true });
-});
-
-test("stallwatch: a worker in workers.json is watched wherever its worktree is, others are ignored with a notice, and when nothing can be told all are watched", () => {
+test("stallwatch: a worker in workers.json is watched wherever its worktree is, others are ignored with a notice, and with none of its own there is nothing to watch", () => {
   const run = (workersJson, terminals) => {
     const dir = tmp("stall-layout");
     for (const f of ["stallwatch.mjs", "lib.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
@@ -208,9 +163,12 @@ test("stallwatch: a worker in workers.json is watched wherever its worktree is, 
   // own worker outside the configured workspace directory (a changed layout), known by its handle
   let r = run({ t1: { name: "T1 · Worker Developer", host: "local", terminal: "mine" } }, [t("mine", "/elsewhere/p/t1"), t("theirs", "/elsewhere/q/t1")]);
   assert.deepEqual(r.reads, ["mine"]); assert.match(r.out, /1 worker terminal\(s\) on local ignored: not this project's/);
-  // nothing can be told: watched all, with a notice, instead of watching nothing
+  // this project has no worker running, other projects do: nothing is read, nothing is reported, nothing reaches the journal
   r = run(null, [t("a", "/elsewhere/p/t1"), t("b", "/elsewhere/q/t1")]);
-  assert.deepEqual(r.reads.sort(), ["a", "b"]); assert.match(r.out, /none can be told to be this project's/);
+  assert.deepEqual(r.reads, []); assert.doesNotMatch(r.out, /IDLE|GONE|CAPACITY/);
+  // a stale workers.json entry (its terminal is gone) does not make the others this project's
+  r = run({ t1: { name: "T1 · Worker Developer", host: "local", terminal: "gone" } }, [t("a", "/elsewhere/q/t1")]);
+  assert.deepEqual(r.reads, []);
   // the default layout: this project's workspace directory by path
   const home = os.homedir();
   r = run(null, [t("own", path.join(home, "orca/workspaces/p/t1")), t("foreign", path.join(home, "orca/workspaces/other/t1"))]);
@@ -228,6 +186,9 @@ test("allow_paths: any path is written as a valid TOML string, comments stay, an
   // no key yet, one line, empty, no trailing comma
   assert.deepEqual(scanAllowPaths(addTomlAllowPaths(`a = 1\n[t]\nx = 1\n`, paths).text).arr.items.map((x) => x.value), paths);
   for (const start of [`allow_paths = []\n`, `allow_paths = ["/a"]\n`, `allow_paths = [\n  "/a"\n]\n`, `allow_paths = [ "/a", ]\n`]) assert.deepEqual(scanAllowPaths(addTomlAllowPaths(start, ["/b]"]).text).arr.items.map((x) => x.value).slice(-1), ["/b]"], start);
+  // a quoted key is the same key: no second one
+  const q = addTomlAllowPaths(`"allow_paths" = ["/a"]\n`, ["/b"]); assert.equal(q.text, `"allow_paths" = ["/a", "/b"]\n`);
+  assert.throws(() => addTomlAllowPaths(`allow_paths = ["/a"]\n'allow_paths' = ["/b"]\n`, ["/c"]), /twice/);
   // refused: nothing is written
   for (const odd of [`allow_paths = "/x"\n`, `allow_paths = ["/a"]\nallow_paths = ["/b"]\n`, `allow_paths = [1, 2]\n`, `allow_paths = ["/a" "/b"]\n`, `allow_paths = ["/a"\n`, `allow_paths = ["\\q"]\n`, `x = """\nunterminated\n`]) assert.throws(() => addTomlAllowPaths(odd, ["/n"]), undefined, odd);
   // a "]" inside another value or a comment is not the end of anything

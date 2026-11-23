@@ -19,7 +19,7 @@ import { BRANCH_PREFIX, CMDS, HUMAN, MAIN, PROJECT, PROJECT_DIR, STEERING, confi
 
 const MAINTAINED = config.architecture?.mode === "architect";
 // gate starts a program without a shell, so a command with shell syntax only runs through bash.
-const gated = (cmd) => `gate bash -c '${cmd.replace(/'/g, "'\\''")}'`;
+const gated = (cmd) => `{{CONTROLLER_DIR}}/gate bash -c '${cmd.replace(/'/g, "'\\''")}'`;
 
 const [role, ...a] = process.argv.slice(2);
 const opt = (flag, def) => { const i = a.indexOf(flag); return i >= 0 ? a[i + 1] : def; };

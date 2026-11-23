@@ -10,7 +10,7 @@ set -uo pipefail
 # Step logs stay inspectable after the wave; wave.mjs sets a directory per project, so waves of two projects on one host never mix.
 LOGS="${WAVE_LOG_DIR:-${TMPDIR:-/tmp}/wave-$$}"; mkdir -p "$LOGS"
 TITLE="$1"; SUMMARY="$2"; shift 2; BR="$*"
-MAIN="${MAIN:-main}"; GATE="${GATE:-$HOME/.local/bin/gate}"
+MAIN="${MAIN:-main}"; GATE="${GATE:-$(cd "$(dirname "$0")" 2>/dev/null && pwd)/gate}"; command -v "$GATE" >/dev/null || { echo "GATE is not set, and there is no gate next to this script: set it to the path of this project's gate, <controller dir>/gate (wave.mjs does)" >&2; exit 1; }
 [ -n "${VERIFY_CMD:-}" ] || { echo "VERIFY-MISSING: commands.verify is empty; a wave without a verification command is not allowed"; exit 1; }
 [ -n "$BR" ] || { echo "NO-BRANCHES"; exit 1; }
 # This script resets and cleans the directory it runs in (untracked files included). Only the integration worktree.

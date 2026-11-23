@@ -1,30 +1,14 @@
 #!/usr/bin/env bash
-# gate-shim: 3
-# gate <command…>: dispatcher. ~/.local/bin/gate is shared by every project on a host, so it carries no project's gate.mjs:
-# it runs the gate.mjs of the Controller directory of the project it is called in (factory.config.json from FACTORY_CONFIG,
-# else from the working directory upward; hosts.controller.controllerDir). Each project keeps the gate.mjs of its own factory
-# version, and two projects on one host cannot change each other's gate. It never guesses: no project, or no gate.mjs for it,
-# is a failure with a message, and it exits with the gate's own status or not at all with 0. Needs node only.
-# `start` installs this file only when it differs and never over a higher "gate-shim" number.
-#
-# The whole body is one group, so bash has read all of it before it runs any of it: a file that is replaced in place while
-# a call is inside it (an older factory's start does that) cannot end the call early with the status of its last command.
+# gate <command…>: this project's gate. Call it by its absolute path, <controller dir>/gate; the implementation is the gate.mjs
+# next to this file, and nothing else is ever looked up (no PATH, no ~/.local/bin, no config in the working directory).
+# `start` copies it into the Controller directory over the old one while gates may be running, so the whole body is one group:
+# bash has read all of it before it runs any of it, and every way out is an explicit exit. Needs node only.
 {
-  impl=$(node -e '
-const fs = require("fs"), p = require("path"), h = process.env.HOME;
-const fail = (m) => { console.error("gate: " + m); process.exit(1); };
-let c = process.env.FACTORY_CONFIG;
-if (!c) for (let d = process.cwd(); ; d = p.dirname(d)) { const f = p.join(d, "factory.config.json"); if (fs.existsSync(f)) { c = f; break; } if (d === p.dirname(d)) break; }
-if (!c) fail("no factory.config.json in " + process.cwd() + " or above it, and FACTORY_CONFIG is not set: cannot tell which project this gate is for. Run it inside the project, or set FACTORY_CONFIG.");
-let j; try { j = JSON.parse(fs.readFileSync(c, "utf8")); } catch (e) { fail("cannot read " + c + " (" + e.message + ")"); }
-const dir = (j.hosts?.controller?.controllerDir ?? "~/controller").replace(/^~(?=\/|$)/, h), g = p.join(dir, "gate.mjs");
-if (!fs.existsSync(g)) fail("no gate.mjs for the project " + (j.project?.name ?? "?") + " (looked in " + dir + ", from " + c + "). Run agentic-factory start in that project.");
-console.log(g);
-') || exit 1
-  [ -n "$impl" ] || { echo "gate: could not tell which gate.mjs to run" >&2; exit 1; }
-  FACTORY_GATE_DISPATCHED=1 exec node "$impl" "$@"
+  here="$(cd "$(dirname "$0")" && pwd)" || exit 1
+  [ -f "$here/gate.mjs" ] || { echo "gate: no gate.mjs next to $0" >&2; exit 1; }
+  exec node "$here/gate.mjs" "$@"
   echo "gate: could not start node" >&2
   exit 1
 }
-echo "gate: the dispatcher ended unexpectedly" >&2
+echo "gate: ended unexpectedly" >&2
 exit 1
