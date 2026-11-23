@@ -114,7 +114,7 @@ An Orca bot can be the Front agent instead of a terminal session: `hosts.frontAg
 
 **The Controller with a bot.** On every front event it appends the line to `front-events.log` as with the Front agent on the server and, when it runs on the same machine as the bot, sends it with `orca orchestration send --to "bot:<name>"`: `--type question` for a new "Needs <human>" item or a block, `--type status` for everything else. `inbox.md` stays the record of orders. **Limit:** `bot:` only reaches bots on the same machine, and a server cannot send to a client (`terminal_not_found`, see "Front agent on the server"). A Controller on a remote host therefore does not send; the bot watches its `status.md` over ssh and sends orders as text into its terminal (`--environment <env>`) and through `inbox.md`.
 
-**Checks.** With a bot, `status --json` reports `setup.frontAgent` (`bot`, `botExists`, `watchAutomation`) and `doctor` checks the bot in `orca bot list` and its automation in `orca automations list` instead of the status watch.
+**Checks.** With a bot, `status --json` reports `setup.frontAgent` (`bot`, `botExists`, `watchAutomation`) and `doctor` checks the bot in `orca bot list` and its automation in `orca automations list` instead of the status watch; `setup.statusWatch` is `false` there, because no status watch is used. The heartbeat (below) is the Controller's waker with a bot as with a terminal Front agent.
 
 ## Read access for the Controller
 

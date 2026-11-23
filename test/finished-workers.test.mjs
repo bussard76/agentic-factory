@@ -25,7 +25,11 @@ function setup({ dispatches = {}, terminals = [], workers = {}, capacity = { gat
   fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main", humanName: "Alex" }, agents: { runner: "orca" }, commands: {}, capacity, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local", projectDir: project, workspacesDir: ws, orcaRepoId: "r" }] } }));
   fs.writeFileSync(path.join(ctl, "workers.json"), JSON.stringify(workers));
   const state = path.join(dir, "state.json"), log = path.join(dir, "calls.log"), fake = path.join(dir, "fake-orca.mjs");
-  fs.writeFileSync(state, JSON.stringify({ dispatches, terminals, pageSize, filler, broken }));
+  // Orca's listing: the Controller is an agent running in the project's worktree (controller-terminal.mjs), and the heartbeat
+  // types nothing before the Controller's first status.md.
+  fs.writeFileSync(path.join(ctl, "status.md"), "# Status\n");
+  const listed = terminals.map((t) => (/· Controller$/.test(t.title ?? "") ? { worktreePath: project, agentIdentity: "claude", ...t } : t));
+  fs.writeFileSync(state, JSON.stringify({ dispatches, terminals: listed, pageSize, filler, broken }));
   fs.writeFileSync(fake, `#!/usr/bin/env node
 import fs from "node:fs";
 const a = process.argv.slice(2), s = JSON.parse(fs.readFileSync(${JSON.stringify(state)}, "utf8"));
