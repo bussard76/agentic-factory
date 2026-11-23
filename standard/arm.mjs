@@ -12,6 +12,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Installed alone (.git/factory), so it checks its arguments itself, like controller/cli.mjs: --help prints the comment
+// above and does nothing else; an unknown argument is a usage error before anything is armed.
+{
+  const argv = process.argv.slice(2), head = fs.readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(1);
+  const help = head.slice(0, head.findIndex((l) => !l.startsWith("//"))).map((l) => l.replace(/^\/\/ ?/, "")).join("\n");
+  if (argv.some((a) => a === "--help" || a === "-h")) { console.log(help); process.exit(0); }
+  const unknown = argv.filter((a) => a !== "--all" && a !== "--check");
+  if (unknown.length) { console.error(`arm.mjs: unknown argument ${unknown.map((a) => JSON.stringify(a)).join(", ")}\n${help.slice(help.indexOf("Usage:"))}`); process.exit(2); }
+}
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SOURCE = path.join(HERE, "hooks");
 const BEGIN = "# agentic-factory: begin (generated; do not edit)", END = "# agentic-factory: end";

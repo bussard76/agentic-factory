@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
-const FILES = ["keep.mjs", "cleanup.mjs", "capacity.mjs", "heartbeat.mjs", "controller-terminal.mjs", "lib.mjs", "journal.mjs", "names.mjs", "steering/tasks.mjs"];
+const FILES = ["cli.mjs", "keep.mjs", "cleanup.mjs", "capacity.mjs", "heartbeat.mjs", "controller-terminal.mjs", "lib.mjs", "journal.mjs", "names.mjs", "steering/tasks.mjs"];
 
 // dispatches: id → { state, retainedReason, ownership, owner (dispatch owning the terminal), noResource, setup: [terminal
 // handles], releaseFails, releaseAnswer (what the release leaves in terminalResource.releaseState: released, retained,

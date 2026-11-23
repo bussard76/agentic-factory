@@ -1,8 +1,9 @@
-// Steering mode orca-tasks: tickets are docs/tasks/T<n>-*.md files with a Status line.
+// Steering mode orca-tasks: tickets are docs/tasks/T<n>-*.md files with a Status line. Usage:
 // node steering/tasks.mjs list [status]     → JSON list of tasks with id, file, status, level. "ready" leaves out a task
 //                                             whose "Depends on:" names a task that is not integrated yet
 // node steering/tasks.mjs set <T> <status>  → rewrites the Status line (commit it yourself)
 // node steering/tasks.mjs next-id           → the next free T number
+import "../cli.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { PROJECT_DIR, config } from "../lib.mjs";

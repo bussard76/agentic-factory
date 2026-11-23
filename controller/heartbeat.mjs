@@ -2,7 +2,8 @@
 // (docs/learnings.md). `agentic-factory start` runs it from cron every minute. Worker messages and a finished wave wake it
 // at once; the full work check runs at each tenth minute. It marks progress in Orca's sidebar without a model.
 // It only sends text into the Controller's terminal: it never starts or restarts a Controller. Each Controller directory
-// has its own copy and state, so projects on one host stay independent.
+// has its own copy and state, so projects on one host stay independent. Usage: node heartbeat.mjs
+import "./cli.mjs";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

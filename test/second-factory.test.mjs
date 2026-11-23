@@ -149,7 +149,7 @@ test("writeFileAtomic does not touch a file that already has the content and mod
 test("stallwatch: a worker in workers.json is watched wherever its worktree is, others are ignored with a notice, and with none of its own there is nothing to watch", () => {
   const run = (workersJson, terminals) => {
     const dir = tmp("stall-layout");
-    for (const f of ["stallwatch.mjs", "lib.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
+    for (const f of ["stallwatch.mjs", "cli.mjs", "lib.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
     fs.writeFileSync(path.join(dir, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local" }] } }));
     if (workersJson) fs.writeFileSync(path.join(dir, "workers.json"), JSON.stringify(workersJson));
     const log = path.join(dir, "reads.log"), fake = path.join(dir, "fake-orca.mjs");

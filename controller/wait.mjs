@@ -1,6 +1,8 @@
 // Wait for the next worker event and print it. Orca: orchestration messages (worker_done, escalation, question),
 // which the check marks handled (an older Orca returns a deliveryId to ack). Terminal runner: new DONE/ESCALATE lines under events/. Exits after the first real event
 // or after --hours (default 4). Run it in the background and react to its output.
+// Usage: node wait.mjs [--hours <n>]
+import "./cli.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { RUNNER, clean, file, orcaJson } from "./lib.mjs";

@@ -2,6 +2,7 @@
 // folder names, so a name the human set stays. Selects entries by path, and lists only this project's repo, so a shared host's
 // other projects stay untouched. An entry with no known role is reported, never guessed.
 // Usage: node names.mjs [--on <host>|--all] [--dry]
+import "./cli.mjs";
 import path from "node:path";
 import { HOSTS, ORCA, PROJECT, RUNNER, argHost, config, orcaEnvArgsOn, readJson, sh } from "./lib.mjs";
 

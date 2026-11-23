@@ -7,6 +7,7 @@
 // A lasting problem wakes the bot once, when it starts, not every 5 minutes. The first sight of a project is a baseline.
 // What woke the bot goes into wake.md next to this script, which the automation's prompt tells the bot to read.
 // Local Controllers are read directly, remote ones over ssh. Usage: node botwatch.mjs
+import "./cli.mjs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";

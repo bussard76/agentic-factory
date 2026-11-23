@@ -9,6 +9,7 @@
 // its queue, its slots and its journal come from that directory (factory.config.json next to this file), never from a config
 // in the worktree it is called in: the code that judges a branch is not chosen by the branch. A call from another project's
 // worktree is refused.
+// Usage: <controller dir>/gate <command…>   (everything after gate is the command; only a first argument --help or -h is gate's own)
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -16,6 +17,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const args = process.argv.slice(2);
+// gate does not use cli.mjs: its arguments are the command it runs. It prints its leading comment itself.
+if (args[0] === "--help" || args[0] === "-h") { const l = fs.readFileSync(new URL(import.meta.url), "utf8").split("\n").slice(1); console.log(l.slice(0, l.findIndex((x) => !x.startsWith("//"))).map((x) => x.replace(/^\/\/ ?/, "")).join("\n")); process.exit(0); }
 if (!args.length) { console.error("usage: gate <command…>"); process.exit(2); }
 const controllerDir = path.dirname(fileURLToPath(import.meta.url));
 const cfgPath = path.join(controllerDir, "factory.config.json");

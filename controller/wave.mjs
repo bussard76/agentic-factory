@@ -2,6 +2,7 @@
 // Usage: node wave.mjs "<title>" "<summary>" origin/<branch>... [--on <host>]   then: node wavewait.mjs
 // Pass each task branch AND the review branch of its passing round (origin/agents/t12 origin/agents/t12-review-2):
 // the push gate reads the findings files from the pushed tree, so a wave without them is rejected.
+import "./cli.mjs";
 import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { CMDS, CONTROLLER_HOME, MAIN, ORCA, PROJECT, RUNNER, argHost, file, integrationOn, journal, onHost, orcaEnvArgsOn, sh, worktreeRefOn } from "./lib.mjs";

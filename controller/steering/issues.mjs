@@ -1,9 +1,10 @@
-// Steering mode github-issues: tickets are GitHub issues (gh CLI). Labels from factory.config.json → steering.
+// Steering mode github-issues: tickets are GitHub issues (gh CLI). Labels from factory.config.json → steering. Usage:
 // node steering/issues.mjs ready                 → JSON list of open, unassigned issues with the ready label and no open blockers
 // node steering/issues.mjs claim <n>             → assigns the authenticated account, swaps ready → in-progress
 // node steering/issues.mjs comment <n> <file>    → posts the file's content as a comment (review verdicts, decisions)
 // node steering/issues.mjs needs-human <n> <text>→ labels needs-human and comments the question
 // node steering/issues.mjs close <n> <text>      → closes with a comment (after the wave reached main)
+import "../cli.mjs";
 import fs from "node:fs";
 import { PROJECT_DIR, config, sh } from "../lib.mjs";
 

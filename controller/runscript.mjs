@@ -1,5 +1,6 @@
 // Run a local bash script in the integration worktree of a worker host, ending with WAVE-END.
 // Usage: node runscript.mjs <script-file> "<title>" [--on <host>]   then: node wavewait.mjs
+import "./cli.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";

@@ -91,7 +91,7 @@ test("cleanup closes this project's finished wave terminals, keeps a running one
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-waves-")));
   const ctl = path.join(dir, "ctl"), project = path.join(dir, "p");
   fs.mkdirSync(ctl); fs.mkdirSync(project);
-  for (const f of ["cleanup.mjs", "lib.mjs", "journal.mjs", "names.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
+  for (const f of ["cleanup.mjs", "cli.mjs", "lib.mjs", "journal.mjs", "names.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
   const integ = path.join(dir, "ws/p/coordinator-integration"), otherInteg = path.join(dir, "ws/q/coordinator-integration");
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: project });
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "first"], { cwd: project });
@@ -144,7 +144,7 @@ test("start.mjs passes creation flags only for a new worktree, and specs name th
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-start-"));
   const ctl = path.join(dir, "ctl");
   fs.mkdirSync(ctl);
-  for (const f of ["start.mjs", "lib.mjs", "journal.mjs", "names.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
+  for (const f of ["start.mjs", "cli.mjs", "lib.mjs", "journal.mjs", "names.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
   fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca", default: "claude" }, commands: {}, capacity: { gate: {} }, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local", orcaRepoId: "r" }] } }));
   fs.writeFileSync(path.join(dir, "spec.txt"), "do it\n");
   const log = path.join(dir, "calls.log");
@@ -177,7 +177,7 @@ test("start.mjs pins a Pi worker of a role in agents.piRoleModels, and only that
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-pimodel-"));
   const ctl = path.join(dir, "ctl");
   fs.mkdirSync(ctl);
-  for (const f of ["start.mjs", "lib.mjs", "journal.mjs", "names.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
+  for (const f of ["start.mjs", "cli.mjs", "lib.mjs", "journal.mjs", "names.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
   fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca", default: "pi", models: { small: "s", default: "tier-model", large: "l" }, piRoleModels: { Developer: "provider/model-id" } }, commands: {}, capacity: { gate: {} }, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local", orcaRepoId: "r" }] } }));
   fs.writeFileSync(path.join(dir, "spec.txt"), "do it\n");
   const log = path.join(dir, "calls.log");

@@ -1,5 +1,6 @@
 // Polls the wave (Orca terminal, local log or remote log) until WAVE-END appears, then prints the filtered tail.
-// Times out after 90 minutes.
+// Times out after 90 minutes. Usage: node wavewait.mjs
+import "./cli.mjs";
 import fs from "node:fs";
 import { CONTROLLER_HOME, ORCA, RUNNER, clean, file, hostNamed, journal, onHost, orcaEnvArgsOn, trySh } from "./lib.mjs";
 

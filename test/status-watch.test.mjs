@@ -14,7 +14,7 @@ function setup({ terminals, idle = true, recordedHandle = null }) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-watch-")));
   const watch = path.join(dir, "front"), ctl = path.join(dir, "controller"), project = path.join(dir, "project");
   for (const d of [watch, ctl, project]) fs.mkdirSync(d);
-  for (const f of ["statuswatch.mjs", "hosts.mjs"]) fs.copyFileSync(path.join(ROOT, "front-agent", f), path.join(watch, f));
+  for (const f of ["statuswatch.mjs", "hosts.mjs", "cli.mjs"]) fs.copyFileSync(path.join(ROOT, "front-agent", f), path.join(watch, f));
   fs.writeFileSync(path.join(watch, "factory.config.json"), JSON.stringify({ project: { name: "p", humanName: "H" }, agents: { runner: "orca" }, capacity: {}, hosts: { controller: { host: "local", controllerDir: ctl }, workers: [{ name: "local", kind: "local", workspacesDir: path.join(dir, "ws") }] } }));
   fs.writeFileSync(path.join(watch, "front-agent.json"), JSON.stringify({ projectDir: project, handle: recordedHandle }));
   const state = path.join(dir, "fake.json"), log = path.join(dir, "calls.log");

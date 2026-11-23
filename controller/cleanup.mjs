@@ -12,6 +12,7 @@
 // it removes a worktree, it lets `orca worktree rm` stop the setup terminals of the released dispatch, and it keeps a
 // worktree in which any other terminal is still open. --dry changes nothing: no fetch, no journal, no removals, no releases.
 // Usage: node cleanup.mjs [--on <host>|--all] [--dry] [--pushed] [--prune-remote]
+import "./cli.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { BRANCH_PREFIX, HOSTS, SETTLED_STATES, dispatchStates, file, orcaCall, holdsWorktree, isHelperTerminal, sh, MAIN, ORCA, RUNNER, argHost, journal, onHost, orcaEnvArgsOn, projectDirOn, readJson, readState, trySh, workerStatus, workspacesOn, worktreeRefOn, writeJson } from "./lib.mjs";

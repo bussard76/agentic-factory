@@ -112,6 +112,8 @@ agentic-factory doctor                       # Einrichtung prüfen
 agentic-factory update                       # aktualisieren, eigene Änderungen behalten
 ```
 
+Jeder Befehl kennt `--help` (oder `-h`): Er zeigt seine Argumente und tut sonst nichts. Die Skripte des Controllers und des Front-Agenten machen es genauso, zum Beispiel `node cleanup.mjs --help`, und zeigen den Kommentar am Anfang des Skripts. Ein Argument, das ein Befehl oder Skript nicht kennt, beendet ihn mit Exit-Code 2, bevor er etwas tut. Zwei Ausnahmen: `gate` führt alles danach als Befehl aus, und die Git-Guardrails (`tools/factory-guardrails.mjs`) beenden einen Hook bei einem unbekannten Unterbefehl mit Exit-Code 1.
+
 Die Antworten sind ein Objekt mit Frage-IDs als Schlüssel; die Datei gehört außerhalb des Repositories. `init` funktioniert auch allein interaktiv. Ohne Remote erstellt es ein lokales Bare-`origin` unter `~/.factory-remotes/<projekt>-<hash>.git`; mit `git remote set-url origin <url>` kannst du es später ersetzen. Die Einführungsdateien werden als `Adopt agentic-factory (ADR-0001)` committet und gepusht (bei bestehenden ADRs mit der nächsten freien Nummer).
 
 | Dateien von `init` | Zweck |

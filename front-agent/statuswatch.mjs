@@ -5,6 +5,7 @@
 // file goes stale (> 25 min), when more worktrees exist than tasks plus a few (cleanup overdue), and with a SUMMARY marker
 // every 30 minutes if the status changed. A lasting problem is announced once.
 // Config: factory.config.json next to this script or FACTORY_CONFIG. Usage: node statuswatch.mjs
+import "./cli.mjs";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
