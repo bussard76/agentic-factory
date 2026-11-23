@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { findControllerTerminal } from "./controller-terminal.mjs";
-import { HOSTS, HUMAN, MAIN, ORCA, PROJECT, PROJECT_DIR, STEERING, config, file, hostNamed, orcaEnvArgsOn, worktreeRefOn } from "./lib.mjs";
+import { HOSTS, HUMAN, MAIN, ORCA, PROJECT, PROJECT_DIR, STEERING, config, dispatchStates, file, hostNamed, orcaEnvArgsOn, workerStatus, worktreeRefOn } from "./lib.mjs";
 
 const IDLE_WAIT_MS = 15_000;
 const IDLE_WAKE_MS = 55 * 60_000; // Nothing to do: wake about hourly, a little under so a 60-minute tick is not missed.
@@ -22,7 +22,11 @@ const LOCK_STALE_MS = 5 * 60_000;
 const log = (line) => console.log(`${new Date().toISOString()} ${line}`);
 const run = (cmd, args, cwd) => execFileSync(cmd, args, { cwd, encoding: "utf8", timeout: 60_000, stdio: ["ignore", "pipe", "pipe"] });
 const orca = (...args) => JSON.parse(run(ORCA, [...args, "--json"]));
-const readJson = (name, fallback) => { try { return JSON.parse(fs.readFileSync(file(name), "utf8")); } catch { return fallback; } };
+// Unreadable, or the wrong kind of value (null, an array for an object): the fallback.
+const readJson = (name, fallback) => {
+  try { const v = JSON.parse(fs.readFileSync(file(name), "utf8")); if (fallback === null || (Array.isArray(fallback) ? Array.isArray(v) : v !== null && typeof v === "object" && !Array.isArray(v))) return v; } catch { /* fallback */ }
+  return fallback;
+};
 const readText = (name) => { try { return fs.readFileSync(file(name), "utf8"); } catch { return ""; } };
 const short = (error) => String(error.message).slice(0, 160);
 
@@ -39,11 +43,21 @@ const startedTickets = () => (STEERING === "github-issues"
   : steering("list", "building").map((t) => t.id));
 
 // An unreadable source counts as work: a false wake costs one cycle, a missed one stalls the project.
+let newlySettled = [];
 const pendingWork = () => {
   const reasons = [];
   if (readText("inbox.md").trim()) reasons.push("inbox");
+  // Running workers are work. A finished worker's record waits for cleanup: a worker that settled without a worker_done
+  // message wakes the Controller once, when it is first seen settled, and not again at every tenth minute.
   try {
-    if (Object.keys(JSON.parse(fs.readFileSync(file("workers.json"), "utf8"))).length) reasons.push("workers");
+    const { running, unknown, settled } = workerCounts(JSON.parse(fs.readFileSync(file("workers.json"), "utf8")));
+    if (running) reasons.push("workers");
+    else if (unknown) reasons.push("workers unreadable");
+    const told = new Set(readJson("heartbeat.settled.json", []));
+    // A worker that sent worker_done already woke the Controller with it; only a silent settle needs this wake.
+    const reported = new Set(messages.filter((m) => m.type === "worker_done").map((m) => m.from));
+    newlySettled = settled.filter((s) => s?.dispatch && !told.has(s.dispatch) && !reported.has(s.dispatch) && !reported.has(s.terminal)).map((s) => s.dispatch);
+    if (newlySettled.length) reasons.push(`${newlySettled.length} workers settled`);
   } catch (error) { if (error.code !== "ENOENT") reasons.push("workers unreadable"); }
   try {
     const ready = readyTickets();
@@ -57,7 +71,38 @@ for (const host of HOSTS) {
   try { terminalsByHost[host.name] = orca("terminal", "list", ...orcaEnvArgsOn(host)).result.terminals; }
   catch (error) { terminalsByHost[host.name] = null; log(`terminal list failed on ${host.name}: ${short(error)}`); }
 }
-const allTerminals = Object.values(terminalsByHost).flatMap((t) => t ?? []);
+// Running and unknown workers in a workers.json object, and the dispatches of settled ones not kept open, from Orca's
+// dispatch state (lib.mjs workerStatus). Orca is asked at most once per run, and for the sidebar at most every 10 minutes:
+// the counts are cached in heartbeat.workers.json. `fresh` (the full check) always asks.
+const COUNT_CACHE_MS = 10 * 60_000;
+const fullCheck = new Date().getMinutes() % 10 === 0;
+let counted;
+const workerCounts = (records, fresh = fullCheck) => {
+  if (counted) return counted;
+  if (!fresh) {
+    // The cache is valid for 10 minutes, and only while workers.json has not changed since it was written.
+    try {
+      const at = fs.statSync(file("heartbeat.workers.json")).mtimeMs, changed = fs.statSync(file("workers.json")).mtimeMs;
+      const cached = Date.now() - at < COUNT_CACHE_MS && changed <= at ? readJson("heartbeat.workers.json", null) : null;
+      if (cached && typeof cached === "object" && Number.isFinite(cached.running) && Number.isFinite(cached.unknown) && Array.isArray(cached.settled)) return (counted = cached);
+    } catch { /* no cache or no workers.json */ }
+  }
+  counted = { running: 0, unknown: 0, settled: [] };
+  const byHost = Object.groupBy(Object.values(records), (w) => w.host ?? "local");
+  for (const [hostName, list] of Object.entries(byHost)) {
+    let host;
+    try { host = hostNamed(hostName); } catch { counted.unknown += list.length; continue; }
+    const listed = terminalsByHost[host.name] ? new Set(terminalsByHost[host.name].map((t) => t.handle)) : null;
+    const dispatches = list.some((w) => w.dispatch) ? dispatchStates(list.map((w) => w.dispatch), host) : {};
+    for (const w of list) {
+      const status = workerStatus(w, { dispatches, terminals: listed, pidAlive: (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } } });
+      if (status !== "finished") counted[status]++;
+      else if (w.dispatch) counted.settled.push({ dispatch: w.dispatch, terminal: w.terminal });
+    }
+  }
+  fs.writeFileSync(file("heartbeat.workers.json"), JSON.stringify(counted));
+  return counted;
+};
 // This script runs in the Controller directory, so its folder name is the one an agent CLI like pi puts in the title.
 const terminal = findControllerTerminal(terminalsByHost[config.hosts?.controller?.host ?? "local"], title, file("."));
 
@@ -96,10 +141,11 @@ const showNotice = (text, status, unread) => {
   log(`notice: ${text}`);
 };
 const updateNotice = () => {
-  const active = Object.values(readJson("workers.json", {})).filter((w) => allTerminals.some((t) => t.handle === w.terminal)).length;
   const open = needsHuman();
   if (readText("inbox.md").trim()) return showNotice(say("Working: instruction from the inbox", "Arbeitet: Auftrag aus der Inbox"), "in-progress", false);
   if (open.length) return showNotice(`${say("Waiting for you", "Wartet auf dich")}: ${open[0].slice(2, 200)}`, "in-review", true);
+  const { running, unknown } = workerCounts(readJson("workers.json", {}));
+  const active = running + unknown;
   if (wave.state === "running") return showNotice(say(`Working: wave running, ${active} workers`, `Arbeitet: Wave läuft, ${active} Worker`), "in-progress", false);
   if (wave.state === "finished") return showNotice(say(`Working: wave finished (${wave.result}), waking the Controller`, `Arbeitet: Wave fertig (${wave.result}), Controller wird geweckt`), "in-progress", true);
   const ready = readyTickets().length;
@@ -148,7 +194,6 @@ const fresh = events.filter((id) => !seen.has(id));
 const remember = () => fs.writeFileSync(file("heartbeat.seen.json"), JSON.stringify([...seen, ...fresh].slice(-500)));
 if (!seenExisted) { remember(); log("baseline of worker messages recorded"); process.exit(0); } // Old messages wake nobody.
 
-const fullCheck = new Date().getMinutes() % 10 === 0;
 const inboxWaiting = readText("inbox.md").trim() !== "";
 
 const reasons = fullCheck ? pendingWork() : inboxWaiting ? ["inbox"] : [];
@@ -179,5 +224,6 @@ if (!idle) {
 orca("terminal", "send", "--terminal", terminal.handle, "--text", MESSAGE, "--enter");
 fs.writeFileSync(file("heartbeat.last"), "");
 remember();
+if (newlySettled.length) fs.writeFileSync(file("heartbeat.settled.json"), JSON.stringify([...readJson("heartbeat.settled.json", []), ...newlySettled].slice(-500)));
 if (wave.state === "finished") fs.writeFileSync(file("heartbeat.wave"), wave.handle);
 log(`woke ${terminal.handle} (${reasons.join(", ") || "hourly check"})`);
