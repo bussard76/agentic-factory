@@ -1,5 +1,6 @@
-// The review gate's reading of the "Reviewed commit:" line in docs/reviews/ findings files: exactly one 40-character
-// lowercase SHA, bare or in one balanced pair of backticks, and nothing else on the line. Each case is a throwaway
+// The review gate's reading of the "Reviewed commit:" line in docs/reviews/ findings files. Every case says whether it is
+// unchanged from main (the gate on main gives the same answer) or new (main rejects it and the gate now accepts it).
+// Trailing text after the SHA was accepted on main and still is; so is a second SHA on the line. Each case is a throwaway
 // repository with a code commit and a findings commit on top of it, run through `review-gate` as the pre-push hook runs it.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -39,40 +40,42 @@ function gate(findings) {
 }
 const passing = (line) => (sha) => `# T1 review\n\n${line(sha)}\nVerdict: pass\n`;
 
-test("review gate: a bare 40-character SHA on the Reviewed commit line passes", () => {
-  const r = gate(passing((sha) => `Reviewed commit: ${sha}`));
-  assert.equal(r.status, 0, r.stdout + r.stderr);
-});
+// [name, status, line, passes]. status: "unchanged" = same answer as main; "new" = main rejects, the gate now accepts.
+const CASES = [
+  ["bare SHA at the end of the line passes", "unchanged", (s) => `Reviewed commit: ${s}`, true],
+  ["bare SHA with no space after the colon passes", "unchanged", (s) => `Reviewed commit:${s}`, true],
+  ["bare SHA followed by trailing text passes", "unchanged", (s) => `Reviewed commit: ${s} (branch x)`, true],
+  ["bare SHA followed by a period passes", "unchanged", (s) => `Reviewed commit: ${s}.`, true],
+  ["bare SHA followed by a closing backtick passes", "unchanged", (s) => `Reviewed commit: ${s}\``, true],
+  ["bare SHA with a CRLF line ending passes", "unchanged", (s) => `Reviewed commit: ${s}\r`, true],
+  ["two bare SHAs on one line pass, the first counts", "unchanged", (s) => `Reviewed commit: ${s} ${s}`, true],
+  ["backticked SHA at the end of the line passes", "new", (s) => `Reviewed commit: \`${s}\``, true],
+  ["backticked SHA followed by trailing text passes", "new", (s) => `Reviewed commit: \`${s}\` (branch x)`, true],
+  ["backticked SHA followed by a second SHA passes, the first counts", "new", (s) => `Reviewed commit: \`${s}\` ${s}`, true],
+  ["short SHA rejected", "unchanged", (s) => `Reviewed commit: ${s.slice(0, 12)}`, false],
+  ["short SHA in backticks rejected", "unchanged", (s) => `Reviewed commit: \`${s.slice(0, 12)}\``, false],
+  ["uppercase SHA rejected", "unchanged", (s) => `Reviewed commit: ${s.toUpperCase()}`, false],
+  ["uppercase SHA in backticks rejected", "unchanged", (s) => `Reviewed commit: \`${s.toUpperCase()}\``, false],
+  ["41 hex characters rejected", "unchanged", (s) => `Reviewed commit: ${s}0`, false],
+  ["a letter directly after the SHA rejected", "unchanged", (s) => `Reviewed commit: ${s}g`, false],
+  ["a character directly before the SHA rejected", "unchanged", (s) => `Reviewed commit: x${s}`, false],
+  ["an opening backtick without a closing one rejected", "unchanged", (s) => `Reviewed commit: \`${s}`, false],
+  ["an opening backtick with a different closing character rejected", "unchanged", (s) => `Reviewed commit: \`${s}'`, false],
+  ["a backticked SHA directly followed by a letter rejected", "unchanged", (s) => `Reviewed commit: \`${s}\`g`, false],
+];
 
-test("review gate: the same SHA in one pair of backticks passes", () => {
-  const r = gate(passing((sha) => `Reviewed commit: \`${sha}\``));
-  assert.equal(r.status, 0, r.stdout + r.stderr);
-});
-
-const REJECTED = {
-  "a short SHA": (sha) => `Reviewed commit: ${sha.slice(0, 12)}`,
-  "a short SHA in backticks": (sha) => `Reviewed commit: \`${sha.slice(0, 12)}\``,
-  "an uppercase SHA": (sha) => `Reviewed commit: ${sha.toUpperCase()}`,
-  "an uppercase SHA in backticks": (sha) => `Reviewed commit: \`${sha.toUpperCase()}\``,
-  "a character in front of the SHA": (sha) => `Reviewed commit: x${sha}`,
-  "a character after the SHA": (sha) => `Reviewed commit: ${sha}.`,
-  "a character after the SHA inside backticks": (sha) => `Reviewed commit: \`${sha}\`.`,
-  "an opening backtick only": (sha) => `Reviewed commit: \`${sha}`,
-  "a closing backtick only": (sha) => `Reviewed commit: ${sha}\``,
-  "two SHAs on the line": (sha) => `Reviewed commit: ${sha} ${sha}`,
-  "two SHAs in backticks": (sha) => `Reviewed commit: \`${sha}\` \`${sha}\``,
-  "a 41-character hex run": (sha) => `Reviewed commit: ${sha}0`,
-};
-
-for (const [name, line] of Object.entries(REJECTED)) {
-  test(`review gate: ${name} on the Reviewed commit line is rejected`, () => {
+for (const [name, status, line, passes] of CASES) {
+  test(`review gate [${status}]: ${name}`, () => {
     const r = gate(passing(line));
-    assert.notEqual(r.status, 0, r.stdout + r.stderr);
-    assert.match(r.stdout + r.stderr, UNCOVERED);
+    if (passes) assert.equal(r.status, 0, r.stdout + r.stderr);
+    else {
+      assert.notEqual(r.status, 0, r.stdout + r.stderr);
+      assert.match(r.stdout + r.stderr, UNCOVERED);
+    }
   });
 }
 
-test("review gate: a findings file without a Reviewed commit line is rejected", () => {
+test("review gate [unchanged]: a findings file without a Reviewed commit line rejected", () => {
   const r = gate(() => "# T1 review\n\nVerdict: pass\n");
   assert.notEqual(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout + r.stderr, UNCOVERED);
