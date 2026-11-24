@@ -3,7 +3,7 @@
 // Exit 0 wakes the bot; any other exit skips the run, so a quiet project costs no model time.
 // One bot can watch several projects: projects.json lists them, botwatch.state keeps one line per project.
 // It wakes the bot when, in a project's Controller status.md, "Needs <human>", "Needs front agent" or "Problems" changed,
-// when status.md is older than hosts.frontAgent.staleMinutes (default 25), is missing, or its host cannot be reached.
+// when status.md is older than the stale limit (hosts.frontAgent.staleMinutes, never below the Controller's wake.idleMinutes + 15; default 45), is missing, or its host cannot be reached.
 // A lasting problem wakes the bot once, when it starts, not every 5 minutes. The first sight of a project is a baseline.
 // What woke the bot goes into wake.md next to this script, which the automation's prompt tells the bot to read.
 // Local Controllers are read directly, remote ones over ssh. Usage: node botwatch.mjs
@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { controllerHost, expand } from "./hosts.mjs";
+import { controllerHost, expand, staleLimit } from "./hosts.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const here = (name) => path.join(HERE, name);
@@ -57,9 +57,12 @@ export function checkProject(project, prev, now = Date.now(), read = probe) {
   // Each project's own bundle config, never FACTORY_CONFIG: one bot can watch several projects.
   const cfg = JSON.parse(fs.readFileSync(path.join(expand(project.dir), "factory.config.json"), "utf8"));
   const human = cfg.project?.humanName ?? "the human";
-  const staleMin = Number(cfg.hosts?.frontAgent?.staleMinutes) || 25;
+  const { limit: staleMin, note: limitNote } = staleLimit(cfg);
   const next = { ...prev, firstSeen: prev?.firstSeen ?? now };
   const reasons = [];
+  // A staleMinutes below the idle interval is raised, and said once (again when the note changes).
+  if (limitNote && prev?.limitNote !== limitNote) reasons.push(`CONFIG: ${limitNote}`);
+  if (limitNote) next.limitNote = limitNote; else delete next.limitNote;
   let problem = "";
   try {
     const { host, mtime, text, health = "" } = read(cfg);

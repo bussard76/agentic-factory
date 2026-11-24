@@ -9,6 +9,7 @@ import readline from "node:readline/promises";
 import { check } from "../controller/cli.mjs";
 import { controllerPlaces, controllerSession, createArgs, createdHandle, locateController } from "../controller/controller-terminal.mjs";
 import { heartbeatCronCheckScript, heartbeatCronScript, heartbeatLabel, heartbeatPlist, statusWatchCronScript, statusWatchLabel, statusWatchPlist } from "./heartbeat-cron.mjs";
+import { staleLimit } from "../front-agent/hosts.mjs";
 import { applyReadGrants } from "./read-grants.mjs";
 import { copyTreeAtomic, withLock, writeFileAtomic } from "./safe-write.mjs";
 
@@ -774,6 +775,7 @@ function doctor() {
   { const hb = handbookStatus(c); if (hb.problem) bad(`handbook: ${hb.problem}`); else if (hb.handbookInstalled) ok("handbook: it knows inbox.mjs --done and restart.md"); }
   { const cl = cleanupStatus(c); if (cl.problem) bad(`cleanup: ${cl.problem}`); else if (cl.unknown) info("cleanup: the Controller's host did not answer, so it is not known whether the handbook calls cleanup with --apply"); else if (!cl.handbookInstalled) info("cleanup: not checked, no Controller handbook is installed yet (run start)"); else ok("cleanup: the handbook calls it with --apply and no removable work waits"); }
   if (!heartbeatOn(c) && c.hosts.controller.heartbeat === false) info("heartbeat off (hosts.controller.heartbeat is false): you wake the Controller yourself");
+  { const s = staleLimit(c); if (s.note) info(`stale limit: ${s.note}`); }
   if (!["terminal", "orca-bot"].includes(frontKind(c))) bad(`hosts.frontAgent.kind "${frontKind(c)}" (terminal or orca-bot)`);
   if (frontKind(c) === "orca-bot") {
     const b = botWatchStatus(c);

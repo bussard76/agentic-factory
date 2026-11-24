@@ -554,3 +554,13 @@ test("the Front agent's own session, a person's session and another checkout: ne
   assert.equal(count(), 2);
   h.done();
 });
+
+test("doctor says when staleMinutes is below the idle wake interval, and only then", () => {
+  const h = startSetup();
+  assert.doesNotMatch(h.cli(["doctor"], { FACTORY_SCHEDULER: "cron" }).stdout, /stale limit/);
+  h.edit((c) => { c.hosts.frontAgent = { ...(c.hosts.frontAgent ?? {}), staleMinutes: 20 }; });
+  assert.match(h.cli(["doctor"], { FACTORY_SCHEDULER: "cron" }).stdout, /stale limit: hosts\.frontAgent\.staleMinutes is 20, below the Controller's idle wake interval 30 min .* the limit is 45 min/);
+  h.edit((c) => { c.hosts.controller.wake = { idleMinutes: 5 }; });
+  assert.doesNotMatch(h.cli(["doctor"], { FACTORY_SCHEDULER: "cron" }).stdout, /stale limit/);
+  h.done();
+});

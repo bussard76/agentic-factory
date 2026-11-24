@@ -28,7 +28,7 @@ function watchSetup() {
     const fa = path.join(dir, "front-agent", name), ctl = path.join(dir, `controller-${name}`);
     fs.mkdirSync(fa, { recursive: true }); fs.mkdirSync(ctl);
     const workers = remote ? [{ name: "srv", kind: "remote", ssh: "srv" }] : [{ name: "local", kind: "local" }];
-    fs.writeFileSync(path.join(fa, "factory.config.json"), JSON.stringify({ project: { name, humanName: "Hu" }, hosts: { controller: { host: workers[0].name, controllerDir: remote ? "~/ctl" : ctl }, workers, frontAgent: { kind: "orca-bot", bot: "front-bot", staleMinutes: 25 } } }));
+    fs.writeFileSync(path.join(fa, "factory.config.json"), JSON.stringify({ project: { name, humanName: "Hu" }, hosts: { controller: { host: workers[0].name, controllerDir: remote ? "~/ctl" : ctl }, workers, frontAgent: { kind: "orca-bot", bot: "front-bot" } } }));
     return { name, dir: fa, status: remote ? remoteStatus : path.join(ctl, "status.md") };
   };
   const alpha = project("alpha", false), beta = project("beta", true);
@@ -87,10 +87,10 @@ test("a stale status and an unreachable host wake the bot once, not every 5 minu
   const h = watchSetup();
   h.write(h.alpha); h.write(h.beta);
   h.run();
-  h.write(h.alpha, { age: 30 });
+  h.write(h.alpha, { age: 50 });
   assert.equal(h.run().status, 0);
-  assert.match(h.wake(), /## alpha[\s\S]*STALE: status\.md is 30 min old \(limit 25\)/);
-  h.write(h.alpha, { age: 40 });
+  assert.match(h.wake(), /## alpha[\s\S]*STALE: status\.md is 50 min old \(limit 45\)/);
+  h.write(h.alpha, { age: 60 });
   assert.equal(h.run().status, 1, "still stale is not news");
   h.down(true);
   assert.equal(h.run().status, 0);
@@ -100,7 +100,7 @@ test("a stale status and an unreachable host wake the bot once, not every 5 minu
   h.down(false); h.write(h.beta, { needs: "- Q2" });
   assert.equal(h.run().status, 0);
   assert.match(h.wake(), /NEEDS HU: - Q2/);
-  h.write(h.alpha); h.run(); h.write(h.alpha, { age: 30 });
+  h.write(h.alpha); h.run(); h.write(h.alpha, { age: 50 });
   assert.equal(h.run().status, 0, "a new stale period is news again");
   h.done();
 });
@@ -403,4 +403,52 @@ test("status and doctor show a cleanup run that could not determine the state of
   fs.rmSync(path.join(ctl, "cleanup-pending.json"));
   assert.equal(JSON.parse(p.cli("status", "--json").stdout).setup.cleanup.problem, null);
   m.done();
+});
+
+// Stale vs idle: simulated time through checkProject's `now` and `read`, so no minute passes and no file is touched.
+test("an idle Controller woken every 30 minutes never wakes the bot as stale over six hours; a stuck one does, after the limit", async () => {
+  const { checkProject } = await import(path.join(ROOT, "front-agent/botwatch.mjs"));
+  const dir = tmp("af-botstale-");
+  fs.writeFileSync(path.join(dir, "factory.config.json"), JSON.stringify({ project: { name: "p", humanName: "Hu" }, hosts: { frontAgent: { kind: "orca-bot", bot: "b" } } }));
+  const project = { name: "p", dir };
+  const T0 = Date.UTC(2026, 0, 1), min = 60_000, status = "## Needs Hu\n- none\n## Problems\n";
+  // The Controller writes status.md at :00 and :30 (a few minutes late), whatever happens in between.
+  const at = (t, written) => ({ now: T0 + t * min, read: () => ({ host: "local", mtime: (T0 + written * min) / 1000, text: status }) });
+  let prev;
+  for (let t = 0; t <= 360; t += 5) {
+    const { now, read } = at(t, Math.floor((t - 4) / 30) * 30 + 4);
+    const r = checkProject(project, prev, now, read);
+    assert.deepEqual(r.reasons, [], `t=${t}`);
+    prev = r.state;
+  }
+  // Stuck: status.md stops changing at t=364. Within idle interval + margin: quiet; past it: reported once.
+  assert.deepEqual(checkProject(project, prev, ...Object.values(at(364 + 44, 364))).reasons, []);
+  const stuck = checkProject(project, prev, ...Object.values(at(364 + 50, 364)));
+  assert.match(stuck.reasons.join("\n"), /STALE: status\.md is 50 min old \(limit 45\)/);
+  assert.deepEqual(checkProject(project, stuck.state, ...Object.values(at(364 + 70, 364))).reasons, []);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("a staleMinutes below the idle interval is raised to it, said to the bot once, and the larger limit applies", async () => {
+  const { checkProject } = await import(path.join(ROOT, "front-agent/botwatch.mjs"));
+  const dir = tmp("af-botstale-");
+  const cfg = (frontAgent, wake) => fs.writeFileSync(path.join(dir, "factory.config.json"), JSON.stringify({ project: { name: "p", humanName: "Hu" }, hosts: { controller: { wake }, frontAgent: { kind: "orca-bot", bot: "b", ...frontAgent } } }));
+  const T0 = Date.UTC(2026, 0, 1), min = 60_000;
+  const read = (age) => ({ now: T0, read: () => ({ host: "local", mtime: T0 / 1000 - age * 60, text: "## Problems\n" }) });
+  const project = { name: "p", dir };
+  cfg({ staleMinutes: 20 });
+  const first = checkProject(project, undefined, T0, read(30).read);
+  assert.match(first.reasons.join("\n"), /CONFIG: hosts\.frontAgent\.staleMinutes is 20, below the Controller's idle wake interval 30 min.*limit is 45 min/);
+  assert.doesNotMatch(first.reasons.join("\n"), /STALE/, "30 min old is healthy for an idle Controller");
+  const again = checkProject(project, first.state, T0 + 5 * min, read(35).read);
+  assert.deepEqual(again.reasons, [], "said once");
+  const stale = checkProject(project, again.state, T0 + 10 * min, read(50).read);
+  assert.deepEqual(stale.reasons.map((r) => r.split(":")[0]), ["STALE"]);
+  // A value at or above the floor, and the default following a larger idleMinutes: nothing to say.
+  cfg({ staleMinutes: 90 });
+  assert.deepEqual(checkProject(project, undefined, T0, read(80).read).reasons, []);
+  cfg({}, { idleMinutes: 60 });
+  assert.deepEqual(checkProject(project, undefined, T0, read(70).read).reasons, []);
+  assert.match(checkProject(project, undefined, T0, read(80).read).reasons.join(), /STALE: status\.md is 80 min old \(limit 75\)/);
+  fs.rmSync(dir, { recursive: true, force: true });
 });

@@ -2,7 +2,7 @@
 // `agentic-factory start` schedules it every 5 minutes, outside any session, so it needs no agent to start it and works
 // with whichever agent sits in front. An alert goes into the Front agent's terminal through Orca once that is idle; until
 // then it waits here and the sidebar shows it. It alerts when "On main", "Needs <human>" or "Problems" change, when the
-// file goes stale (> 25 min), when more worktrees exist than tasks plus a few (cleanup overdue), and with a SUMMARY marker
+// file goes stale (older than hosts.frontAgent.staleMinutes, never below the Controller's wake.idleMinutes + 15; default 45), when more worktrees exist than tasks plus a few (cleanup overdue), and with a SUMMARY marker
 // every 30 minutes if the status changed. A lasting problem is announced once.
 // Config: factory.config.json next to this script or FACTORY_CONFIG. Usage: node statuswatch.mjs
 import "./cli.mjs";
@@ -10,7 +10,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { controllerHost, expand, loadConfig } from "./hosts.mjs";
+import { controllerHost, expand, loadConfig, staleLimit } from "./hosts.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const here = (name) => path.join(HERE, name);
@@ -38,6 +38,7 @@ const cfg = loadConfig(HERE);
 // A bot took over (hosts.frontAgent.kind = orca-bot): a schedule left from before, for example a cron line, stays silent.
 if (cfg.hosts?.frontAgent?.kind === "orca-bot") process.exit(0);
 const host = controllerHost(cfg);
+const { limit: STALE_MIN, note: LIMIT_NOTE } = staleLimit(cfg);
 const ctlDir = cfg.hosts.controller?.controllerDir ?? "~/controller";
 const WORKTREE_MAX = (host.capacity?.suiteWorkersMax ?? cfg.capacity?.suiteWorkersMax ?? 4) + (host.capacity?.readOnlyWorkersMax ?? cfg.capacity?.readOnlyWorkersMax ?? 4) + 2;
 const ws = `${host.workspacesDir ?? "~/orca/workspaces"}/${cfg.project.name}`;
@@ -60,6 +61,9 @@ function probe() {
 // A change is always new. A lasting problem is announced once, not every 5 minutes.
 function check(state) {
   const alerts = [], problems = {};
+  // A staleMinutes below the idle interval is raised, and said once (again when the note changes).
+  if (LIMIT_NOTE && state.limitNote !== LIMIT_NOTE) alerts.push(`CONFIG: ${LIMIT_NOTE}`);
+  state.limitNote = LIMIT_NOTE || undefined;
   try {
     const { mtime, wt, text, health = "" } = probe();
     if (wt > WORKTREE_MAX) problems.cleanup = `CLEANUP: ${wt} worktrees on ${host.name}, nudge the Controller`;
@@ -70,7 +74,7 @@ function check(state) {
     state.firstRun ??= Date.now();
     if (!mtime && Date.now() - state.firstRun < NO_STATUS_GRACE_MS) { /* a fresh start: the Controller has not written it yet */ }
     else if (!mtime) problems.status = `NO STATUS: ${ctlDir}/status.md missing on ${host.name} (Controller not started?)`;
-    else if (ageMin > 25) problems.status = `STALE: status.md is older than 25 min`;
+    else if (ageMin > STALE_MIN) problems.status = `STALE: status.md is older than ${STALE_MIN} min`;
     state.last = now;
     if (Date.now() - (state.lastSummary ?? 0) > SUMMARY_MS && state.summarised !== text) {
       if (state.summarised !== undefined) alerts.push(`SUMMARY due (status age ${Number.isFinite(ageMin) ? ageMin : "?"} min)`);
