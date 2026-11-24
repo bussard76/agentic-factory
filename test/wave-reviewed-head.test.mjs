@@ -375,3 +375,42 @@ test("the handbook and the review protocol say it, and the new script has its us
   assert.match(fs.readFileSync(path.join(ROOT, "controller/integ-wave.sh"), "utf8"), /origin\/<branch>@<sha>/);
   assert.match(fs.readFileSync(path.join(ROOT, "controller/reviewed.mjs"), "utf8"), /^\/\/ Usage: node reviewed\.mjs <task> <review-branch>/);
 });
+
+// The docs-only path as it is on main: a declared documentation ticket, docsonly.mjs run for real, its evidence journaled with a head.
+function docsTicketProject() {
+  const p = project({ docsOnly: { enabled: true } });
+  p.write("docs/tasks/T05-words.md", "# T05: words\n\nStatus: building\nDepends on: nothing\nLevel: 1\nDocumentation only: yes\n\n## Goal\nWords.\n");
+  p.commit("ticket"); p.git(...NOHOOKS, "push", "-q", "origin", "main");
+  const sha = p.task("t05", { "docs/guide.md": "Guide v2\n", "docs/reviews/T05-architecture-spec.md": "# Spec review\n\nVerdict: pass\n", "docs/reports/T05-words.md": "# Report\n" });
+  return { p, sha };
+}
+
+test("docs-only as on main: docsonly.mjs journals the head it checked, the wave binds to it like to a Tester review", () => {
+  const { p, sha } = docsTicketProject();
+  const b = bundle(p);
+  try {
+    const d = b.run("docsonly.mjs", ["T05", "origin/agents/t05"]);
+    assert.equal(d.status, 0, d.stdout + d.stderr);
+    const ev = b.events().find((e) => e.type === "review");
+    assert.equal(ev.head, sha); assert.equal(ev.verdict, "docs-only"); assert.equal(ev.task, "T05");
+    assert.equal(latestReview(fs.readFileSync(path.join(b.ctl, "journal.ndjson"), "utf8"), "t05").head, sha);
+    // unchanged: the wave merges exactly that head
+    assert.equal(b.run("wave.mjs", ["T", "S", "origin/agents/t05"]).status, 0);
+    const log = b.waitEnd(); assert.match(log, new RegExp(`merged origin/agents/t05 at ${sha}`)); assert.match(log, /PUSHED main/);
+  } finally { b.cleanup(); }
+});
+
+test("docs-only as on main: a code commit pushed after the check is not merged, and the check run again no longer says docs-only", () => {
+  const { p, sha } = docsTicketProject();
+  const b = bundle(p);
+  try {
+    assert.equal(b.run("docsonly.mjs", ["T05", "origin/agents/t05"]).status, 0);
+    const code = p.push("t05", { "src/app.js": "export const a = 666;\n" });
+    assert.notEqual(b.run("docsonly.mjs", ["T05", "origin/agents/t05"]).status, 0, "the re-run refuses and journals nothing");
+    assert.equal(b.events().filter((e) => e.type === "review").length, 1);
+    assert.equal(b.run("wave.mjs", ["T", "S", "origin/agents/t05"]).status, 0);
+    const log = b.waitEnd();
+    assert.match(log, /WAVE-STOPPED/); assert.match(log, new RegExp(`reviewed ${sha}, but origin has ${code}`)); assert.doesNotMatch(log, /PUSHED/);
+    assert.equal(p.origin("show", "main:src/app.js"), "export const a = 1;");
+  } finally { b.cleanup(); }
+});
