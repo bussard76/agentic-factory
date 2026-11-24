@@ -667,10 +667,10 @@ function appendGitignore(lines) { const p = ".gitignore"; const cur = fs.existsS
 
 // The Controller's handbook of this project (the copy `update` kept or wrote, which `start` installs): one loud line when it calls
 // cleanup without --apply. A copy changed locally stays on update, so scripts and handbook can disagree without anyone seeing.
-function warnCleanupTrap() {
+function warnCleanupTrap(where = ".factory/controller/CONTROLLER.md", text) {
   const f = ".factory/controller/CONTROLLER.md";
-  const calls = fs.existsSync(f) ? cleanupCallsWithoutApply(fs.readFileSync(f, "utf8")) : [];
-  if (calls.length) say(`\nWARNING: ${f} calls cleanup without --apply (\`${calls[0]}\`): ${CLEANUP_TRAP}.`);
+  const calls = cleanupCallsWithoutApply(text ?? (fs.existsSync(f) ? fs.readFileSync(f, "utf8") : ""));
+  if (calls.length) say(`\nWARNING: ${where} calls cleanup without --apply (\`${calls[0]}\`): ${CLEANUP_TRAP}.`);
 }
 // --- update ----------------------------------------------------------------------------------------
 async function update() {
@@ -1155,12 +1155,13 @@ function cleanupStatus(c) {
   if (out.status !== 0 && !out.stdout) return { unknown: true };
   const [pendingText = "", callsText = ""] = String(out.stdout).split("@@\n");
   const handbookInstalled = callsText.startsWith("present");
-  let since = null; try { since = Date.parse(JSON.parse(pendingText).since) || null; } catch {}
+  let since = null, unknownHosts = []; try { const m = JSON.parse(pendingText); since = Date.parse(m.since) || null; unknownHosts = Array.isArray(m.unknown) ? m.unknown : []; } catch {}
   const w = Number(c.cleanup?.pendingWarnMinutes), warn = Number.isFinite(w) && w > 0 ? w : 30, pendingMin = since ? Math.round((Date.now() - since) / 60000) : null;
   const handbookCalls = cleanupCallsWithoutApply(callsText.replace(/^present\n?/, ""));
   const problem = handbookCalls.length ? `the Controller's CONTROLLER.md calls cleanup without --apply (\`${handbookCalls[0]}\`): ${CLEANUP_TRAP}`
+    : unknownHosts.length ? `the last cleanup run could not determine the state of ${unknownHosts.join(", ")} (Orca's terminal list did not answer), so nothing was cleaned there and it is not known whether anything waits (exit code 3). It clears when a run can look at every host`
     : pendingMin !== null && pendingMin >= warn ? `removable work has waited ${pendingMin} minutes: cleanup ran without --apply, which removes and releases nothing (exit code 3). Run \`node cleanup.mjs --all --prune-remote --apply\` in the Controller directory, and see the Controller's handbook` : null;
-  return { pendingSince: since ? new Date(since).toISOString() : null, pendingMin, warnMin: warn, handbookInstalled, handbookCalls, problem };
+  return { pendingSince: since ? new Date(since).toISOString() : null, pendingMin, warnMin: warn, unknownHosts, handbookInstalled, handbookCalls, problem };
 }
 function removeHeartbeatJob(c, ctl) {
   const label = heartbeatJob(c), plist = launchdPlistPath(label);
@@ -1404,6 +1405,9 @@ async function start() {
     else {
       say(`Controller bundle: ${ctl.name}:${remoteDir}`);
       const s = spawnSync("ssh", [...sshArgsFor(ctl), `for s in ${remoteDir}/skills/*; do n=$(basename "$s"); for t in ~/.claude/skills ~/.agents/skills; do mkdir -p "$t"; [ -e "$t/$n" ] || cp -R "$s" "$t/"; done; done; for p in $(pgrep -f "[b]ash loadlog.sh$" 2>/dev/null); do [ "$(readlink /proc/$p/cwd 2>/dev/null)" = "$(cd ${remoteDir} && pwd)" ] && kill $p; done; pgrep -f "[b]ash ${remoteLoadlog} " >/dev/null || (cd ${remoteDir} && nohup bash ${remoteLoadlog} ${quoted} >/dev/null 2>&1 &); echo ok`], { encoding: "utf8" });
+      // The same check on the handbook as it now lies on the Controller's host.
+      const hb = spawnSync("ssh", [...sshArgsFor(ctl), `grep -o 'node cleanup\\.mjs[^\`]*' "${remoteDir.replace(/^~(?=\/|$)/, "$HOME")}/CONTROLLER.md" 2>/dev/null`], { encoding: "utf8" });
+      warnCleanupTrap(`${ctl.name}:${remoteDir}/CONTROLLER.md`, hb.stdout ?? "");
       s.stdout?.trim().endsWith("ok") ? say(`User-level skills and load log on ${ctl.name}: ok`) : (failed++, say(`User-level skills or load log on ${ctl.name} failed: ${(s.stderr || "").trim().slice(0, 200)}`));
     }
   }

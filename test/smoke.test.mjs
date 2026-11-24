@@ -173,6 +173,14 @@ test("agent entry questions, answers, status and start in an isolated home", asy
     fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
     r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
     assert.equal(r.status, 0, r.stdout + r.stderr); const sshCalls = fs.readFileSync(`${calls}.ssh`, "utf8"); assert.match(sshCalls, /pgrep -f "\[b\]ash \$HOME\/controller\/loadlog\.sh " >\/dev\/null \|\| \(cd ~\/controller && nohup bash \$HOME\/controller\/loadlog\.sh 'project'/); assert.doesNotMatch(sshCalls, /\.local\/bin\/gate/, "a remote start does not touch the shared gate either"); assert.match(sshCalls, /node heartbeat\.mjs/);
+    // A kept older handbook that calls cleanup without --apply is reported for a remote Controller host too, naming the host.
+    const sshFile = path.join(bin, "ssh"), sshOriginal = fs.readFileSync(sshFile, "utf8");
+    fs.writeFileSync(sshFile, sshOriginal.replace("case \"$*\" in ", "case \"$*\" in *'cleanup\\.mjs'*) printf 'node cleanup.mjs --all --prune-remote\\n';; "), { mode: 0o755 });
+    r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
+    assert.match(r.stdout, /WARNING: remote:~\/controller\/CONTROLLER\.md calls cleanup without --apply \(`node cleanup\.mjs --all --prune-remote`\)/, r.stdout);
+    fs.writeFileSync(sshFile, sshOriginal, { mode: 0o755 });
+    r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
+    assert.doesNotMatch(r.stdout, /WARNING: .*calls cleanup without --apply/, "an installed handbook with --apply is not reported");
     // Gates run on every other worker host too (workers, waves, slots): the project's gate goes there, and a failure is a failed start.
     fs.rmSync(`${calls}.ssh`); fs.rmSync(`${calls}.rsync`, { force: true });
     config.hosts.workers.push({ name: "other", kind: "remote", ssh: "fake2", projectsDir: "~/projects", orcaEnvironment: "other-env" }); fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));

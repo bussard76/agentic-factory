@@ -350,3 +350,19 @@ test("F3/F7: update and start say plainly when the kept handbook calls cleanup w
   assert.match(p.cli("doctor").stdout, /info {4}cleanup: not checked, no Controller handbook is installed yet/);
   m.done();
 });
+
+test("status and doctor show a cleanup run that could not determine the state of a host", () => {
+  const m = machine();
+  const p = m.project("theta", {});
+  const ctl = path.join(m.home, "controller-theta");
+  fs.mkdirSync(ctl, { recursive: true });
+  fs.writeFileSync(path.join(ctl, "CONTROLLER.md"), "| `node cleanup.mjs --all --apply` | every cycle |\n");
+  fs.writeFileSync(path.join(ctl, "cleanup-pending.json"), JSON.stringify({ since: new Date().toISOString(), pending: 0, unknown: ["srv"] }));
+  const cl = JSON.parse(p.cli("status", "--json").stdout).setup.cleanup;
+  assert.deepEqual(cl.unknownHosts, ["srv"]);
+  assert.match(cl.problem, /could not determine the state of srv.*exit code 3/);
+  assert.match(p.cli("doctor").stdout, /MISSING cleanup: the last cleanup run could not determine the state of srv/);
+  fs.rmSync(path.join(ctl, "cleanup-pending.json"));
+  assert.equal(JSON.parse(p.cli("status", "--json").stdout).setup.cleanup.problem, null);
+  m.done();
+});

@@ -91,27 +91,40 @@ test("nothing to remove is exit code 0 without --apply, and says so", () => {
   h.done();
 });
 
-test("--prune-remote also deletes merged status-wave-<n> branches once no wave runs, and keeps unmerged ones", () => {
+test("cleanup never deletes a status-wave branch, whatever the options; it lists the merged ones as left over; agents/ branches still go", () => {
   const h = setup();
-  const remote = () => execFileSync("git", ["-C", h.bare, "branch", "--list"], { encoding: "utf8" }).split("\n").map((s) => s.replace(/^[* ]+/, "")).filter(Boolean).sort();
-  // status-wave-1 and agents/x are merged (at main); status-wave-2 carries a commit that main does not have.
+  const remote = () => execFileSync("git", ["-C", h.bare, "branch", "--list"], { encoding: "utf8" }).split("\n").map((x) => x.replace(/^[* ]+/, "")).filter(Boolean).sort();
   h.git("push", "-q", "origin", "origin/main:refs/heads/status-wave-1", "origin/main:refs/heads/agents/x");
   h.git("checkout", "-q", "-b", "status-wave-2"); h.git("commit", "-q", "--allow-empty", "-m", "wave 2"); h.git("push", "-q", "origin", "status-wave-2"); h.git("checkout", "-q", "main");
   h.git("fetch", "-q", "origin");
-  // A wave that runs (its process is alive) keeps its status branch.
-  fs.writeFileSync(path.join(h.ctl, "wave-handle.txt"), `local pid:${process.pid}\n`);
-  const running = h.run("--apply", "--prune-remote");
-  assert.equal(running.status, 0, running.stdout + running.stderr);
-  assert.deepEqual(remote(), ["main", "status-wave-1", "status-wave-2"], "agents/x goes, status-wave-1 waits for its wave");
-  // The wave is over (a process that no longer exists): the merged status branch goes, the unmerged one stays.
-  const gone = spawnSync("node", ["--version"]).pid;
-  fs.writeFileSync(path.join(h.ctl, "wave-handle.txt"), `local pid:${gone}\n`);
-  const dry = h.run("--prune-remote");
-  assert.match(dry.stdout, /would delete the merged branch origin\/status-wave-1/);
-  assert.doesNotMatch(dry.stdout, /status-wave-2/);
-  assert.deepEqual(remote(), ["main", "status-wave-1", "status-wave-2"], "a run without --apply deletes nothing");
+  const dead = spawnSync("node", ["--version"]).pid;
+  const states = [null, "b term_wave\n", `local pid:${dead}\n`, `local pid:${process.pid}\n`];   // no wave file, another host, a finished wave, a live one
+  for (const handle of states) {
+    const file = path.join(h.ctl, "wave-handle.txt");
+    if (handle === null) fs.rmSync(file, { force: true }); else fs.writeFileSync(file, handle);
+    for (const args of [["--apply", "--prune-remote"], ["--apply", "--prune-remote", "--pushed"], ["--apply", "--prune-remote", "--all"], ["--prune-remote"], ["--dry", "--prune-remote"]]) {
+      const r = h.run(...args);
+      assert.ok(remote().includes("status-wave-1") && remote().includes("status-wave-2"), `${args.join(" ")} with wave file ${JSON.stringify(handle)} deleted a status-wave branch`);
+      assert.doesNotMatch(r.stdout, /would delete the merged branch origin\/status-wave/);
+    }
+  }
+  assert.ok(!remote().includes("agents/x"), "a merged branch with the prefix is still pruned");
+  const r = h.run("--prune-remote");
+  assert.match(r.stdout, /left over, not removed by cleanup: origin\/status-wave-1 \(merged into origin\/main\)\. When no wave needs it: git push origin --delete status-wave-1/);
+  assert.doesNotMatch(r.stdout, /left over.*status-wave-2/, "an unmerged one is not listed");
+  assert.equal(r.stdout.split("\n").filter((l) => /left over.*status-wave-1/.test(l)).length, 1, "listed once");
+  h.done();
+});
+
+test("cleanup with an empty branch prefix still leaves status-wave branches alone", () => {
+  const h = setup();
+  const cfgFile = path.join(h.ctl, "factory.config.json"), cfg = JSON.parse(fs.readFileSync(cfgFile, "utf8"));
+  cfg.project.branchPrefix = ""; fs.writeFileSync(cfgFile, JSON.stringify(cfg));
+  h.git("push", "-q", "origin", "origin/main:refs/heads/status-wave-3", "origin/main:refs/heads/other"); h.git("fetch", "-q", "origin");
   assert.equal(h.run("--apply", "--prune-remote").status, 0);
-  assert.deepEqual(remote(), ["main", "status-wave-2"]);
+  const remote = execFileSync("git", ["-C", h.bare, "branch", "--list"], { encoding: "utf8" });
+  assert.match(remote, /status-wave-3/);
+  assert.doesNotMatch(remote, /other/);
   h.done();
 });
 
@@ -121,31 +134,6 @@ test("the cleanup call in the Controller's handbook and the coordinator template
     assert.ok(calls.length, rel);
     for (const c of calls) assert.match(c, /--apply|--help/, `${rel}: ${c}`);
   }
-});
-
-test("F1: status-wave branches are pruned only when it is known that no wave runs anywhere this run covers", () => {
-  const h = setup();
-  const remote = () => execFileSync("git", ["-C", h.bare, "branch", "--list"], { encoding: "utf8" }).split("\n").map((x) => x.replace(/^[* ]+/, "")).filter(Boolean).sort();
-  h.git("push", "-q", "origin", "origin/main:refs/heads/status-wave-1"); h.git("fetch", "-q", "origin");
-  const handle = path.join(h.ctl, "wave-handle.txt");
-  // No handle file: not known.
-  let r = h.run("--apply", "--prune-remote");
-  assert.match(r.stdout, /kept the merged status-wave branches on origin: it is not known that no wave runs \(no readable wave-handle\.txt\)/);
-  assert.ok(remote().includes("status-wave-1"));
-  // The newest wave runs on host b; a run that covers only local cannot see it.
-  fs.writeFileSync(handle, "b term_wave\n");
-  r = h.run("--apply", "--prune-remote", "--on", "local");
-  assert.match(r.stdout, /ran on b, which this run does not cover; use --all/);
-  assert.ok(remote().includes("status-wave-1"), "--on must not defeat the guard");
-  // Host unknown to the configuration.
-  fs.writeFileSync(handle, "elsewhere term_wave\n");
-  assert.match(h.run("--apply", "--prune-remote").stdout, /not a configured host/);
-  assert.ok(remote().includes("status-wave-1"));
-  // Known: a finished local process on a host the run covers.
-  fs.writeFileSync(handle, `local pid:${spawnSync("node", ["--version"]).pid}\n`);
-  assert.equal(h.run("--apply", "--prune-remote", "--all").status, 0);
-  assert.ok(!remote().includes("status-wave-1"));
-  h.done();
 });
 
 test("F2: a run without --apply says its refs are as of the last fetch, with the time, and --apply fetches first", () => {
@@ -173,9 +161,14 @@ test("F4: when Orca's terminal list does not answer, the state is unknown, never
   assert.match(last, /STATE UNKNOWN for local/);
   assert.doesNotMatch(r.stdout, /there is nothing to remove or release/);
   assert.ok(fs.existsSync(marker), "unknown does not clear the signal");
+  assert.deepEqual(JSON.parse(fs.readFileSync(marker, "utf8")).unknown, ["local"], "the marker names the host it could not look at");
   const applied = h.run("--apply");
-  assert.match(applied.stdout, /STATE UNKNOWN for local.*Nothing was done there/);
-  assert.ok(fs.existsSync(marker), "nor does an --apply that could not look");
+  assert.equal(applied.status, 3, applied.stdout + applied.stderr);
+  assert.match(applied.stdout, /STATE UNKNOWN for local.*Nothing was done there\. Exit code 3\./);
+  assert.deepEqual(JSON.parse(fs.readFileSync(marker, "utf8")).unknown, ["local"], "an --apply that could not look leaves the signal for status and doctor");
+  fs.rmSync(path.join(h.dir, "list-fails"));
+  assert.equal(h.run("--apply").status, 0);
+  assert.ok(!fs.existsSync(marker), "a run that can look at every host clears it");
   h.done();
 });
 
