@@ -95,7 +95,7 @@ test("the callers use the project's own gate by an absolute path from its own co
   // the wave script never guesses a gate on the PATH or in ~/.local/bin: without GATE it uses the gate next to it, or stops
   const dir = tmp("wave-gate"); fs.copyFileSync(path.join(ROOT, "controller/integ-wave.sh"), path.join(dir, "integ-wave.sh"));
   const r = spawnSync("bash", [path.join(dir, "integ-wave.sh"), "t", "s", "origin/x"], { encoding: "utf8", env: { PATH: process.env.PATH, HOME: dir } });
-  assert.notEqual(r.status, 0); assert.match(r.stderr, /is not a command on this host/);
+  assert.notEqual(r.status, 0); assert.match(r.stderr, /is not an executable file on this host/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

@@ -327,7 +327,7 @@ function stagedSafety() {
 // --- static-checks -----------------------------------------------------------------------------
 function staticChecks() {
   const paths = stagedPaths();
-  if (isDocsOnly(paths)) { console.log("[factory] documentation-only commit: static checks skipped"); return; }
+  if (isDocsOnly(paths)) { console.log("[factory] only documentation staged: typecheck and lint skipped for this commit (a built-in list of the commit hook, not the docs-only gate path; the wave still runs the full gate for code)"); return; }
   // A clean merge commit (the staged tree IS the automatic merge of HEAD and MERGE_HEAD, nothing edited by hand): the
   // merged commits passed these checks on their branches and the wave runs the full gates right after. A merge with
   // hand edits (conflict resolution, a smuggled file) is checked like any commit.

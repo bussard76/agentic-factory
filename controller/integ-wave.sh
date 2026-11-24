@@ -8,11 +8,15 @@
 # Env: WAVE_LOG_DIR (optional), MAIN, INSTALL_CMD, VERIFY_CMD (required, non-empty), E2E_CMD (optional), GATE (path to gate), TRAILER (optional)
 # Docs-only path (docs/testing.md): with docsOnly.enabled in origin/MAIN's factory.config.json, a wave that changes
 # documentation only runs commands.formatCheck and commands.markdownCheck from that config instead of verify and e2e.
+# Every other wave runs commands.verify (and commands.e2e) through GATE on the merged candidate and pushes only on success:
+# no earlier result (a Developer's or Tester's run, a cached one, an evidence file) and no option or variable replaces it.
 set -uo pipefail
 # Step logs stay inspectable after the wave; wave.mjs sets a directory per project, so waves of two projects on one host never mix.
 LOGS="${WAVE_LOG_DIR:-${TMPDIR:-/tmp}/wave-$$}"; mkdir -p "$LOGS"
 TITLE="$1"; SUMMARY="$2"; shift 2; BR="$*"
-MAIN="${MAIN:-main}"; GATE="${GATE:-$(cd "$(dirname "$0")" 2>/dev/null && pwd)/gate}"; command -v "$GATE" >/dev/null || { echo "GATE ($GATE) is not a command on this host. GATE is this project's gate, <controller dir>/gate: wave.mjs sets it, and agentic-factory start copies it to every worker host; without GATE the gate next to this script is used." >&2; exit 1; }
+MAIN="${MAIN:-main}"; GATE="${GATE:-$(cd "$(dirname "$0")" 2>/dev/null && pwd)/gate}"
+# The gate is this project's own, <controller dir>/gate, by absolute path (wave.mjs sets it). A bare name that would be looked up on the PATH is refused.
+case "$GATE" in /*) [ -f "$GATE" ] && [ -x "$GATE" ] || { echo "GATE ($GATE) is not an executable file on this host. GATE is this project's gate, <controller dir>/gate: wave.mjs sets it, and agentic-factory start copies it to every worker host; without GATE the gate next to this script is used." >&2; exit 1; } ;; *) echo "GATE ($GATE) is not an absolute path. GATE is this project's gate, <controller dir>/gate: wave.mjs sets it by absolute path; a gate found on the PATH could be another project's." >&2; exit 1 ;; esac
 [ -n "${VERIFY_CMD:-}" ] || { echo "VERIFY-MISSING: commands.verify is empty; a wave without a verification command is not allowed"; exit 1; }
 [ -n "$BR" ] || { echo "NO-BRANCHES"; exit 1; }
 # This script resets and cleans the directory it runs in (untracked files included). Only the integration worktree.

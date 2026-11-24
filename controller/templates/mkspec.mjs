@@ -121,7 +121,7 @@ ${REVIEW_RULE}
 Steps:
 1. git fetch origin; check out origin/${branch} at exactly ${sha} (state the full SHA). Read ${taskWhere(ref)} and the last review ${lv.file} on origin/${lv.branch}.
 2. Classify every finding of that review as 'functional defect' or 'debt candidate'. Do not invent new findings beyond a quick check of the main flows.
-3. The last full gates on this commit are in that review; do not rerun the full suites. Run the browser specs or API checks that cover the task's main flows once and look at the flows.
+3. The last full gates on this commit are in that review; do not rerun the full suites (that is no proof for the wave, which runs the full gate itself). Run the browser specs or API checks that cover the task's main flows once and look at the flows.
 4. Write docs/reviews/${T}-review-final.md: 'Reviewed commit: <full SHA>', 'Verdict: pass|fail', the classification table, the debt candidates, and one sentence ${HUMAN} can try on the preview for each open point. Commit only that file on branch ${BRANCH_PREFIX}${T.toLowerCase()}-review-final from ${sha}, never --no-verify, push only that branch.
 Reply: worker_done with verdict and --report-path docs/reviews/${T}-review-final.md.`;
   },

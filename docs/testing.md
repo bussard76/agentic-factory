@@ -21,9 +21,11 @@ Every full gate goes through `gate <command>` (`controller/gate.mjs`, Node only;
 
 Developers' focused checks run **without** the gate; they are cheap.
 
+**The wave always runs the full gate itself.** For a change that is not documentation only (by the check below), the wave runs `commands.verify` (and `commands.e2e`, when set) through `<controllerDir>/gate` on the merged candidate and pushes only when it passes. No earlier result stands in for that run: not a Developer's or a Tester's gate run, not a result cached by tree or commit, no evidence file, no option or environment variable. The Developer and the Tester may run the gate for their own feedback; that run is not proof for the wave, and the wave does not look at it. A gate run takes minutes at most, and a record of an earlier run would be a source of error of its own. `GATE`, the path the wave runs, must be an absolute path to an executable file; the wave refuses a bare name that would be looked up on the `PATH`. The only exception is the documentation-only path below.
+
 ## Documentation-only changes
 
-With `docsOnly.enabled: true` in the `factory.config.json` on the main branch, a change that touches documentation only skips the full gates and the separate review. Off by default: without the key every change takes the full path, as before. The Controller and the wave read the setting from `origin/<main>`, so it takes effect once it is on the main branch; no `agentic-factory update` is needed.
+With `docsOnly.enabled: true` in the `factory.config.json` on the main branch, a change that touches documentation only skips the full gates and the separate review (the one case in which the wave does not run the full gate). Off by default: without the key every change takes the full path, as before. The Controller and the wave read the setting from `origin/<main>`, so it takes effect once it is on the main branch; no `agentic-factory update` is needed.
 
 **The check** is `node tools/factory-guardrails.mjs docs-only`, run at the repository root (with the untracked standard: `.git/factory/hooks/factory-guardrails.mjs`). It fails closed:
 

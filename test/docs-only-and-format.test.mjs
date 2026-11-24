@@ -10,6 +10,7 @@ import path from "node:path";
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const GUARDRAILS = path.join(ROOT, "templates/tools/factory-guardrails.mjs");
 const NOHOOKS = ["-c", "core.hooksPath=/dev/null"];
+const CLEAN_ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("ORCA_")));
 
 // A repo with a bare origin, main pushed, the factory hooks armed. cfg is written as factory.config.json (committed).
 function repo(cfg = {}) {
@@ -220,13 +221,13 @@ test("the push gate exempts a configured docs allowlist only when the replaced t
 });
 
 // --- the wave ----------------------------------------------------------------------------------
-function wave(r, branches) {
+function wave(r, branches, { gate: gateBody = "#!/bin/sh\nexit 1\n", env = {}, logs = path.join(r.base, `logs-${Date.now()}`), verify = "exit 1" } = {}) {
   for (const b of branches) r.git("push", "-q", "origin", b);
   const integ = path.join(r.base, "integration");
   r.git("worktree", "add", "-q", "-B", "integration", integ, "origin/main");
-  const gate = path.join(r.base, "gate"); fs.writeFileSync(gate, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const gate = path.join(r.base, "gate"); fs.writeFileSync(gate, gateBody, { mode: 0o755 });
   const out = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "W", "wave", ...branches.map((b) => `origin/${b}`)], { cwd: integ, encoding: "utf8",
-    env: { ...process.env, MAIN: "main", INSTALL_CMD: "", VERIFY_CMD: "exit 1", E2E_CMD: "", GATE: gate, TRAILER: "", WAVE_WORKTREE_OK: "1", WAVE_LOG_DIR: path.join(r.base, `logs-${Date.now()}`) } });
+    env: { ...CLEAN_ENV, MAIN: "main", INSTALL_CMD: "", VERIFY_CMD: verify, E2E_CMD: "", GATE: gate, TRAILER: "", WAVE_WORKTREE_OK: "1", WAVE_LOG_DIR: logs, ...env } });
   r.git("worktree", "remove", "--force", integ);
   r.git("fetch", "-q", "origin");
   return out;
@@ -285,7 +286,109 @@ test("a wave with code, or without docsOnly enabled on main, runs the full gates
   assert.doesNotMatch(out.stdout, /GATE-PATH/); assert.match(out.stdout, /verify (PASS|FAIL)/, "existing configs: the full gate as before, also when the wave itself sets the key");
 });
 
-// --- format-staged -----------------------------------------------------------------------------
+// --- the wave always runs the full gate for code ------------------------------------------------
+// A task branch with code plus the review branch of its passing round, as the push gate wants them.
+function reviewedCode(r, name, extra = () => {}) {
+  const id = name.replace(/\W/g, "_");
+  r.git("checkout", "-q", "-b", name, "main"); r.write(`src/${id}.js`, `export const x = "${name}";\n`); extra(); r.git("add", "-A"); r.git(...NOHOOKS, "commit", "-qm", name);
+  const sha = r.git("rev-parse", "HEAD");
+  r.git("checkout", "-q", "-b", `${name}-review-1`); r.write(`docs/reviews/${id}-review-1.md`, `Verdict: pass\nReviewed commit: ${sha}\n`);
+  r.git("add", "-A"); r.git(...NOHOOKS, "commit", "-qm", `${name} review`); r.git("checkout", "-q", "main");
+  return [name, `${name}-review-1`];
+}
+// A gate that records every call (its arguments) and answers with the given exit code.
+const recordingGate = (r, code) => `#!/bin/sh\necho "$@" >> ${path.join(r.base, "gate-calls")}\nexit ${code}\n`;
+const gateCalls = (r) => { try { return fs.readFileSync(path.join(r.base, "gate-calls"), "utf8").trim().split("\n").filter(Boolean); } catch { return []; } };
+const docsRepo = () => { const r = repo(); r.setMain(checks(r)); return r; };
+
+test("a code change always runs the full gate in the wave, whatever earlier results, files or variables exist", () => {
+  const r = docsRepo();
+  const decoys = { GATE_CACHE: "1", GATE_RESULT: "pass", GATE_SKIP: "1", SKIP_GATE: "1", WAVE_SKIP_GATE: "1", WAVE_GATE_PASSED: "1", FACTORY_GATE_REUSE: "1", CI: "true", VERIFIED_TREE: "*" };
+  const logs = path.join(r.base, "wave-logs"); fs.mkdirSync(logs, { recursive: true });
+  // earlier results where a lazy implementation might look: the step logs of an earlier wave, a result file next to them
+  fs.writeFileSync(path.join(logs, "wave-verify.log"), "verify PASS\n"); fs.writeFileSync(path.join(logs, "gate-result.json"), JSON.stringify({ verdict: "pass" }));
+  const t1 = reviewedCode(r, "agents/t1", () => { r.write("gate-result.json", JSON.stringify({ verdict: "pass", tree: "any" })); r.write("docs/evidence-verify-pass.md", "verify PASS, e2e PASS\n"); });
+  // the gate fails: no push, and main is where it was
+  const before = r.git("rev-parse", "origin/main");
+  let out = wave(r, t1, { gate: recordingGate(r, 1), env: decoys, logs, verify: "echo verify-cmd" });
+  assert.notEqual(out.status, 0); assert.match(out.stdout, /verify FAIL/); assert.doesNotMatch(out.stdout, /PUSHED/);
+  assert.equal(r.git("rev-parse", "origin/main"), before, "a failing gate blocks the push");
+  assert.deepEqual(gateCalls(r), ["bash -c echo verify-cmd"]);
+  // the same candidate again, with the earlier (failed) run's logs in place: it is gated again, and pushed on success
+  out = wave(r, t1, { gate: recordingGate(r, 0), env: decoys, logs, verify: "echo verify-cmd" });
+  assert.equal(out.status, 0, out.stdout + out.stderr); assert.match(out.stdout, /verify PASS/); assert.match(out.stdout, /PUSHED main/);
+  assert.equal(gateCalls(r).length, 2, "no result by tree is reused");
+  assert.notEqual(r.git("rev-parse", "origin/main"), before);
+  // a second code change: one more full gate
+  const t2 = reviewedCode(r, "agents/t2");
+  out = wave(r, t2, { gate: recordingGate(r, 0), env: decoys, verify: "echo verify-cmd" });
+  assert.match(out.stdout, /PUSHED main/); assert.equal(gateCalls(r).length, 3);
+});
+
+test("a failing gate blocks the push for a code change, also with docsOnly enabled and a docs file in the wave", () => {
+  const r = docsRepo();
+  const t = reviewedCode(r, "agents/t1", () => r.write("docs/guide.md", "v2\n"));
+  const before = r.git("rev-parse", "origin/main");
+  const out = wave(r, t, { gate: recordingGate(r, 3), verify: "true" });
+  assert.notEqual(out.status, 0); assert.match(out.stdout, /GATE-PATH full/); assert.match(out.stdout, /verify FAIL/); assert.doesNotMatch(out.stdout, /PUSHED/);
+  assert.equal(r.git("rev-parse", "origin/main"), before); assert.equal(gateCalls(r).length, 1);
+  assert.equal(fs.existsSync(path.join(r.base, "marks")), false, "the docs checks did not stand in for the gate");
+});
+
+test("the wave's gate is its own, by absolute path: a bare name or a missing file stops the wave before anything is merged", () => {
+  const r = repo(); const t = reviewedCode(r, "agents/t1");
+  for (const r2 of t) r.git("push", "-q", "origin", r2);
+  const integ = path.join(r.base, "integration");
+  r.git("worktree", "add", "-q", "-B", "integration", integ, "origin/main");
+  for (const bad of ["gate", "env", "./gate", path.join(r.base, "nope")]) {
+    const out = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "W", "wave", ...t.map((b) => `origin/${b}`)], { cwd: integ, encoding: "utf8", env: { ...CLEAN_ENV, MAIN: "main", VERIFY_CMD: "true", GATE: bad, WAVE_WORKTREE_OK: "1", WAVE_LOG_DIR: path.join(r.base, "l") } });
+    assert.notEqual(out.status, 0, bad); assert.match(out.stderr, /GATE \(/); assert.doesNotMatch(out.stdout, /merged|PUSHED/);
+  }
+  r.git("worktree", "remove", "--force", integ);
+});
+
+test("only the docs-only check skips the full gate: not docs-only, unclear, a missing check and no configured checks all run it", () => {
+  // docs-only and decided so by main's check: the gate is not called at all
+  let r = docsRepo(); branch(r, "agents/d1", () => r.write("docs/guide.md", "v2\n"));
+  let out = wave(r, ["agents/d1"], { gate: recordingGate(r, 1) });
+  assert.equal(out.status, 0, out.stdout); assert.match(out.stdout, /GATE-PATH docs-only/); assert.deepEqual(gateCalls(r), []);
+  // docs-only but no docs checks configured: full gate
+  r = repo({ docsOnly: { enabled: true } }); branch(r, "agents/d1", () => r.write("docs/guide.md", "v2\n"));
+  out = wave(r, ["agents/d1"], { gate: recordingGate(r, 0) });
+  assert.match(out.stdout, /GATE-PATH full: docs-only, but neither/); assert.equal(gateCalls(r).length, 1);
+  // docsOnly off on main: a docs change takes the full gate as before
+  r = repo({ commands: { formatCheck: "true" } }); branch(r, "agents/d1", () => r.write("docs/guide.md", "v2\n"));
+  out = wave(r, ["agents/d1"], { gate: recordingGate(r, 0) });
+  assert.doesNotMatch(out.stdout, /GATE-PATH docs-only/); assert.equal(gateCalls(r).length, 1);
+  // an unclear verdict (an invalid allowlist on main): full gate
+  r = repo(); r.setMain({ ...checks(r), docsOnly: { enabled: true, paths: ["**"] } }); branch(r, "agents/d1", () => r.write("docs/guide.md", "v2\n"));
+  out = wave(r, ["agents/d1"], { gate: recordingGate(r, 0) });
+  assert.match(out.stdout, /verdict=unclear/); assert.match(out.stdout, /GATE-PATH full/); assert.equal(gateCalls(r).length, 1);
+  // mixed with code (not docs-only): full gate
+  r = docsRepo(); branch(r, "agents/d1", () => { r.write("docs/guide.md", "v2\n"); r.write("src/app.js", "export const a = 2;\n"); });
+  out = wave(r, ["agents/d1"], { gate: recordingGate(r, 0) });
+  assert.match(out.stdout, /GATE-PATH full/); assert.equal(gateCalls(r).length, 1);
+});
+
+test("nothing in the wave names a switch, cache or reuse of the gate", () => {
+  for (const f of ["controller/integ-wave.sh", "controller/wave.mjs", "controller/gate.mjs", "controller/wavewait.mjs"]) {
+    const src = fs.readFileSync(path.join(ROOT, f), "utf8");
+    assert.doesNotMatch(src, /GATE_(CACHE|SKIP|REUSE|RESULT)|SKIP_GATE|WAVE_SKIP|gate[ -]cache|tree[ -]cache|reuse[sd]? (the )?gate|gate (result )?reuse/i, f);
+  }
+});
+
+test("the commit hook's docs shortcut says what it is, with docsOnly on or off", () => {
+  for (const cfg of [{}, { docsOnly: { enabled: true } }]) {
+    const r = repo(cfg); r.write("docs/guide.md", "v2\n"); r.git("add", "-A");
+    const out = spawnSync("git", ["commit", "-qm", "docs"], { cwd: r.dir, encoding: "utf8", env: CLEAN_ENV });
+    assert.equal(out.status, 0, out.stdout + out.stderr);
+    const text = out.stdout + out.stderr;
+    assert.match(text, /only documentation staged: typecheck and lint skipped for this commit/); assert.match(text, /not the docs-only gate path/); assert.match(text, /full gate for code/);
+    assert.doesNotMatch(text, /documentation-only commit/);
+  }
+});
+
+// --- format-staged-----------------------------------------------------------------------------
 // The stand-in formatter: replaces "messy" by "tidy" in each file it gets, logs its arguments, fails on "broken".
 function formatter(r, { slow = false } = {}) {
   const f = path.join(r.base, "fmt.mjs"), log = path.join(r.base, "fmt.log");
