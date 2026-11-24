@@ -1,4 +1,5 @@
 // End-to-end smoke test: init in a fresh repo, hooks bite, controller scripts run. `npm test` runs it.
+import "./support/safe-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
@@ -610,7 +611,11 @@ test("controller scripts run against the generated config", () => {
   for (const f of ["AGENTS.md", "docs/coordinator.md", "docs/review-protocol.md", "docs/architect-protocol.md", "docs/dev-workflow.md", ".factory/controller/CONTROLLER.md"]) assert.doesNotMatch(fs.readFileSync(path.join(tmp, f), "utf8"), /\{\{[A-Z0-9_]+\}\}/, f);
   assert.match(run("templates/mkspec.mjs", "steward", "Wave 1"), /steward/);
   run("journal.mjs", "decision", "T01", "note=x");
-  assert.match(run("cleanup.mjs", "--dry"), /cleanup \(dry\)/);
+  // Orca does not answer here (it is `false`): the state is unknown, which is exit code 3 and never "nothing to remove".
+  const unknown = spawnSync("node", ["cleanup.mjs", "--dry"], { cwd: ctl, encoding: "utf8", env });
+  assert.equal(unknown.status, 3, unknown.stdout + unknown.stderr);
+  assert.match(unknown.stdout, /cleanup \(dry\)/);
+  assert.match(unknown.stdout, /NOT KNOWN WHETHER ANYTHING WAITS/);
   assert.match(run("calibrate-models.mjs"), /no change|updated/);
   assert.match(run("calibrate-models.mjs", "--days", "3"), /no change|updated/);
 });

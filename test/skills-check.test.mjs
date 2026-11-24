@@ -1,4 +1,5 @@
 // scripts/skills-check.mjs against a fake upstream on disk: it reports, applies only on request, and never executes upstream content.
+import "./support/safe-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";

@@ -665,6 +665,13 @@ function walk(dir, base = dir) { return fs.readdirSync(dir, { withFileTypes: tru
 const IGNORES = (node) => [".factory/new/", ".factory/controller/", ".factory/front-agent/", ".factory/server/", ".build/", ".env", ".env.*", "!.env.example", ".scratch/", ...(node ? ["node_modules/"] : [])];
 function appendGitignore(lines) { const p = ".gitignore"; const cur = fs.existsSync(p) ? fs.readFileSync(p, "utf8") : ""; const add = lines.filter((l) => !cur.split("\n").includes(l)); if (add.length) fs.writeFileSync(p, cur + (cur.endsWith("\n") || !cur ? "" : "\n") + add.join("\n") + "\n"); }
 
+// The Controller's handbook of this project (the copy `update` kept or wrote, which `start` installs): one loud line when it calls
+// cleanup without --apply. A copy changed locally stays on update, so scripts and handbook can disagree without anyone seeing.
+function warnCleanupTrap() {
+  const f = ".factory/controller/CONTROLLER.md";
+  const calls = fs.existsSync(f) ? cleanupCallsWithoutApply(fs.readFileSync(f, "utf8")) : [];
+  if (calls.length) say(`\nWARNING: ${f} calls cleanup without --apply (\`${calls[0]}\`): ${CLEANUP_TRAP}.`);
+}
 // --- update ----------------------------------------------------------------------------------------
 async function update() {
   if (!fs.existsSync("factory.config.json")) { say("No factory.config.json here. Run init first."); process.exit(1); }
@@ -732,6 +739,7 @@ async function initNonInteractiveRefresh() {
   // core.hooksPath is per clone, not committed. own mode keeps its own setting.
   if (!minimal(c) && mode !== "own" && fs.existsSync(path.join(hdir, "pre-commit"))) sh("git", ["config", "core.hooksPath", c.hooks.hooksPath]);
   say(`${written} updated, ${kept} kept (locally changed). Review .factory/new/ and merge what you want.`);
+  warnCleanupTrap();
 }
 
 // --- doctor ----------------------------------------------------------------------------------------
@@ -755,7 +763,7 @@ function doctor() {
     else if (!hb.installed) info("heartbeat not scheduled yet (the Controller is not started: run start)");
     else bad("heartbeat not scheduled: nothing wakes the Controller from outside, so finished workers wait for a person (run start; if that fails it says why)");
   }
-  { const cl = cleanupStatus(c); if (cl.problem) bad(`cleanup: ${cl.problem}`); else if (!cl.unknown) ok("cleanup: no removable work waits for an --apply"); }
+  { const cl = cleanupStatus(c); if (cl.problem) bad(`cleanup: ${cl.problem}`); else if (cl.unknown) info("cleanup: the Controller's host did not answer, so it is not known whether the handbook calls cleanup with --apply"); else if (!cl.handbookInstalled) info("cleanup: not checked, no Controller handbook is installed yet (run start)"); else ok("cleanup: the handbook calls it with --apply and no removable work waits"); }
   if (!heartbeatOn(c) && c.hosts.controller.heartbeat === false) info("heartbeat off (hosts.controller.heartbeat is false): you wake the Controller yourself");
   if (!["terminal", "orca-bot"].includes(frontKind(c))) bad(`hosts.frontAgent.kind "${frontKind(c)}" (terminal or orca-bot)`);
   if (frontKind(c) === "orca-bot") {
@@ -1136,18 +1144,23 @@ function heartbeatStatus(c) {
 // CONTROLLER.md calls it without --apply and silently stops cleaning up. Two signs: the installed handbook's own calls, and
 // cleanup-pending.json, which a run without --apply leaves when it found something to remove (--apply deletes it).
 // cleanup.pendingWarnMinutes (default 30) is how long removable work may wait before this reports it.
+// The calls of cleanup.mjs in a handbook that do not clean up: no --apply, and not a call that only looks (--help, or an unbracketed
+// --dry; the old handbook's `[--dry]` is an optional flag of a call that is meant to clean up).
+const cleanupCallsWithoutApply = (text) => [...String(text).matchAll(/node cleanup\.mjs[^`\n]*/g)].map((m) => m[0].trim()).filter((s) => !/--apply\b|--help\b|(?<!\[)--dry\b/.test(s));
+const CLEANUP_TRAP = "cleanup deletes only with --apply, so this handbook cleans up nothing (every cycle exits with code 3). A CONTROLLER.md you edited stays on update and its new version lies in .factory/new/.factory/controller/CONTROLLER.md: merge it, or add --apply to the call, then run start";
 function cleanupStatus(c) {
   const ctl = controllerHost(c) ?? { kind: "local", name: "local" };
   const dir = heartbeatDir(c).replace(/^~(?=\/|$)/, "$HOME");
-  const out = onController(ctl, `cat "${dir}/cleanup-pending.json" 2>/dev/null; echo @@; grep -o 'node cleanup\\.mjs[^\`]*' "${dir}/CONTROLLER.md" 2>/dev/null`);
+  const out = onController(ctl, `cat "${dir}/cleanup-pending.json" 2>/dev/null; echo @@; if [ -f "${dir}/CONTROLLER.md" ]; then echo present; grep -o 'node cleanup\\.mjs[^\`]*' "${dir}/CONTROLLER.md" 2>/dev/null; else echo absent; fi`);
   if (out.status !== 0 && !out.stdout) return { unknown: true };
   const [pendingText = "", callsText = ""] = String(out.stdout).split("@@\n");
+  const handbookInstalled = callsText.startsWith("present");
   let since = null; try { since = Date.parse(JSON.parse(pendingText).since) || null; } catch {}
-  const warn = Number(c.cleanup?.pendingWarnMinutes ?? 30), pendingMin = since ? Math.round((Date.now() - since) / 60000) : null;
-  const handbookCalls = callsText.split("\n").map((l) => l.trim()).filter((l) => l && !/--apply\b|--help\b/.test(l));
-  const problem = handbookCalls.length ? `the Controller's CONTROLLER.md calls cleanup without --apply (\`${handbookCalls[0]}\`), and cleanup deletes only with --apply, so nothing is cleaned up. A handbook you edited stays on update and its new version lies in .factory/new/.factory/controller/CONTROLLER.md: merge it (or add --apply to the call), then run start`
+  const w = Number(c.cleanup?.pendingWarnMinutes), warn = Number.isFinite(w) && w > 0 ? w : 30, pendingMin = since ? Math.round((Date.now() - since) / 60000) : null;
+  const handbookCalls = cleanupCallsWithoutApply(callsText.replace(/^present\n?/, ""));
+  const problem = handbookCalls.length ? `the Controller's CONTROLLER.md calls cleanup without --apply (\`${handbookCalls[0]}\`): ${CLEANUP_TRAP}`
     : pendingMin !== null && pendingMin >= warn ? `removable work has waited ${pendingMin} minutes: cleanup ran without --apply, which removes and releases nothing (exit code 3). Run \`node cleanup.mjs --all --prune-remote --apply\` in the Controller directory, and see the Controller's handbook` : null;
-  return { pendingSince: since ? new Date(since).toISOString() : null, pendingMin, warnMin: warn, handbookCalls, problem };
+  return { pendingSince: since ? new Date(since).toISOString() : null, pendingMin, warnMin: warn, handbookInstalled, handbookCalls, problem };
 }
 function removeHeartbeatJob(c, ctl) {
   const label = heartbeatJob(c), plist = launchdPlistPath(label);
@@ -1371,6 +1384,7 @@ async function start() {
   if (ctl.kind === "local") {
     const d = expandHome(dir);
     fs.mkdirSync(d, { recursive: true }); copyTreeAtomic(".factory/controller", d); say(`Controller bundle: ${dir}`);
+    warnCleanupTrap();
     say(`Gate: ${dir}/gate (this project's own; the shared ~/.local/bin/gate is neither used nor touched)`);
     const loadlog = path.join(d, "loadlog.sh");
     // A logger of this directory that was started without the project name writes untagged lines for as long as it runs: it goes.

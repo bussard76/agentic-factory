@@ -1,6 +1,7 @@
 // A worker is finished when Orca reports its dispatch settled, not when its terminal is gone. These tests run the shared
 // rule (lib.mjs) and cleanup, capacity and the heartbeat against a fake Orca whose dispatch states the test sets, in
 // throwaway repositories. The rule throughout: cleanup deletes, so anything not positively finished is busy.
+import "./support/safe-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";

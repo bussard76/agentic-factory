@@ -1,4 +1,5 @@
 // Two projects on one host: the shared gate, the load log, and the files start writes outside the project.
+import "./support/safe-env.mjs";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";

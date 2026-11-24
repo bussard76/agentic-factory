@@ -1,6 +1,7 @@
 // --help, -h and unknown arguments for every script a human or the Controller runs, and every agentic-factory command
 // (issues #24, #38). Each runs in a sandbox where a real run would reach a fake orca/ssh/git/gh that records the call,
 // so "did nothing" means: exit 0 (help) or 2 (unknown argument), no recorded call, no file created or changed.
+import "./support/safe-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";

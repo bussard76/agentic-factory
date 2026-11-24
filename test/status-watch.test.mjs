@@ -1,4 +1,5 @@
 // The status watch runs on a schedule, outside any session, so it works with whichever agent is in front. Fake Orca, real files.
+import "./support/safe-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";

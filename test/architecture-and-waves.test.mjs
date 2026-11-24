@@ -1,4 +1,5 @@
 // The architecture mode as a human's choice, the gate's shell form, and closing finished wave terminals.
+import "./support/safe-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";

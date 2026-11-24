@@ -1,5 +1,6 @@
 // Onboarding: the Front agent kind (terminal or an Orca bot), the Controller directory, and install and release
 // commands that come from what the project has. Throwaway repositories and a temporary HOME; no real Orca (FACTORY_SKIP_ORCA).
+import "./support/safe-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";

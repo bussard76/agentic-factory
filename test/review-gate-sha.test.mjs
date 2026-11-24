@@ -2,6 +2,7 @@
 // unchanged from main (the gate on main gives the same answer) or new (main rejects it and the gate now accepts it).
 // Trailing text after the SHA was accepted on main and still is; so is a second SHA on the line. Each case is a throwaway
 // repository with a code commit and a findings commit on top of it, run through `review-gate` as the pre-push hook runs it.
+import "./support/safe-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";

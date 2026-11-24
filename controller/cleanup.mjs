@@ -11,13 +11,18 @@
 // A release counts only when Orca answers released or already_released. Cleanup itself closes no worker terminal: when
 // it removes a worktree, it lets `orca worktree rm` stop the setup terminals of the released dispatch, and it keeps a
 // worktree in which any other terminal is still open.
-// Cleanup deletes only with --apply. Without it (or with --dry, which means the same) it changes nothing: no fetch, no journal,
-// no removals, no releases. It prints an inventory of what it would remove and release, including the files in those
-// worktrees that git ignores and that would be lost, and ends with one line that says nothing was removed and how to do it.
-// Exit codes: 0 done, or nothing to do; 2 unknown argument; 3 it found something to remove or release but was not given --apply
-// (a handbook that calls cleanup without --apply gets 3 on every cycle). With --apply it prints the same inventory first. The
-// only thing a run without --apply writes is cleanup-pending.json (since when removable work waits); --apply deletes it.
-// --prune-remote also deletes merged origin branches: those with the branch prefix, and status-wave-<n> once the wave is finished.
+// Cleanup deletes only with --apply. Without it (or with --dry, which means the same) it removes, releases, closes and pushes
+// nothing: no fetch, no journal, no change to workers.json. It reads (Orca's terminal list, worker-list and worker-show, the
+// terminal of a wave, git status of the worktrees it would remove) and writes two small files: dispatch-settled.json (the cache
+// of settled dispatches, as --dry always did) and cleanup-pending.json (since when removable work waits; --apply deletes it).
+// It prints an inventory of what it would remove and release, including the files in those worktrees that git ignores and
+// that would be lost. Because it does not fetch, the inventory is as of the last fetch of origin on each host, and the closing
+// line says when that was; --apply fetches first. With --apply it prints the same inventory first (from a run that fetches).
+// Exit codes: 0 done, or nothing to do; 2 unknown argument; 3 without --apply: it found something to remove or release, or
+// could not look at a host (state unknown). A handbook that calls cleanup without --apply gets 3 on every cycle.
+// --prune-remote also deletes merged origin branches: those with the branch prefix, and status-wave-<n> only when it is known
+// that no wave runs on any host of this run (the newest wave's host is one of them and its wave has ended); otherwise it says why not.
+// An unknown host or state is never read as nothing to do.
 // Usage: node cleanup.mjs [--on <host>|--all] [--apply] [--dry] [--pushed] [--prune-remote]
 import "./cli.mjs";
 import fs from "node:fs";
@@ -26,14 +31,19 @@ import { spawnSync } from "node:child_process";
 import { BRANCH_PREFIX, HOSTS, SETTLED_STATES, dispatchStates, file, orcaCall, holdsWorktree, isHelperTerminal, sh, MAIN, ORCA, RUNNER, argHost, journal, onHost, orcaEnvArgsOn, projectDirOn, readJson, readState, trySh, workerStatus, workspacesOn, worktreeRefOn, writeJson } from "./lib.mjs";
 
 // Without --apply nothing is changed; --dry says the same, and wins when both are given. FACTORY_CLEANUP_PREVIEW is set by the
-// --apply run for the child that prints the inventory first; that child writes nothing at all.
+// --apply run for the child that prints the inventory first; that child writes nothing at all. An --apply run ignores it.
 const apply = process.argv.includes("--apply") && !process.argv.includes("--dry"), dry = !apply, allowPushed = process.argv.includes("--pushed");
-const preview = process.env.FACTORY_CLEANUP_PREVIEW === "1";
+const preview = !apply && process.env.FACTORY_CLEANUP_PREVIEW === "1";
 const forwarded = [process.argv.includes("--all") && "--all", process.argv.includes("--pushed") && "--pushed", process.argv.includes("--prune-remote") && "--prune-remote"].filter(Boolean);   // the options the inventory run and the closing line repeat
 const onAt = process.argv.indexOf("--on");
-if (onAt >= 0) forwarded.push("--on", process.argv[onAt + 1]);
+if (onAt >= 0) {
+  if (!process.argv[onAt + 1] || process.argv[onAt + 1].startsWith("-")) { console.error("cleanup.mjs: --on needs a host name; nothing was done"); process.exit(2); }
+  forwarded.push("--on", process.argv[onAt + 1]);
+}
 if (apply) {
+  // The inventory comes from a run of this script that changes nothing. If that run fails, nothing is done at all.
   const r = spawnSync(process.execPath, [process.argv[1], ...forwarded, "--dry"], { encoding: "utf8", env: { ...process.env, FACTORY_CLEANUP_PREVIEW: "1" } });
+  if (r.error || ![0, 3].includes(r.status)) { console.error(`cleanup.mjs: the inventory run failed (${r.error?.message ?? `exit ${r.status}`}); nothing was done.${r.stderr ? `\n${r.stderr.trimEnd()}` : ""}`); process.exit(1); }
   console.log(`Inventory (what this run does now):\n${r.stdout.trimEnd() || "  nothing to remove or release"}`);
   if (r.stderr.trim()) console.error(r.stderr.trimEnd());
 }
@@ -42,7 +52,10 @@ const workers = readJson("workers.json", {});
 const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
 let removed = 0, kept = 0, pruned = 0, released = 0, closedWaves = 0, wouldRelease = 0;
 const readText = (name) => { try { return fs.readFileSync(file(name), "utf8"); } catch { return ""; } };
-const failedReleases = [], forget = [];
+let waveAnswer;   // whether it is known that no wave runs; asked at most once per run (waveOver)
+const failedReleases = [], forget = [], skipped = [];   // skipped: hosts it could not look at
+const fetchedAt = new Map();   // host → when origin was last fetched there (seconds), 0 when never or unknown
+const fetchTime = (host, dir) => Number(onHost(host, `cd ${q(dir)} && f=$(git rev-parse --git-path FETCH_HEAD) && { stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null; }`).trim()) || 0;
 // Setup terminals of released dispatches, remembered until their worktree is gone: handle → worktree path. Only these
 // may be stopped with a worktree removal; any other terminal open in a worktree keeps it.
 const releasedTerms = readState("released-terminals.json", {});
@@ -62,7 +75,8 @@ for (const host of hosts) {
   const g = (...a) => onHost(host, `git -C ${q(PD)} ${a.map(q).join(" ")}`).trim();
   if (!dry || preview) g("fetch", "-q", "--prune", "origin");   // the inventory run of --apply sees the refs the real run will act on
   const terms = hostTerms.get(host.name);
-  if (terms === null) { console.log(`[${host.name}] cannot list terminals; removing nothing here`); continue; }
+  if (dry && !preview) fetchedAt.set(host.name, fetchTime(host, PD));
+  if (terms === null) { skipped.push(host.name); console.log(`[${host.name}] cannot list terminals; removing nothing here, and not knowing whether there is anything to remove`); continue; }
   const wsTail = WS.split("/").filter(Boolean).slice(-2).join("/");
   const wts = g("worktree", "list", "--porcelain").split("\n\n").map((b) => ({ path: /^worktree (.*)$/m.exec(b)?.[1], branch: /^branch refs\/heads\/(.*)$/m.exec(b)?.[1] })).filter((w) => w.path && w.path.includes(`/${wsTail}/`));
   for (const w of wts) {   // git facts once per worktree; the release decision and the removal both use them
@@ -171,8 +185,7 @@ for (const host of hosts) {
     // The wave's own status branch (CONTROLLER.md: `status-wave-<n>`) has no branch prefix. It is merged by its wave, so it goes
     // like the others once it is merged into origin/<main>, but only while no wave runs: a branch just made from origin/<main>
     // is merged too, and its wave has not written to it yet. When the wave state is unknown, it stays.
-    let waveDone;   // asked at most once per run: it may read a terminal
-    const prunable = (b) => b !== `origin/${MAIN}` && (b.startsWith(`origin/${BRANCH_PREFIX}`) || (/^origin\/status-wave-\d+$/.test(b) && (waveDone ??= waveFinished())));
+    const prunable = (b) => b !== `origin/${MAIN}` && (b.startsWith(`origin/${BRANCH_PREFIX}`) || (/^origin\/status-wave-\d+$/.test(b) && waveOver()));
     for (const b of g("branch", "-r", "--merged", `origin/${MAIN}`).split("\n").map((s) => s.trim()).filter(prunable)) {
       if (dry) console.log(`[${host.name}] would delete the merged branch ${b}`);
       else g("push", "-q", "origin", "--delete", b.slice("origin/".length));
@@ -191,36 +204,60 @@ if (!dry) {
   writeJson("workers.json", workers);
   journal("cleanup", "controller", { note: `removed ${removed}, kept ${kept}, pruned ${pruned}, released ${released}${failedReleases.length ? `, release failed ${failedReleases.join(" ")}` : ""}` });
 }
-const pending = removed + pruned + wouldRelease + closedWaves + forget.length;   // what a run without --apply leaves undone
-if (!preview) {
-  const marker = file("cleanup-pending.json");
-  if (apply || !pending) fs.rmSync(marker, { force: true });
-  else { const since = readState("cleanup-pending.json", {}).since ?? new Date().toISOString(); writeJson("cleanup-pending.json", { since, last: new Date().toISOString(), pending }); }
+// A record of a terminal-runner worker whose process is gone is forgotten by --apply as well; a run without it counts it.
+const deadRecords = Object.entries(workers).filter(([k, w]) => w.pid && !alive(w.pid) && !forget.includes(k));
+if (dry) for (const [k, w] of deadRecords) console.log(`[${w.host ?? "local"}] would forget the record of "${w.name ?? k}" (its process is gone)`);
+const pending = removed + pruned + wouldRelease + closedWaves + forget.length + (dry ? deadRecords.length : 0);   // what a run without --apply leaves undone
+// The marker is a best-effort signal: a Controller directory that cannot be written must not end the run. A run that could not
+// look at a host (state unknown) leaves it as it is: unknown is neither "work waits" nor "nothing waits".
+if (!preview && !skipped.length) {
+  try {
+    if (apply || !pending) fs.rmSync(file("cleanup-pending.json"), { force: true });
+    else { const since = readState("cleanup-pending.json", {}).since ?? new Date().toISOString(); writeJson("cleanup-pending.json", { since, last: new Date().toISOString(), pending }); }
+  } catch (e) { console.error(`cleanup-pending.json could not be updated (${e.code ?? e.message}); status and doctor cannot show it`); }
 }
+const unknownLine = skipped.length ? `STATE UNKNOWN for ${skipped.join(", ")}: Orca's terminal list did not answer, so it is not known whether there is anything to remove or release there.` : "";
 if (!apply) {
   if (!preview) {
-    console.log(`cleanup (dry): would remove ${removed} worktrees, keep ${kept}, delete ${pruned} remote branches, release ${wouldRelease} dispatches, close ${closedWaves} finished wave terminals`);
+    const asOf = [...fetchedAt].map(([h, t]) => `${h}: ${t ? new Date(t * 1000).toISOString() : "never fetched or unknown"}`).join("; ");
+    console.log(`cleanup (dry): would remove ${removed} worktrees, keep ${kept}, delete ${pruned} remote branches, release ${wouldRelease} dispatches, close ${closedWaves} finished wave terminals. Refs as of the last fetch of origin (${asOf || "no host looked at"}); --apply fetches first.`);
     console.log(pending
-      ? `NOTHING WAS REMOVED OR RELEASED. To do it, run: node cleanup.mjs ${[...forwarded, "--apply"].join(" ")}. A Controller handbook that still calls cleanup without --apply (update keeps an edited CONTROLLER.md and puts the new one in .factory/new/) cleans up nothing, and this run ends with exit code 3 each cycle until it does.`
-      : "Nothing was removed or released, and there is nothing to remove or release.");
+      ? `NOTHING WAS REMOVED OR RELEASED. To do it, run: node cleanup.mjs ${[...forwarded, "--apply"].join(" ")}. A Controller handbook that still calls cleanup without --apply (update keeps an edited CONTROLLER.md and puts the new one in .factory/new/) cleans up nothing, and this run ends with exit code 3 each cycle until it does.${unknownLine ? ` ${unknownLine}` : ""}`
+      : unknownLine ? `NOTHING WAS REMOVED OR RELEASED, AND IT IS NOT KNOWN WHETHER ANYTHING WAITS. ${unknownLine} Nothing was found on the hosts it could look at, in the refs of their last fetch. Exit code 3.`
+      : `Nothing was removed or released. Nothing was found to remove or release in the refs of the last fetch of origin; --apply fetches first.`);
   }
-  process.exitCode = pending ? 3 : 0;
+  process.exitCode = pending || skipped.length ? 3 : 0;
 } else {
-  console.log(`cleanup: removed ${removed} worktrees, kept ${kept}, pruned ${pruned} remote branches, released ${released} dispatches, closed ${closedWaves} finished wave terminals${failedReleases.length ? `; release FAILED for ${failedReleases.join(", ")}` : ""}`);
+  console.log(`cleanup: removed ${removed} worktrees, kept ${kept}, pruned ${pruned} remote branches, released ${released} dispatches, closed ${closedWaves} finished wave terminals${failedReleases.length ? `; release FAILED for ${failedReleases.join(", ")}` : ""}${unknownLine ? `. ${unknownLine} Nothing was done there.` : ""}`);
 }
 // Every cycle also corrects automatic names: a failure here must not hide what cleanup did.
 if (!dry && RUNNER === "orca") for (const host of hosts) try { process.stdout.write(sh("node", [file("names.mjs"), "--on", host.name])); } catch (e) { console.error(`naming entries on ${host.name} failed: ${e.message}`); }
-// Whether no wave runs: the newest wave (wave-handle.txt) ended with WAVE-END, or its terminal or process is gone. A wave whose
-// state cannot be told (a remote log, a host that did not list its terminals) counts as running.
-function waveFinished() {
-  const [, h] = readText("wave-handle.txt").trim().split(" ");
-  if (!h) return true;
-  if (h === "remote-log") return false;
-  if (h.startsWith("pid:")) return !alive(Number(h.slice(4)));
-  if ([...hostTerms.values()].includes(null)) return false;
-  const t = [...hostTerms.values()].flat().find((x) => x.handle === h && x.status !== "exited");
-  if (!t) return true;
-  const output = trySh(ORCA, ["terminal", "read", "--terminal", h, ...orcaEnvArgsOn(hosts.find((x) => (hostTerms.get(x.name) ?? []).includes(t)) ?? hosts[0]), "--json"], T);
-  return /WAVE-END/.test(output.replace(/echo WAVE-END/g, ""));
+// Whether it is positively known that no wave runs. A remote branch cannot be brought back from here, so anything short of
+// that keeps it, and the reason is printed once. Known means: wave-handle.txt names the newest wave; its host is one of the
+// hosts of this run (a wave on another host cannot be seen with --on); that host's terminals were listed; and the wave's
+// terminal shows WAVE-END or is gone, or its local process is gone. Not known: no or unreadable handle file, a host outside
+// this run, a remote log, a terminal that cannot be read, a process on a host that is not local, a host that did not answer.
+function waveOver() {
+  if (waveAnswer === undefined) {
+    const why = waveRunningWhy();
+    waveAnswer = why === null;
+    if (why) console.log(`kept the merged status-wave branches on origin: it is not known that no wave runs (${why})`);
+  }
+  return waveAnswer;
+}
+function waveRunningWhy() {   // null when it is known that no wave runs, else why not
+  const [hostName, h] = readText("wave-handle.txt").trim().split(" ");
+  if (!hostName || !h) return "no readable wave-handle.txt";
+  const host = HOSTS.find((x) => x.name === hostName);
+  if (!host) return `its host "${hostName}" is not a configured host`;
+  if (!hosts.some((x) => x.name === hostName)) return `the newest wave ran on ${hostName}, which this run does not cover; use --all`;
+  if (h === "remote-log") return "the newest wave writes a remote log only";
+  if (h.startsWith("pid:")) return host.kind !== "local" ? `the newest wave's process is on ${hostName}` : alive(Number(h.slice(4))) ? "the newest wave's process is alive" : null;
+  const listed = hostTerms.get(hostName);
+  if (!listed) return `${hostName} did not list its terminals`;
+  const t = listed.find((x) => x.handle === h && x.status !== "exited");
+  if (!t) return null;
+  const output = trySh(ORCA, ["terminal", "read", "--terminal", h, ...orcaEnvArgsOn(host), "--json"], T);
+  return /WAVE-END/.test(output.replace(/echo WAVE-END/g, "")) ? null : "the newest wave's terminal has not ended";
 }
 function alive(pid) { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } }

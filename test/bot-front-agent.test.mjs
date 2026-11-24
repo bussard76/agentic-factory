@@ -1,6 +1,7 @@
 // An Orca bot as the Front agent (hosts.frontAgent.kind = "orca-bot"): the precheck that decides when the bot wakes,
 // start's one automation per bot, status and doctor, and the optional read grants. Fake Orca, fake ssh, a temporary HOME:
 // no test may reach a real bot, a real automation or the real tool configs.
+import "./support/safe-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -322,5 +323,30 @@ test("status and doctor report a handbook that calls cleanup without --apply, an
   assert.match(p.cli("doctor").stdout, /MISSING cleanup: removable work has waited/);
   fs.rmSync(path.join(ctl, "cleanup-pending.json"));
   assert.equal(cleanup().problem, null);
+  m.done();
+});
+
+test("F3/F7: update and start say plainly when the kept handbook calls cleanup without --apply; doctor ignores a call that only looks", () => {
+  const m = machine();
+  const p = m.project("eta", {});
+  const handbook = path.join(p.dir, ".factory/controller/CONTROLLER.md");
+  assert.doesNotMatch(p.cli("update").stdout, /WARNING/, "the current handbook is fine");
+  // A locally kept older copy: the call has no --apply (the old row had an optional [--dry]).
+  fs.writeFileSync(handbook, fs.readFileSync(handbook, "utf8").replace(/ --apply/g, "").replace("--prune-remote", "--prune-remote [--dry]"));
+  const u = p.cli("update");
+  assert.equal(u.status, 0, u.stderr);
+  assert.match(u.stdout, /WARNING: \.factory\/controller\/CONTROLLER\.md calls cleanup without --apply.*\.factory\/new\/\.factory\/controller\/CONTROLLER\.md.*run start/s);
+  const s = p.cli("start");
+  assert.match(s.stdout, /WARNING: \.factory\/controller\/CONTROLLER\.md calls cleanup without --apply/, s.stdout);
+  // A rule that says "look first with --dry, then --apply" is not a call that fails to clean up.
+  const ctl = path.join(m.home, "controller-eta");
+  fs.writeFileSync(path.join(ctl, "CONTROLLER.md"), "Look first with `node cleanup.mjs --dry`, then run `node cleanup.mjs --all --apply`.\n");
+  const st = JSON.parse(p.cli("status", "--json").stdout).setup.cleanup;
+  assert.equal(st.problem, null);
+  assert.equal(st.handbookInstalled, true);
+  fs.rmSync(path.join(ctl, "CONTROLLER.md"));
+  const none = JSON.parse(p.cli("status", "--json").stdout).setup.cleanup;
+  assert.equal(none.handbookInstalled, false);
+  assert.match(p.cli("doctor").stdout, /info {4}cleanup: not checked, no Controller handbook is installed yet/);
   m.done();
 });
