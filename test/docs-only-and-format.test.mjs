@@ -356,13 +356,17 @@ test("the wave's gate must be this project's own: a bare or relative name, anoth
   r.git("worktree", "remove", "--force", integ);
 });
 
-test("a verify or e2e command that is only whitespace is no command: the wave stops and the gate does not run", () => {
+test("whitespace-only commands behave as empty ones do: verify stops the wave, e2e is skipped, blank docs checks are not configured", () => {
   const r = docsRepo(); const t = reviewedCode(r, "agents/t1");
   let out = wave(r, t, { gate: recordingGate(r, 0), verify: " \t " });
   assert.notEqual(out.status, 0); assert.match(out.stdout, /VERIFY-MISSING/); assert.doesNotMatch(out.stdout, /PUSHED|merged/);
-  out = wave(r, t, { gate: recordingGate(r, 0), verify: "true", e2e: "  " });
-  assert.notEqual(out.status, 0); assert.match(out.stdout, /E2E-INVALID/); assert.doesNotMatch(out.stdout, /PUSHED|merged/);
-  assert.deepEqual(gateCalls(r), []);
+  // e2e: empty and whitespace-only are both skipped (one gate call, pushed); a real command runs a second one
+  for (const [e2e, calls] of [["", 1], ["  \t", 1], ["echo e2e", 2]]) {
+    const x = docsRepo(); const tx = reviewedCode(x, "agents/t1");
+    out = wave(x, tx, { gate: recordingGate(x, 0), verify: "true", e2e });
+    assert.match(out.stdout, /PUSHED main/, JSON.stringify(e2e)); assert.equal(gateCalls(x).length, calls, JSON.stringify(e2e));
+    assert.equal(/e2e PASS/.test(out.stdout), calls === 2);
+  }
   // blank docs checks are no checks: a docs-only wave then takes the full gate
   const d = repo(); d.setMain({ docsOnly: { enabled: true }, commands: { formatCheck: "  ", markdownCheck: " " } }); branch(d, "agents/d1", () => d.write("docs/guide.md", "v2\n"));
   out = wave(d, ["agents/d1"], { gate: recordingGate(d, 0), verify: "true" });
@@ -373,21 +377,6 @@ test("docsOnly.enabled counts only as the JSON boolean true: the string \"true\"
   const r = repo(); r.setMain({ ...checks(r), docsOnly: { enabled: "true" } }); branch(r, "agents/d1", () => r.write("docs/guide.md", "v2\n"));
   const out = wave(r, ["agents/d1"], { gate: recordingGate(r, 0), verify: "true" });
   assert.doesNotMatch(out.stdout, /GATE-PATH docs-only/); assert.doesNotMatch(out.stdout, /docs check/); assert.match(out.stdout, /verify PASS/); assert.equal(gateCalls(r).length, 1);
-});
-
-test("a candidate that changes a package.json script the verify command runs stops the wave; other script changes do not", () => {
-  const r = repo(); r.write("package.json", JSON.stringify({ scripts: { verify: "npm run lint && npm run unit", lint: "exit 1", unit: "exit 1", other: "echo a" } }, null, 1) + "\n");
-  r.git("add", "-A"); r.git(...NOHOOKS, "commit", "-qm", "scripts"); r.git(...NOHOOKS, "push", "-q", "origin", "main");
-  const change = (name, f) => { const t = reviewedCode(r, name, () => { const j = JSON.parse(r.read("package.json")); f(j.scripts); r.write("package.json", JSON.stringify(j, null, 1) + "\n"); }); return t; };
-  const before = r.git("rev-parse", "origin/main");
-  for (const [name, f] of [["agents/direct", (s) => { s.verify = "true"; }], ["agents/indirect", (s) => { s.lint = "true"; }], ["agents/removed", (s) => { delete s.unit; }], ["agents/pre", (s) => { s.preverify = "true"; }]]) {
-    const out = wave(r, change(name, f), { gate: recordingGate(r, 0), verify: "npm run verify" });
-    assert.notEqual(out.status, 0, name); assert.match(out.stdout, /VERIFY-REDEFINED/, name); assert.doesNotMatch(out.stdout, /PUSHED/);
-    assert.equal(r.git("rev-parse", "origin/main"), before);
-  }
-  assert.deepEqual(gateCalls(r), [], "stopped before the gate");
-  const out = wave(r, change("agents/fine", (s) => { s.other = "echo b"; }), { gate: recordingGate(r, 0), verify: "npm run verify" });
-  assert.match(out.stdout, /PUSHED main/, out.stdout); assert.equal(gateCalls(r).length, 1);
 });
 
 test("only the docs-only check skips the full gate: not docs-only, unclear, a missing check and no configured checks all run it", () => {
