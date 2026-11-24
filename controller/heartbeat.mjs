@@ -2,10 +2,10 @@
 // (docs/learnings.md). `agentic-factory start` runs it from cron or launchd every minute. A worker message, a finished wave
 // and a new inbox line wake it at once; the full work check runs at each tenth minute; an idle project is woken at most every
 // hosts.controller.wake.idleMinutes. It marks progress in Orca's sidebar without a model.
-// It sends text into the Controller's terminal, and it starts a new Controller in exactly one case: a Controller that is busy
-// without any sign of work (status.md and the journal unchanged) for hosts.controller.hung.minutes is reported to the Front
-// agent, and when nothing changed after hosts.controller.hung.restartAfterMinutes it is restarted once through restart.mjs (the same
-// session `start` makes); a second hang is escalated and never restarted automatically. Each Controller directory has its own
+// It sends text into the Controller's terminal. A Controller that is busy without any sign of work (status.md and the journal
+// unchanged) for hosts.controller.hung.minutes is reported to the Front agent. Only where a project set hosts.controller.hung.restart
+// to true, and after a second confirmation, it is restarted once through restart.mjs (the same session `start` makes); a second
+// hang is escalated and never restarted automatically. Each Controller directory has its own
 // copy and state, so projects on one host stay independent. Usage: node heartbeat.mjs
 import "./cli.mjs";
 import { execFileSync } from "node:child_process";
@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { controllerPlaces, locateController } from "./controller-terminal.mjs";
-import { HOSTS, HUMAN, HUNG, MAIN, ORCA, PROJECT, PROJECT_DIR, STEERING, WAKE, config, dispatchStates, file, hostNamed, journal, orcaCall, orcaEnvArgsOn, workerStatus, worktreeRefOn, workspacesOn } from "./lib.mjs";
+import { HOSTS, HUMAN, HUNG, MAIN, ORCA, PROJECT, PROJECT_DIR, STEERING, WAKE, config, dispatchStates, file, hostNamed, journalQuiet, orcaCall, orcaEnvArgsOn, workerStatus, worktreeRefOn, workspacesOn } from "./lib.mjs";
 import { tellFront, writeHealth } from "./front-notice.mjs";
 import { newLines } from "./inbox.mjs";
 import { restartController } from "./restart.mjs";
@@ -43,6 +43,7 @@ const readJson = (name, fallback) => {
   return fallback;
 };
 const readText = (name) => { try { return fs.readFileSync(file(name), "utf8"); } catch { return ""; } };
+const mtime = (name) => { try { return fs.statSync(file(name)).mtimeMs; } catch { return 0; } };
 const short = (error) => String(error.message).slice(0, 160);
 
 // cron starts this every minute, and a slow Orca can take longer than that. mkdir is atomic and needs no flock, which macOS lacks.
@@ -171,6 +172,8 @@ const showNotice = (text, status, unread) => {
   log(`notice: ${text}`);
 };
 const updateNotice = () => {
+  const restartedAt = readJson("heartbeat.restarted.json", {}).at ?? 0;
+  if (restartedAt && mtime("status.md") <= restartedAt) return showNotice(say("Controller restarted, it has not started a cycle yet", "Controller neu gestartet, hat noch keinen Zyklus begonnen"), "in-review", false);
   const open = needsHuman();
   if (inboxHasNew()) return showNotice(say("Working: instruction from the inbox", "Arbeitet: Auftrag aus der Inbox"), "in-progress", false);
   if (open.length) return showNotice(`${say("Waiting for you", "Wartet auf dich")}: ${open[0].slice(2, 200)}`, "in-review", true);
@@ -237,7 +240,7 @@ const remember = () => fs.writeFileSync(file("heartbeat.seen.json"), JSON.string
 if (!seenExisted) { remember(); log("baseline of worker messages recorded"); process.exit(0); } // Old messages wake nobody.
 
 const inboxWaiting = inboxHasNew();
-const mtimeOf = (name) => { try { return fs.statSync(file(name)).mtimeMs; } catch { return 0; } };
+const mtimeOf = mtime;
 const hhmm = (ms) => new Date(ms).toTimeString().slice(0, 5);
 
 // Is the Controller idle? Orca's answer to `terminal wait --for tui-idle`, asked at most once per run and only when something needs
@@ -258,14 +261,7 @@ const noteBusy = (idle) => {
   fs.writeFileSync(file("heartbeat.busy.json"), JSON.stringify({ since, last: now }));
   return since;
 };
-
-// ---- A Controller that hangs. Hung is: busy, its terminal still changing, and no sign of work (status.md and the journal
-// unchanged) for hosts.controller.hung.minutes; or a text pattern the project configured visible for hung.patternMinutes. A
-// terminal that does not change (an idle prompt that Orca reads as busy because of a background shell) is not hung. The Front
-// agent is told at once; when nothing changed after hung.restartAfterMinutes the Controller is restarted once (restart.mjs), and a
-// second hang is escalated. The heartbeat never writes status.md: its age is the sign of work.
-const HUNG_FILE = "heartbeat.hung.json", SCREEN_ACTIVE_MS = 3 * 60_000;
-const patternRegexes = HUNG.patterns.flatMap((p) => { try { return [new RegExp(p, "i")]; } catch { log(`ignored a hosts.controller.hung.patterns entry that is no regular expression: ${oneLine(p, 60)}`); return []; } });
+const compile = (list, what) => list.flatMap((p) => { try { return [new RegExp(p, "i")]; } catch { log(`ignored a ${what} entry that is no regular expression: ${oneLine(p, 60)}`); return []; } });
 const readScreen = () => {
   try {
     const read = orca("terminal", "read", "--terminal", terminal.handle, "--screen").result ?? {};
@@ -273,63 +269,113 @@ const readScreen = () => {
     return Array.isArray(tail) ? tail.join("\n") : String(tail);
   } catch { return null; }
 };
-// Only the change of the screen is used, never its words (except the configured patterns).
+// A fixed line plus Enter is never typed where a confirmation question is visible (Enter would take its default). The patterns are
+// generic and configurable (hosts.controller.wake.dialogPatterns); a question they do not recognise is the residual risk.
+const dialogRegexes = compile(WAKE.dialogPatterns, "hosts.controller.wake.dialogPatterns");
+const dialogVisible = (screen) => screen !== null && dialogRegexes.some((re) => re.test(screen.split("\n").slice(-25).join("\n")));
+const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+// ---- A Controller that hangs. Hung is: busy, its terminal still changing, and no sign of work (status.md and the journal
+// unchanged; the heartbeat's own journal lines do not count) for hosts.controller.hung.minutes; or a text pattern the project
+// configured visible for hung.patternMinutes. A terminal that does not change (an idle prompt that Orca reads as busy because of a
+// background shell) is not hung. The Front agent is told at once, and one fixed line asks the Controller for a cycle. The report
+// stays until a sign of work (status.md or the journal newer than the report), whatever the screen does. Restarting is off unless a
+// project sets hung.restart to true, and then needs more (see below); a second hang is only escalated. The heartbeat never writes status.md.
+const HUNG_FILE = "heartbeat.hung.json", SCREEN_ACTIVE_MS = 3 * 60_000, YOUNG_MS = 5 * 60_000;
+const patternRegexes = compile(HUNG.patterns, "hosts.controller.hung.patterns");
+// Only the change of the screen is used, never its words (except the configured patterns). A reading older than 3 minutes says
+// nothing about what happened since (a laptop that slept would look like a changing screen).
 const screenChanging = (text) => {
   const prev = readJson("heartbeat.screen.json", {}), now = Date.now();
   const hash = createHash("sha1").update(text).digest("hex");
-  const next = { hash, changedAt: prev.hash && prev.hash !== hash ? now : prev.changedAt ?? null };
+  const fresh = prev.readAt && now - prev.readAt < SCREEN_ACTIVE_MS;
+  const next = { hash, readAt: now, changedAt: fresh && prev.hash !== hash ? now : fresh ? prev.changedAt ?? null : null };
   fs.writeFileSync(file("heartbeat.screen.json"), JSON.stringify(next));
   return next.changedAt !== null && now - next.changedAt <= SCREEN_ACTIVE_MS;
 };
+// The same frame: counters, timers and spinner glyphs do not make a different one.
+const frame = (text) => String(text).replace(/\d+/g, "#").replace(/[⠀-⣿]/g, "*").replace(/\s+/g, " ").trim();
 const hungText = (n) => {
   if (n.escalated) return `HUNG AGAIN since ${hhmm(n.since)} (${n.why}) after the automatic restart at ${hhmm(n.restartedAt)}: it is not restarted again and needs a person: close the Controller's terminal and run agentic-factory start`;
   const what = n.restartFailed ? `the automatic restart failed (${n.restartFailed})`
     : n.hangRestarts >= 1 ? `it was restarted automatically at ${hhmm(n.restartedAt)} already, so it is not restarted again`
-      : !HUNG.restart ? "automatic restart is off (hosts.controller.hung.restart)"
-        : `it is restarted at ${hhmm(n.since + HUNG.restartAfterMinutes * 60_000)} unless it recovers`;
-  return `HUNG since ${hhmm(n.since)}: ${n.why}; ${what}`;
+      : n.kind === "pattern" ? "a text pattern only reports, it never restarts"
+        : !HUNG.restart ? "automatic restart is off (hosts.controller.hung.restart is not true): report only"
+          : n.declined ? `automatic restart waits: ${n.declined}`
+            : `it is restarted at ${hhmm(n.since + HUNG.restartAfterMinutes * 60_000)} unless it recovers, if its terminal then shows the same frame twice`;
+  return `HUNG since ${hhmm(n.since)}: ${n.why}${n.pointerAt ? "" : " (the pointer line was not typed)"}; ${what}`;
 };
 // Returns true when it restarted the Controller: the terminal this run holds is then the old one.
 const hangCheck = () => {
   if (!fs.existsSync(file("status.md"))) return false;   // it has not started its first cycle
-  const now = Date.now(), state = readJson(HUNG_FILE, {});
-  const activity = Math.max(mtimeOf("status.md"), mtimeOf("journal.ndjson"), readJson("heartbeat.restarted.json", {}).at ?? 0);   // a fresh Controller gets its time
+  const now = Date.now(), state = readJson(HUNG_FILE, {}), rs = readJson("heartbeat.restarted.json", {}), restartAt = rs.at ?? 0;
+  const activity = Math.max(mtime("status.md"), mtime("journal.ndjson"), restartAt);   // a fresh Controller gets its time
   const quietMin = (now - activity) / 60_000;
-  const next = { hangRestarts: state.hangRestarts ?? 0, restartedAt: state.restartedAt };
-  const screen = quietMin >= 5 || patternRegexes.length ? readScreen() : null;
+  const next = { hangRestarts: state.hangRestarts ?? 0, restartedAt: state.restartedAt, notStartedTold: state.notStartedTold };
+  // "Once" is once per healthy stretch: a restart a week ago, with no hang since, no longer counts.
+  if (next.hangRestarts && next.restartedAt && !state.since && now - next.restartedAt > HUNG.resetAfterDays * 86_400_000) { next.hangRestarts = 0; next.restartedAt = undefined; }
+  const open = Boolean(state.since) && activity <= (state.activity ?? 0);   // a report stays until a sign of work
+  const screen = quietMin >= 5 || patternRegexes.length || open ? readScreen() : null;
   const changing = screen !== null && screenChanging(screen);
-  if (patternRegexes.length && screen !== null && patternRegexes.some((re) => re.test(screen))) next.patternSince = state.patternSince ?? now;
-  let why = "";
-  if (next.patternSince && now - next.patternSince >= HUNG.patternMinutes * 60_000) why = `a configured text pattern has been visible in its terminal for ${Math.round((now - next.patternSince) / 60_000)} minutes`;
-  if (!why && quietMin >= HUNG.minutes && wave.state !== "running" && changing && !probeIdle().idle) why = `busy, its terminal keeps changing, but status.md and the journal have not changed for ${Math.round(quietMin)} minutes`;
+  const patternNow = patternRegexes.length > 0 && screen !== null && patternRegexes.some((re) => re.test(screen));
+  if (patternNow) next.patternSince = state.patternSince ?? now;
+  let why = "", kind = "";
+  if (open && !(state.kind === "pattern" && !patternNow)) { why = state.why; kind = state.kind ?? "quiet"; }
+  else if (next.patternSince && now - next.patternSince >= HUNG.patternMinutes * 60_000) { kind = "pattern"; why = `a configured text pattern has been visible in its terminal for ${Math.round((now - next.patternSince) / 60_000)} minutes`; }
+  else if (quietMin >= HUNG.minutes && wave.state !== "running" && changing && !probeIdle().idle) { kind = "quiet"; why = `busy, its terminal keeps changing, but status.md and the journal have not changed for ${Math.round(quietMin)} minutes`; }
   let restarted = false;
   const tell = [];   // told after the health file is written: a status watch run for it reads that file
   if (!why) { if (state.since) log(`Controller no longer hung (${state.why})`); }
   else {
-    Object.assign(next, { since: state.since ?? now, why: state.why ?? why, acted: state.acted, escalated: state.escalated, restartFailed: state.restartFailed });
+    Object.assign(next, { since: state.since ?? now, why: state.why ?? why, kind, activity: state.activity ?? activity, pointerAt: state.pointerAt, acted: state.acted, escalated: state.escalated, escalatedAt: state.escalatedAt, restartFailed: state.restartFailed, declined: state.declined });
+    if (HUNG.restartInvalid && !state.since) log("hosts.controller.hung.restart is not true or false: it counts as false (no automatic restart)");
     if (!state.since) {
-      log(hungText(next)); tell.push(["HUNG", () => hungText(next)]);
-      try { orca("terminal", "send", "--terminal", terminal.handle, "--text", POINTER_HUNG, "--enter"); log("typed the pointer for a Controller that may only look busy"); } catch (error) { log(`pointer not typed: ${short(error)}`); }
-    }
-    else if (!next.acted && now - next.since >= HUNG.restartAfterMinutes * 60_000) {
-      next.acted = true;
-      if (next.hangRestarts >= 1) {
-        next.escalated = true;
-        journal("escalation", "controller", { note: "hung again after an automatic restart", since: new Date(next.since).toISOString() });
-        log(hungText(next)); tell.push(["HUNG-AGAIN", () => hungText(next)]);
-      } else if (!HUNG.restart) log("still hung; automatic restart is off (hosts.controller.hung.restart): reported only");
+      // The report is always made. The pointer is typed only into a Controller that has started a cycle since its restart, is
+      // not brand new, and is not showing a confirmation question: otherwise it is report only.
+      const reasonNot = restartAt && mtime("status.md") <= restartAt ? "it was restarted and has not written status.md since"
+        : restartAt && now - restartAt < YOUNG_MS ? "it was restarted a moment ago" : dialogVisible(screen) ? "a confirmation question is visible" : "";
+      if (reasonNot) log(`${hungText(next)}; pointer not typed: ${reasonNot}`);
       else {
-        const result = restartController({ reason: `hung: ${next.why}`, kind: "hang", lockHeld: true, tell: false });
-        log(`restart: ${result.message}`);
-        if (result.ok) { tell.push(["RESTARTED", () => result.event]); next.hangRestarts += 1; next.restartedAt = Date.now(); for (const k of ["since", "why", "acted", "restartFailed"]) delete next[k]; restarted = true; }
-        else { next.restartFailed = oneLine(result.message, 120); tell.push(["HUNG", () => hungText(next)]); }
+        try { orca("terminal", "send", "--terminal", terminal.handle, "--text", POINTER_HUNG, "--enter"); next.pointerAt = now; log("typed the pointer for a Controller that may only look busy"); } catch (error) { log(`pointer not typed: ${short(error)}`); }
+      }
+      log(hungText(next)); tell.push(["HUNG", () => hungText(next)]);
+    } else if (!next.acted && now - next.since >= HUNG.restartAfterMinutes * 60_000) {
+      if (next.hangRestarts >= 1) {
+        next.acted = next.escalated = true; next.escalatedAt = now;
+        journalQuiet("escalation", "controller", { note: "hung again after an automatic restart", since: new Date(next.since).toISOString() });
+        log(hungText(next)); tell.push(["HUNG-AGAIN", () => hungText(next)]);
+      } else if (!HUNG.restart || kind === "pattern") { next.acted = true; log(`still hung; ${kind === "pattern" ? "a pattern only reports" : "automatic restart is off (hosts.controller.hung.restart is not true)"}: reported only`); }
+      else if (!next.pointerAt) { next.declined = "the pointer line could not be typed, so there is no proof that the Controller ignored it"; }
+      else {
+        // The second confirmation: the pointer typed at the report was not answered (a sign of work would have ended this report),
+        // and the terminal shows the same frame twice, a few seconds apart: a spinner or a timer is no frozen terminal.
+        const a = readScreen(); sleepMs(3000); const b = readScreen();
+        if (a === null || b === null || frame(a) !== frame(b)) next.declined = "its terminal still changes, so it is not proven frozen";
+        else {
+          const result = restartController({ reason: `hung: ${next.why}`, kind: "hang", lockHeld: true, tell: false });
+          log(`restart: ${result.message}`);
+          if (result.ok) { if (!result.closeFailed) tell.push(["RESTARTED", () => result.event]); next.hangRestarts += 1; next.restartedAt = Date.now(); for (const k of ["since", "why", "kind", "activity", "pointerAt", "acted", "restartFailed", "declined"]) delete next[k]; restarted = true; }
+          else if (result.code === 3) next.declined = oneLine(result.message.replace(/^refused: /, ""), 140);
+          else { next.acted = true; next.restartFailed = oneLine(result.message, 120); tell.push(["HUNG", () => hungText(next)]); }
+        }
       }
     }
   }
+  // A restarted Controller that never writes status.md has not started: nothing is typed into it, so say so.
+  const notStarted = restartAt && !restarted && mtime("status.md") <= restartAt && now - restartAt >= HUNG.restartAfterMinutes * 60_000;
+  if (notStarted && next.notStartedTold !== restartAt) { next.notStartedTold = restartAt; tell.push(["NOT-STARTED", () => `the Controller restarted at ${hhmm(restartAt)} has not written status.md since: it has not started a cycle (a dialog, a usage limit, a crashed session?)`]); }
+  // Two Controllers: the old terminal could not be closed. The line stays until the terminal is gone.
+  let twoControllers = rs.closeFailed;
+  if (twoControllers && controllerTerminals !== null && !controllerTerminals.some((t) => t.handle === twoControllers && !t.orphaned)) { try { const { closeFailed, ...rest } = rs; fs.writeFileSync(file("heartbeat.restarted.json"), JSON.stringify(rest, null, 2)); } catch { /* retried */ } twoControllers = undefined; }
   // Open problems for the Front agent's watch (front-notice.mjs). A restart is mentioned for an hour.
-  writeHealth(next.since ? [hungText(next)] : next.restartedAt && now - next.restartedAt < 60 * 60_000 ? [`RESTARTED automatically at ${hhmm(next.restartedAt)} after a hang`] : []);
+  const lines = [];
+  if (next.since) lines.push(hungText(next));
+  if (notStarted && !restarted) lines.push(`RESTARTED at ${hhmm(restartAt)}, but the Controller has not written status.md since: it has not started a cycle`);
+  if (twoControllers && !restarted) lines.push(`TWO CONTROLLERS: the old terminal ${twoControllers} could not be closed after the restart: close it by hand`);
+  if (!lines.length && next.restartedAt && now - next.restartedAt < 60 * 60_000) lines.push(`RESTARTED automatically at ${hhmm(next.restartedAt)} after a hang`);
+  writeHealth(lines);
   fs.writeFileSync(file(HUNG_FILE), JSON.stringify(next));
-  for (const [kind, text] of tell) log(`told the Front agent (${kind}): ${tellFront(kind, text(), { type: kind === "RESTARTED" ? "status" : "question", from: restarted ? undefined : terminal.handle }).join(", ")}`);
+  for (const [k, text] of tell) log(`told the Front agent (${k}): ${tellFront(k, text(), { type: k === "RESTARTED" ? "status" : "question" }).join(", ")}`);
   return restarted;
 };
 if (hangCheck()) process.exit(0);
@@ -339,6 +385,8 @@ const reasons = fullCheck ? pendingWork() : inboxWaiting ? ["inbox"] : [];
 if (fresh.length) reasons.unshift(`${fresh.length} worker message`);
 if (wave.state === "finished") reasons.unshift("wave finished");
 // A Controller that only waits for the human is not woken: it would achieve nothing and cost model time.
+// An answer the human gave must not wait for ever: with a "Needs" item open, an inbox newer than status.md still wakes it.
+if (needsHuman().length && readText("inbox.md").trim() && mtime("inbox.md") > mtime("status.md") && !reasons.includes("inbox")) reasons.push("inbox newer than status.md");
 if (!reasons.length && needsHuman().length) process.exit(0);
 const lastWake = fs.existsSync(file("heartbeat.last")) ? fs.statSync(file("heartbeat.last")).mtimeMs : 0;
 // Idle (nothing new, nothing ready, no worker running) is woken at most every wake.idleMinutes; a source that cannot be read is no event.
@@ -360,7 +408,8 @@ if (!idle) {
   const finished = wave.state === "finished";
   if ((inboxWaiting || fresh.length || finished) && Date.now() - busySince >= WAKE.busyPointerMinutes * 60_000) {
     const key = JSON.stringify([inboxWaiting ? createHash("sha1").update(readText("inbox.md")).digest("hex") : null, fresh, finished ? wave.handle : null]);
-    if (readText("heartbeat.pointer") !== key) {
+    if (readText("heartbeat.pointer") !== key && dialogVisible(readScreen())) log("pointer not typed: a confirmation question is visible in the Controller's terminal");
+    else if (readText("heartbeat.pointer") !== key) {
       const inboxOnly = inboxWaiting && !fresh.length && !finished;
       orca("terminal", "send", "--terminal", terminal.handle, "--text", inboxOnly ? POINTER : POINTER_MAIL, "--enter");
       fs.writeFileSync(file("heartbeat.pointer"), key);

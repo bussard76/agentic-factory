@@ -372,14 +372,14 @@ test("a job that is scheduled but silent or failing is reported, not OK", () => 
 test("start clears the heartbeat's record of an automatic restart, and renders the project's thresholds into CONTROLLER.md", () => {
   const h = startSetup();
   assert.match(h.cli(["start"]).stdout, /scheduled with launchd/);
-  assert.match(fs.readFileSync(path.join(h.ctlDir, "CONTROLLER.md"), "utf8"), /above 50 percent[\s\S]*restarted less than 30 minutes ago/, "the defaults");
+  assert.match(fs.readFileSync(path.join(h.ctlDir, "CONTROLLER.md"), "utf8"), /above 50 percent[\s\S]*restarted less than 120 minutes ago/, "the defaults");
   fs.writeFileSync(path.join(h.ctlDir, "heartbeat.hung.json"), JSON.stringify({ hangRestarts: 1 }));
-  h.edit((c) => { c.hosts.controller.restart = { contextPercent: 70, minGapMinutes: 45 }; c.hosts.controller.hung = { minutes: 40, restartAfterMinutes: 20 }; c.hosts.controller.wake = { idleMinutes: 60, busyPointerMinutes: 4 }; });
+  h.edit((c) => { c.hosts.controller.restart = { contextPercent: 70, contextGapMinutes: 45 }; c.hosts.controller.hung = { minutes: 40, restartAfterMinutes: 20 }; c.hosts.controller.wake = { idleMinutes: 60, busyPointerMinutes: 4 }; });
   h.cli(["start"]);
   assert.equal(fs.existsSync(path.join(h.ctlDir, "heartbeat.hung.json")), false, "a person ran start: the record is cleared");
   const text = fs.readFileSync(path.join(h.ctlDir, "CONTROLLER.md"), "utf8");
   assert.match(text, /above 70 percent[\s\S]*restarted less than 45 minutes ago/);
-  assert.match(text, /at most every 60 minutes[\s\S]*after 4 minutes[\s\S]*for 40 minutes, counts as hung[\s\S]*if nothing changed 20 minutes later/);
+  assert.match(text, /at most every 60 minutes[\s\S]*after 4 minutes[\s\S]*for 40 minutes, counts as hung[\s\S]*only after 20 more minutes/);
   assert.doesNotMatch(text, /\{\{/);
   h.done();
 });

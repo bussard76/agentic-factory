@@ -32,7 +32,7 @@ fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(a) + "\\n");
 const out = (result) => console.log(JSON.stringify({ ok: true, result }));
 if (a[0] === "terminal" && a[1] === "list") out({ terminals: s.terminals });
 else if (a[0] === "terminal" && a[1] === "wait") out({ wait: { satisfied: s.idle } });
-else if (a[0] === "terminal" && a[1] === "read") out({ tail: s.waveTail ?? "" });
+else if (a[0] === "terminal" && a[1] === "read") out({ tail: s.screenText ?? s.waveTail ?? "" });
 else if (a[0] === "orchestration" && a[1] === "inbox") out({ messages: s.messages });
 else out({});`);
   fs.chmodSync(fake, 0o755);
@@ -149,6 +149,23 @@ test("a worker message or a finished wave reaches a busy Controller as a pointer
   h.done();
 });
 
+test("the busy pointer is not typed while a confirmation question is visible; it is typed once the question is gone", () => {
+  const h = setup({ state: { idle: false } });
+  h.patch({ waveTail: "" });
+  h.beat();
+  h.write("inbox.md", "do this\n");
+  busySince(h, 3);
+  // The fake serves the screen from the state file.
+  const screen = (text) => h.patch({ screenText: text });
+  screen("Allow this command to run? Do you want to proceed?\n 1. Yes\n 2. No");
+  assert.match(h.beat(), /pointer not typed: a confirmation question is visible/);
+  assert.equal(h.sent().length, 0);
+  screen("> ");
+  h.beat();
+  assert.equal(h.sent().length, 1);
+  h.done();
+});
+
 test("hosts.controller.wake.busyPointerMinutes sets how long a busy Controller is left alone", () => {
   const h = setup({ state: { idle: false } });
   fs.writeFileSync(path.join(h.ctl, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main", humanName: "Alex" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "local", wake: { busyPointerMinutes: 10 } }, workers: [{ name: "local", kind: "local", projectDir: path.join(h.dir, "p"), orcaRepoId: "r" }] } }));
@@ -163,27 +180,70 @@ test("hosts.controller.wake.busyPointerMinutes sets how long a busy Controller i
   h.done();
 });
 
-test("a line the Controller handled (inbox.mjs) does not wake it again; a new line, even while it works, does", () => {
+test("inbox.mjs --done moves exactly what was printed; a line that arrives meanwhile stays and wakes the Controller, identical text included", () => {
   const h = setup();
   h.beat();
   const inbox = (args = []) => spawnSync("node", [path.join(h.ctl, "inbox.mjs"), ...args], { encoding: "utf8", env: cleanEnv({ FACTORY_CONFIG: path.join(h.ctl, "factory.config.json") }) });
-  h.write("inbox.md", "2026-11-05 do this\n");
-  assert.match(h.beat(), /woke term_c \(inbox\)/, "no marker: every line is new, as before");
-  const read = inbox();
-  assert.match(read.stdout, /do this/);
-  h.write("inbox.md", "2026-11-05 do this\n2026-11-05 a line that arrives while the Controller works\n");
-  assert.match(inbox(["--handled"]).stdout, /1 line\(s\) in inbox\.md arrived since you read it/, "what it did not print stays new");
+  const text = () => fs.readFileSync(path.join(h.ctl, "inbox.md"), "utf8");
+  h.write("inbox.md", "yes\n");
+  assert.match(h.beat(), /woke term_c \(inbox\)/, "no record: every line is new, as before");
+  assert.equal(inbox().stdout, "yes\n");
+  fs.appendFileSync(path.join(h.ctl, "inbox.md"), "yes\n");   // the human's second answer, the same words, while the Controller works
+  const done = inbox(["--done"]);
+  assert.equal(done.status, 0, done.stderr);
+  assert.match(done.stdout, /moved 1 line\(s\) to inbox-done\.md; 1 line\(s\) arrived since you read it and stay in inbox\.md/);
+  assert.equal(text(), "yes\n", "the second line was never printed and stays");
+  assert.equal(fs.readFileSync(path.join(h.ctl, "inbox-done.md"), "utf8"), "yes\n");
   h.write("heartbeat.last", ""); h.age("heartbeat.last", 5 * 60_000);
-  assert.match(h.beat(), /woke term_c \(inbox\)/);
-  inbox(); inbox(["--handled"]);
+  assert.match(h.beat(), /woke term_c \(inbox\)/, "the unread line wakes it, with \"Needs\" open or not");
+  // Read and done again: nothing is new, not even at a tenth minute.
+  inbox(); assert.equal(inbox(["--done"]).status, 0);
+  assert.equal(text(), "");
   h.age("heartbeat.last", 5 * 60_000);
-  assert.doesNotMatch(h.beat(), /woke/, "everything in the inbox is handled: not even a tenth minute wakes it");
-  // The Controller moves a handled line out: the same text sent again is new.
-  h.write("inbox.md", "2026-11-05 and this\n");
-  inbox(["--handled"]);
-  h.write("inbox.md", "2026-11-05 and this\n2026-11-05 do this\n");
+  assert.doesNotMatch(h.beat(), /woke/);
+  // Two copies sent again after the first were moved out are new again.
+  h.write("inbox.md", "yes\n");
   h.age("heartbeat.last", 5 * 60_000);
   assert.match(h.beat(), /woke term_c \(inbox\)/);
+  h.done();
+});
+
+test("inbox.mjs: a half-written last line is neither printed nor moved, and a file that was edited under it is left alone; a stale or foreign record counts as all new", () => {
+  const h = setup();
+  h.beat();
+  const inbox = (args = []) => spawnSync("node", [path.join(h.ctl, "inbox.mjs"), ...args], { encoding: "utf8", env: cleanEnv({ FACTORY_CONFIG: path.join(h.ctl, "factory.config.json") }) });
+  h.write("inbox.md", "one\ntw");
+  assert.equal(inbox().stdout, "one\n");
+  assert.equal(inbox(["--done"]).status, 0);
+  assert.equal(fs.readFileSync(path.join(h.ctl, "inbox.md"), "utf8"), "tw");
+  h.write("inbox.md", "alpha\nbeta\n");
+  inbox();
+  h.write("inbox.md", "ALPHA\nbeta\nmore\n");   // edited by hand between the two steps
+  const refused = inbox(["--done"]);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /no longer starts with what you read; nothing was moved/);
+  assert.equal(fs.readFileSync(path.join(h.ctl, "inbox.md"), "utf8"), "ALPHA\nbeta\nmore\n");
+  assert.equal(inbox(["--done"]).status, 1, "done without a read of its own is refused too after the record is used up or missing");
+  for (const bad of ["not json", "[]", "null", JSON.stringify({ bytes: 9999, hash: "x" }), JSON.stringify({ bytes: 3, hash: "wrong" })]) {
+    h.write("inbox.handled.json", bad);
+    h.write("heartbeat.last", ""); h.age("heartbeat.last", 5 * 60_000);
+    assert.match(h.beat(), /woke term_c \(inbox\)/, bad);
+  }
+  h.done();
+});
+
+test("with a \"Needs\" item open, an inbox newer than status.md still wakes the Controller: an answer never waits for ever", () => {
+  const h = setup();
+  h.beat();
+  h.write("status.md", "# Status\n## Needs Alex\n- Which option?\n## Next\n"); h.age("status.md", 30 * 60_000);
+  assert.doesNotMatch(h.beat(), /woke/, "nothing new: a Controller that waits for the human is not woken");
+  h.write("inbox.md", "2026-11-24 option B\n");
+  assert.match(h.beat(), /woke term_c \(inbox/);
+  // It answers, writes status.md (a newer one) and moves the line out.
+  h.write("status.md", "# Status\n## Needs Alex\n- Next question?\n## Next\n");
+  h.write("inbox.md", "");
+  h.write("heartbeat.last", ""); h.age("heartbeat.last", 5 * 60_000);
+  assert.doesNotMatch(h.beat(), /woke/);
   h.done();
 });
 

@@ -422,7 +422,7 @@ function templateVars(c) {
     // hosts.controller.wake, .hung and .restart: defaults as in controller/lib.mjs and docs/orca.md.
     WAKE_IDLE_MINUTES: String(c.hosts.controller.wake?.idleMinutes ?? 30), BUSY_POINTER_MINUTES: String(c.hosts.controller.wake?.busyPointerMinutes ?? 2),
     HUNG_MINUTES: String(c.hosts.controller.hung?.minutes ?? 25), HUNG_RESTART_MINUTES: String(c.hosts.controller.hung?.restartAfterMinutes ?? 15),
-    CONTEXT_PERCENT: String(c.hosts.controller.restart?.contextPercent ?? 50), RESTART_GAP_MINUTES: String(c.hosts.controller.restart?.minGapMinutes ?? 30),
+    CONTEXT_PERCENT: String(c.hosts.controller.restart?.contextPercent ?? 50), RESTART_GAP_MINUTES: String(c.hosts.controller.restart?.contextGapMinutes ?? 120),
     MODEL_SMALL: c.agents.models.small, MODEL_DEFAULT: c.agents.models.default, MODEL_LARGE: c.agents.models.large,
     AGENT_DEFAULT: c.agents.default, AGENT_FALLBACK: c.agents.fallback.agent, FB_SMALL: c.agents.fallback.models.small, FB_DEFAULT: c.agents.fallback.models.default, FB_LARGE: c.agents.fallback.models.large, QUOTA_THRESHOLD: String(c.agents.fallback.quotaThresholdPercent),
     WAVE_PASSED: String(c.reviews.waveTriggers.passedTasks), WAVE_MINUTES: String(c.reviews.waveTriggers.waitMinutes), FAST_LANE_MAX: String(c.improvement.fastLaneMaxParallel),
