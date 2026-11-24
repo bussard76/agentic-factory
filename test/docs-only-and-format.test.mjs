@@ -608,9 +608,14 @@ function docsController(r) {
   const ctl = fs.mkdtempSync(path.join(r.base, "ctl-docsonly-"));
   for (const f of ["lib.mjs", "cli.mjs", "docsonly.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
   fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "demo", mainBranch: "main" }, hosts: { controller: { host: "local", controllerDir: ctl }, workers: [{ name: "local", kind: "local", projectDir: r.dir }] } }));
-  const run = (...a) => spawnSync("node", [path.join(ctl, "docsonly.mjs"), ...a], { encoding: "utf8", env: { ...process.env, FACTORY_CONFIG: "", ...(r.env ?? {}) } });
+  fs.mkdirSync(path.join(ctl, "steering")); fs.copyFileSync(path.join(ROOT, "controller/steering/issues.mjs"), path.join(ctl, "steering/issues.mjs"));
+  const env = () => ({ ...process.env, FACTORY_CONFIG: "", ...(r.env ?? {}) });
+  const run = (...a) => spawnSync("node", [path.join(ctl, "docsonly.mjs"), ...a], { encoding: "utf8", env: env() });
+  // `steering/issues.mjs claim <n>` as the Controller runs it (the fake gh answers); or a record written by hand.
+  const claim = (n) => spawnSync("node", [path.join(ctl, "steering/issues.mjs"), "claim", String(n)], { encoding: "utf8", env: env() });
+  const record = (n, documentation) => fs.appendFileSync(path.join(ctl, "journal.ndjson"), JSON.stringify({ ts: new Date().toISOString(), type: "claim", task: String(n), documentation }) + "\n");
   const journal = () => { const f = path.join(ctl, "journal.ndjson"); return fs.existsSync(f) ? fs.readFileSync(f, "utf8").trim().split("\n").map((l) => JSON.parse(l)) : []; };
-  return { run, journal };
+  return { run, journal, claim, record };
 }
 const commit = (r, msg) => { r.git("add", "-A"); r.git(...NOHOOKS, "commit", "-qm", msg); };
 // What the flow does for one ticket: the Architect's branch with the spec review; the Developer's branch from main that
@@ -781,23 +786,30 @@ test("a ticket directory outside docs/ and a custom allowlist: the process files
 // A fake gh that prints the file FAKE_ISSUE_BODY names for `gh issue view <n> --json body --jq .body`.
 function fakeGh(r, body) {
   const bin = fs.mkdtempSync(path.join(r.base, "fake-gh-")), text = path.join(bin, "body.txt");
-  fs.writeFileSync(path.join(bin, "gh"), "#!/bin/sh\ncat \"$FAKE_ISSUE_BODY\"\n", { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "gh"), `#!/usr/bin/env node
+const fs = require("node:fs"), a = process.argv.slice(2);
+if (a[0] === "issue" && a[1] === "edit") process.exit(0);
+const body = fs.readFileSync(process.env.FAKE_ISSUE_BODY, "utf8");
+process.stdout.write(a.includes("--jq") ? body : JSON.stringify({ body }));
+`, { mode: 0o755 });
   fs.writeFileSync(text, body);
   r.env = { PATH: `${bin}${path.delimiter}${process.env.PATH}`, FAKE_ISSUE_BODY: text };
   return (b) => fs.writeFileSync(text, b);
 }
 test("github-issues mode: the report is issue-<n>.md named by the Controller's --ref, the issue's own text must declare it, any other issue number is refused", () => {
   const r = repo({ docsOnly: { enabled: true }, steering: { mode: "github-issues" } }), c = docsController(r);
-  const setBody = fakeGh(r, "Update the README.\n\n${TICKET}".replace("${TICKET}", TICKET));
+  const setBody = fakeGh(r, `Update the README.\n\n${TICKET}`);
+  assert.equal(c.claim(12).status, 0, "claim");
+  assert.equal(c.journal().find((e) => e.type === "claim").documentation, true, "the claim recorded the declaration");
   const spec = "docs/reviews/I12-architecture-spec.md", files = { "README.md": "# Demo\nmore\n", [spec]: SPEC_TEXT, "docs/reports/issue-12.md": "r\n" };
   const opts = { task: "I12", name: "agents/i12" };
   assert.equal(attempt(r, c, files, { ...opts, args: ["--ref", "#12"] }).status, 0, "control: declared issue, its own two files");
-  let out = attempt(r, c, files, { ...opts, args: ["--ref", "#13"] }); assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /issue-12\.md"?  <- installed/);
+  let out = attempt(r, c, files, { ...opts, args: ["--ref", "#13"] }); assert.equal(out.status, 3, out.stdout);
   out = attempt(r, c, files, opts); assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /the issue.s text was not supplied/, "without --ref there is no issue text to read");
   out = attempt(r, c, { ...files, "docs/reports/issue-13.md": "r\n" }, { ...opts, args: ["--ref", "#12"] }); assert.equal(out.status, 3, out.stdout);
   for (const body of ["Add GET /health.\n", "Add GET /health.\nLevel: 2\nDocumentation only: yes\n", "Level: 1\n", "Level: 1\nDocumentation only: no\n", "Level: 1 | 2 | 3\nDocumentation only: yes\n", `${TICKET}Documentation only: yes\n`]) {
     setBody(body);
-    out = attempt(r, c, files, { ...opts, args: ["--ref", "#12"] }); assert.equal(out.status, 3, `${JSON.stringify(body)}\n${out.stdout}`); assert.match(out.stdout, /not a declared documentation ticket: the ticket/);
+    out = attempt(r, c, files, { ...opts, args: ["--ref", "#12"] }); assert.equal(out.status, 3, `${JSON.stringify(body)}\n${out.stdout}`); assert.match(out.stdout, /not a declared documentation ticket: the issue's text now: /);
   }
   assert.notEqual(c.run("I12", "agents/i12", "--ref").status, 0, "--ref without a value is a usage error");
 });
@@ -861,7 +873,7 @@ test("a code ticket delivered as words (spec review, a report saying 'implemente
   const words = (t, report) => ({ "README.md": "# Demo\nSee /health.\n", [`docs/reviews/${t}-architecture-spec.md`]: SPEC_TEXT, [`docs/reports/${report}.md`]: "Implemented, see README.\n" });
   for (const [t, report, why] of [["T05", "T05-health", "Level 2, no declaration"], ["T06", "T06-health-l1", "Level 1 code ticket, no declaration"]]) {
     const out = attempt(r, c, words(t, report), { task: t, name: `agents/${t.toLowerCase()}` });
-    assert.equal(out.status, 3, `${why}\n${out.stdout}`); assert.match(out.stdout, /verdict=not-docs-only reason="not a declared documentation ticket: the ticket (its Level is not 1|it does not say)/);
+    assert.equal(out.status, 3, `${why}\n${out.stdout}`); assert.match(out.stdout, /verdict=not-docs-only reason="not a declared documentation ticket: the ticket (at the branch's base|on main now): (its Level is not 1|it does not say)/);
   }
   assert.deepEqual(c.journal(), [], "no Tester skipped, nothing journaled");
   const ok = attempt(r, c, words("T03", "T03-document-api")); assert.equal(ok.status, 0, ok.stdout);
@@ -900,7 +912,7 @@ test("a declaration on the task branch does not count: the ticket is read as it 
   // the declaration appears on main only after the branch was cut: the base did not have it
   r.git("checkout", "-q", "-b", "agents/t05", "main"); for (const [p, v] of Object.entries(flowFiles)) r.write(p, v); commit(r, "words"); r.git("push", "-q", "origin", "agents/t05"); r.git("checkout", "-q", "main");
   onMain(r, { "docs/tasks/T05-health.md": TICKET });
-  out = c.run("T05", "agents/t05"); assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /not a declared documentation ticket: the ticket its Level is not 1/);
+  out = c.run("T05", "agents/t05"); assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /not a declared documentation ticket: the ticket at the branch's base: its Level is not 1/);
   assert.deepEqual(c.journal(), []);
 });
 
@@ -933,4 +945,83 @@ test("--base takes any value as before (a value that starts with a dash), and --
   const r = ticketRepo(); const range = branch(r, "d1", () => r.write("docs/guide.md", "v2\n"));
   assert.equal(r.check(range, "--base", "-x").status, 0, "the value of --base is unused for a range, as on main");
   assert.equal(r.check(range, "--ticket-text", "/dev/null").status, 2);
+});
+
+// --- when the declaration is read (re-review of #65, A to C) -------------------------------------------------------------
+const WORDS = { "README.md": "# Demo\nSee /health.\n", "docs/reviews/T03-architecture-spec.md": SPEC_TEXT, "docs/reports/T03-document-api.md": "Implemented, see README.\n" };
+function cutBranch(r, files = WORDS, name = "agents/t03") {
+  r.git("checkout", "-q", "-b", name, "main"); for (const [p, v] of Object.entries(files)) r.write(p, v); commit(r, "words"); r.git("push", "-q", "origin", name); r.git("checkout", "-q", "main");
+}
+
+test("a file ticket must declare itself at the branch's base AND on main now: a ticket turned into a code ticket, renamed or removed since the cut takes the full path", () => {
+  const r = ticketRepo(), c = docsController(r);
+  cutBranch(r);
+  assert.equal(c.run("T03", "agents/t03").status, 0, "control: declared at the cut and now");
+  // the human turns it into a code ticket on main while the work runs; the branch never merged main
+  onMain(r, { "docs/tasks/T03-document-api.md": "Status: ready\nLevel: 2\n\nAdd GET /health in src/server.js.\n" });
+  let out = c.run("T03", "agents/t03");
+  assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /not a declared documentation ticket: the ticket on main now: its Level is not 1/);
+  // and back: declared again on main, but main lost the declaration at the cut? no: the base still says yes, so it counts again
+  onMain(r, { "docs/tasks/T03-document-api.md": TICKET });
+  assert.equal(c.run("T03", "agents/t03").status, 0);
+  // renamed on main (the ticket id no longer has a file at its path), then removed
+  r.git("mv", "docs/tasks/T03-document-api.md", "docs/tasks/T03-renamed.md"); commit(r, "rename"); r.git(...NOHOOKS, "push", "-q", "origin", "main");
+  out = c.run("T03", "agents/t03"); assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /on main now: its file cannot be read/);
+  // the other direction: not declared at the cut, declared on main since: the base says no
+  const r2 = ticketRepo(), c2 = docsController(r2);
+  onMain(r2, { "docs/tasks/T03-document-api.md": "Status: ready\nLevel: 1\n" });
+  cutBranch(r2); onMain(r2, { "docs/tasks/T03-document-api.md": TICKET });
+  out = c2.run("T03", "agents/t03"); assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /at the branch's base: it does not say/);
+  assert.deepEqual(c2.journal(), []);
+});
+
+test("only the documented spelling counts, once, in the ticket's own prose: not in a code fence, not in an HTML comment (the template as shipped is not declared), not another case or spacing", () => {
+  const r = ticketRepo(), c = docsController(r);
+  const template = fs.readFileSync(path.join(ROOT, "templates/docs/tasks/T00-template.md"), "utf8");
+  const cases = {
+    "the shipped template, copied and not edited": template,
+    "fenced example": "Level: 1\n\n```\nDocumentation only: yes\n```\n", "tilde fence": "Level: 1\n~~~\nDocumentation only: yes\n~~~\n",
+    "both lines only in a fence": "```\nLevel: 1\nDocumentation only: yes\n```\n", "multi-line comment": "Level: 1\n<!--\nDocumentation only: yes\n-->\n",
+    "single-line comment": "Level: 1\n<!-- Documentation only: yes -->\n", "unterminated comment": "Level: 1\n<!--\nDocumentation only: yes\n", "unterminated fence": "Level: 1\n```\nDocumentation only: yes\n",
+    "lower case": "level: 1\ndocumentation only: yes\n", "upper case": "LEVEL: 1\nDOCUMENTATION ONLY: YES\n", "no space": "Level:1\nDocumentation only:yes\n", "tab": "Level:\t1\nDocumentation only:\tyes\n",
+    "two spaces": "Level:  1\nDocumentation only:  yes\n", "yes in capitals": "Level: 1\nDocumentation only: Yes\n", "second line in a fence does not hide the first duplicate": "Level: 1\nlevel: 1\nDocumentation only: yes\n",
+  };
+  let n = 50;
+  for (const [why, body] of Object.entries(cases)) {
+    const id = `T${n++}`;
+    onMain(r, { [`docs/tasks/${id}-x.md`]: body });
+    const out = attempt(r, c, { "README.md": `# Demo\n${id}\n`, [`docs/reviews/${id}-architecture-spec.md`]: SPEC_TEXT }, { task: id, name: `agents/${id.toLowerCase()}` });
+    assert.equal(out.status, 3, `${why}\n${out.stdout}`); assert.match(out.stdout, /not a declared documentation ticket/, why);
+  }
+  // what does count: the lines in the prose next to a fence and a comment that hold other things; trailing blanks and CRLF
+  onMain(r, { "docs/tasks/T90-x.md": "Status: ready\r\n<!-- Documentation only: yes -- a note -->\r\n```sh\r\nLevel: 2\r\n```\r\nLevel: 1 \r\nDocumentation only: yes\t\r\n" });
+  assert.equal(attempt(r, c, { "README.md": "# Demo\nT90\n", "docs/reviews/T90-architecture-spec.md": SPEC_TEXT }, { task: "T90", name: "agents/t90" }).status, 0);
+});
+
+test("the parser in the Controller's lib.mjs and the one in the guardrails are the same code", () => {
+  const body = (f) => { const t = fs.readFileSync(path.join(ROOT, f), "utf8"), a = t.indexOf("function declaredProblem(text) {"); return t.slice(a, t.indexOf("\n}\n", a)); };
+  assert.equal(body("controller/lib.mjs"), body("templates/tools/factory-guardrails.mjs"));
+});
+
+test("github-issues: the declaration must hold in the Controller's claim record AND in the live text; no record, a record of no, an edit after the claim, and an unreadable issue take the full path", () => {
+  const r = repo({ docsOnly: { enabled: true }, steering: { mode: "github-issues" } }), c = docsController(r);
+  const setBody = fakeGh(r, `Update the README.\n\n${TICKET}`);
+  const spec = "docs/reviews/I12-architecture-spec.md", files = { "README.md": "# Demo\nmore\n", [spec]: SPEC_TEXT, "docs/reports/issue-12.md": "r\n" };
+  const run = () => attempt(r, c, files, { task: "I12", name: "agents/i12", args: ["--ref", "#12"] });
+  // an issue taken before the record existed
+  let out = run(); assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /no claim record that says it was a documentation ticket.*no record/);
+  assert.equal(c.claim(12).status, 0); assert.equal(run().status, 0, "control: claimed as declared, still declared");
+  // a worker (or anyone) edits the issue after the claim
+  setBody("Add GET /health.\n"); out = run(); assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /the issue's text now: its Level is not 1/);
+  // claimed while it was not declared, edited into a declaration afterwards: the record says no
+  const r2 = repo({ docsOnly: { enabled: true }, steering: { mode: "github-issues" } }), c2 = docsController(r2), set2 = fakeGh(r2, "Add GET /health.\n");
+  assert.equal(c2.claim(12).status, 0); assert.equal(c2.journal().find((e) => e.type === "claim").documentation, false);
+  set2(TICKET);
+  out = attempt(r2, c2, files, { task: "I12", name: "agents/i12", args: ["--ref", "#12"] }); assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /recorded: not declared/);
+  // a claim whose gh cannot read the issue records no; and a record for another issue does not stand in
+  const r3 = repo({ docsOnly: { enabled: true }, steering: { mode: "github-issues" } }), c3 = docsController(r3); fakeGh(r3, TICKET);
+  c3.record(13, true);
+  out = attempt(r3, c3, files, { task: "I12", name: "agents/i12", args: ["--ref", "#12"] }); assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /no record/);
+  r3.env = { PATH: `${path.dirname(path.join(r3.base, "nonexistent"))}${path.delimiter}/usr/bin:/bin` };   // no gh at all
+  assert.equal(c3.claim(12).status !== 0 || c3.journal().filter((e) => e.type === "claim" && e.task === "12").every((e) => e.documentation === false), true);
 });

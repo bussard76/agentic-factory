@@ -54,7 +54,7 @@ Matching ignores case: on a case-insensitive file system `docs/ADR/` is `docs/ad
 
 ### The ticket's own word: a documentation ticket
 
-A diff cannot tell a documentation ticket from a code ticket that was delivered as words (a spec review, a report saying "implemented", one README line). So the path applies only when the ticket itself says it is a documentation ticket, **as it is on the main branch when the check runs and at the branch's base, never on the task branch**; a declaration added by the task's own commits does not count. In the ticket (`docs/tasks/T<n>-*.md`, the template has the comment; in github-issues mode the issue's text, which `docsonly.mjs` reads with `gh`):
+A diff cannot tell a documentation ticket from a code ticket that was delivered as words (a spec review, a report saying "implemented", one README line). So the path applies only when the ticket itself says it is a documentation ticket, **both when the work started and when the check runs, never on the task branch**; if either reading says no, finds nothing or cannot be made, the full path runs. A declaration added by the task's own commits does not count, and neither does one added on main after the work started or removed since. In the ticket (`docs/tasks/T<n>-*.md`; the template has the field as a comment; in github-issues mode the issue's text):
 
 ```
 Level: 1
@@ -64,6 +64,8 @@ Documentation only: yes
 - **Exactly one `Level:` line, and it says 1.** Any higher level (a new export, dependency or route, a new module) is never documentation only; an unfilled `Level: 1 | 2 | 3` is not a level.
 - **Exactly one `Documentation only: yes` line.** Absent, anything else, or twice: the full path. It is absent by default (the template carries it as a comment): whoever writes the ticket adds it, and only when the result is Markdown or images and nothing else.
 - A ticket that is declared and whose branch holds anything else (code, a second file under the process directories) takes the full path, as before. A ticket that is not declared takes it whatever its diff is, and so does a ticket the check cannot find on the base.
+- **The spelling is exact and the lines count once, in the ticket's own prose:** `Level: 1` and `Documentation only: yes` at the start of a line, case and spacing as shown (trailing blanks aside). Lines inside a fenced code block or an HTML comment do not count, so a ticket copied from the template without uncommenting the field is not declared. A second `Level:` or `Documentation only:` line, in any case, refuses it.
+- **When it is read.** A task file: the check reads the ticket at the merge base of the branch (where the work started) and at the main branch's tip now, and both must declare it; a ticket turned into a code ticket on main since the cut, renamed or removed takes the full path. A GitHub issue (it is not in the tree): `issues.mjs claim` reads the issue's text when the Controller takes it and records `documentation: true|false` in the Controller's own journal, where a worker cannot write; `docsonly.mjs` requires that record **and** the issue's live text (read with `gh`, from `--ref "#<n>"`) to declare it. An issue taken before this record existed has none and takes the full path. The Controller must claim an issue before dispatching it, as CONTROLLER.md says.
 - Without `--ticket` (the commit hook's shortcut, the wave's own call) the check still decides from the diff alone; the declaration is the Controller's condition for skipping a Tester.
 
 ### The ticket's own process files

@@ -4,7 +4,7 @@ Status: draft | ready | building | review | passed | integrated | paused
 Decided by: <human>, <date>
 Origin: <wish, live-test finding, audit, retro, debt item>
 Depends on: <tasks or shared interfaces that must exist first, or "nothing">
-<!-- Documentation only: yes -- add this line (and `Level: 1` below) ONLY when the result is Markdown or images and nothing else. It is what lets a docs-only task skip its Tester (docsOnly.enabled); read from the ticket on the main branch before the work starts, never from the task branch. Leave it out otherwise: absent means the full path. A ticket that asks for code, an export, a dependency or a route never carries it, whatever its level. -->
+<!-- Documentation only: yes -- add this line (and `Level: 1` below) ONLY when the result is Markdown or images and nothing else. It is what lets a docs-only task skip its Tester (docsOnly.enabled); it must be there when the work starts and still when the check runs (read from the ticket on the main branch, never from the task branch), as shown, once, outside code blocks and comments: this comment itself does not count. Leave it out otherwise: absent means the full path. A ticket that asks for code, an export, a dependency or a route never carries it, whatever its level. -->
 
 ## Goal
 

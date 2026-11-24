@@ -1,12 +1,12 @@
 // Steering mode github-issues: tickets are GitHub issues (gh CLI). Labels from factory.config.json → steering. Usage:
 // node steering/issues.mjs ready                 → JSON list of open, unassigned issues with the ready label and no open blockers
-// node steering/issues.mjs claim <n>             → assigns the authenticated account, swaps ready → in-progress
+// node steering/issues.mjs claim <n>             → assigns the authenticated account, swaps ready → in-progress, records in the journal whether the issue declares a documentation ticket
 // node steering/issues.mjs comment <n> <file>    → posts the file's content as a comment (review verdicts, decisions)
 // node steering/issues.mjs needs-human <n> <text>→ labels needs-human and comments the question
 // node steering/issues.mjs close <n> <text>      → closes with a comment (after the wave reached main)
 import "../cli.mjs";
 import fs from "node:fs";
-import { PROJECT_DIR, config, sh } from "../lib.mjs";
+import { PROJECT_DIR, config, declaredProblem, journal, sh } from "../lib.mjs";
 
 const ready = config.steering?.readyLabel ?? "ready-for-agent";
 const gh = (...a) => sh("gh", a, { cwd: PROJECT_DIR });
@@ -23,7 +23,15 @@ if (cmd === "ready") {
   };
   const open = list.filter((i) => !i.assignees.nodes.length).filter(unblocked).map((i) => ({ number: i.number, title: i.title, level: /level\s*(\d)/i.exec(i.body ?? "")?.[1] ?? "?", labels: i.labels.nodes.map((l) => l.name) }));
   console.log(JSON.stringify(open, null, 1));
-} else if (cmd === "claim") { gh("issue", "edit", n, "--add-assignee", "@me", "--remove-label", ready, "--add-label", "in-progress"); console.log("ok"); }
+} else if (cmd === "claim") {
+  // The issue's text as it is when the Controller takes it, before any worker runs: whether it declares a documentation ticket
+  // (`Level: 1`, `Documentation only: yes`) goes into the Controller's own journal, which docsonly.mjs reads. Unreadable = not declared.
+  let documentation = false;
+  try { documentation = declaredProblem(JSON.parse(gh("issue", "view", n, "--json", "body")).body ?? "") === ""; } catch { /* stays false */ }
+  gh("issue", "edit", n, "--add-assignee", "@me", "--remove-label", ready, "--add-label", "in-progress");
+  journal("claim", n, { documentation });
+  console.log("ok");
+}
 else if (cmd === "comment") { gh("issue", "comment", n, "--body-file", arg); console.log("ok"); }
 else if (cmd === "needs-human") { gh("issue", "edit", n, "--add-label", "needs-human"); gh("issue", "comment", n, "--body", arg); console.log("ok"); }
 else if (cmd === "close") { gh("issue", "close", n, "--comment", arg); console.log("ok"); }
