@@ -34,7 +34,7 @@ const out = (result) => console.log(JSON.stringify({ ok: true, result }));
 const arg = (n) => a[a.indexOf(n) + 1];
 if (a[0] === "terminal" && a[1] === "list") out({ terminals: s.terminals });
 else if (a[0] === "terminal" && a[1] === "wait") { out({ wait: { satisfied: s.idle } }); }
-else if (a[0] === "terminal" && a[1] === "read") { s.tick += 1; save(); const h = arg("--terminal"); const L = "abcdefghijklmnopqrstuvwxyz"; out({ terminal: { tail: [String(h).startsWith("term_wave") ? (s.waveTail ?? "") : s.screen === "changing" ? "working " + L[s.tick % 26] + L[(s.tick * 7) % 26] : s.screen === "timer" ? "compacting (" + s.tick + "s)" : s.screen === "static" ? "prompt" : s.screen] } }); }
+else if (a[0] === "terminal" && a[1] === "read") { s.tick += 1; save(); const h = arg("--terminal"); const L = "abcdefghijklmnopqrstuvwxyz"; out({ terminal: { tail: [String(h).startsWith("term_wave") ? (s.waveTail ?? "") : s.screen === "changing" ? "working " + L[s.tick % 26] + L[(s.tick * 7) % 26] : s.screen === "timer" ? "compacting (" + s.tick + "s)" : s.screen === "clock" ? "working  " + String(10 + s.tick % 50) + ":" + String((s.tick * 7) % 60).padStart(2, "0") + ":" + String(s.tick % 60).padStart(2, "0") + "  tokens " + s.tick * 113 : s.screen === "glyph" ? ["◐", "◓", "◑", "◒"][s.tick % 4] + " thinking " + ["|", "/", "-", "|"][s.tick % 4] + "⠋⠙⠹⠸".split("")[s.tick % 4] + " " + ["→", "↗", "↑", "↖"][s.tick % 4] : s.screen === "static" ? "prompt" : s.screen] } }); }
 else if (a[0] === "terminal" && a[1] === "create") {
   if (s.createFails) { console.error("orca: cannot create"); process.exit(1); }
   s.created += 1; const handle = "term_new" + s.created;
@@ -193,6 +193,14 @@ test("restart (switched on) needs the second confirmation: a terminal that still
   toRestartPoint(timer); timer.patch({ screen: "timer" });
   assert.match(timer.beat(), /restart: restarted/, "only digits change: the same frame");
   timer.done();
+  // A running clock, a token counter and spinner glyphs are no change of frame either.
+  for (const screen of ["clock", "glyph"]) {
+    const c = setup({ controller: ON, screen });
+    report(c);
+    toRestartPoint(c); c.patch({ screen });
+    assert.match(c.beat(), /restart: restarted/, screen);
+    c.done();
+  }
   // No pointer was typed (it was report only): nothing proves that the Controller ignored it.
   const young = setup({ controller: ON });
   young.write("heartbeat.restarted.json", JSON.stringify({ at: Date.now() - 3 * 60 * MIN }));
@@ -397,15 +405,15 @@ test("restart.mjs keeps the last ten copies of the state only", () => {
 
 test("every key this PR adds is in factory.config.example.json with its default, and the defaults are the ones the code uses", async () => {
   const example = JSON.parse(fs.readFileSync(path.join(ROOT, "factory.config.example.json"), "utf8")).hosts.controller;
-  assert.deepEqual({ wake: { idleMinutes: example.wake.idleMinutes, busyPointerMinutes: example.wake.busyPointerMinutes }, hung: example.hung, restart: example.restart },
-    { wake: { idleMinutes: 30, busyPointerMinutes: 2 }, hung: { minutes: 25, restartAfterMinutes: 15, restart: false, patterns: [], patternMinutes: 10, resetAfterDays: 7 }, restart: { minGapMinutes: 30, contextGapMinutes: 120, afterGateMinutes: 15, contextPercent: 50 } });
+  assert.deepEqual({ wake: { idleMinutes: example.wake.idleMinutes, busyPointerMinutes: example.wake.busyPointerMinutes, dialogHoldMinutes: example.wake.dialogHoldMinutes }, hung: example.hung, restart: example.restart },
+    { wake: { idleMinutes: 30, busyPointerMinutes: 2, dialogHoldMinutes: 15 }, hung: { minutes: 25, restartAfterMinutes: 15, restart: false, patterns: [], patternMinutes: 10, resetAfterDays: 7 }, restart: { minGapMinutes: 30, contextGapMinutes: 120, afterGateMinutes: 15, contextPercent: 50 } });
   assert.ok(Array.isArray(example.wake.dialogPatterns) && example.wake.dialogPatterns.length > 0);
   // The same defaults in the code, with no key set.
   const h = setup();
   const probe = path.join(h.ctl, "probe.mjs");
   fs.writeFileSync(probe, `import { WAKE, HUNG, RESTART } from "./lib.mjs"; console.log(JSON.stringify({ WAKE, HUNG, RESTART }));`);
   const got = JSON.parse(h.run("probe.mjs").stdout);
-  assert.deepEqual([got.WAKE.idleMinutes, got.WAKE.busyPointerMinutes, got.HUNG.minutes, got.HUNG.restartAfterMinutes, got.HUNG.restart, got.HUNG.patternMinutes, got.HUNG.resetAfterDays, got.RESTART.minGapMinutes, got.RESTART.contextGapMinutes, got.RESTART.afterGateMinutes, got.RESTART.contextPercent], [30, 2, 25, 15, false, 10, 7, 30, 120, 15, 50]);
+  assert.deepEqual([got.WAKE.idleMinutes, got.WAKE.busyPointerMinutes, got.WAKE.dialogHoldMinutes, got.HUNG.minutes, got.HUNG.restartAfterMinutes, got.HUNG.restart, got.HUNG.patternMinutes, got.HUNG.resetAfterDays, got.RESTART.minGapMinutes, got.RESTART.contextGapMinutes, got.RESTART.afterGateMinutes, got.RESTART.contextPercent], [30, 2, 15, 25, 15, false, 10, 7, 30, 120, 15, 50]);
   assert.deepEqual(got.WAKE.dialogPatterns, example.wake.dialogPatterns);
   h.done();
 });

@@ -147,20 +147,37 @@ test("a worker message or a finished wave reaches a busy Controller as a pointer
   h.done();
 });
 
-test("the busy pointer is not typed while a confirmation question is visible; it is typed once the question is gone", () => {
+test("the busy pointer is held back by a real confirmation question for at most the hold time, and a sentence that merely contains such words does not hold it", () => {
   const h = setup({ state: { idle: false } });
-  h.patch({ waveTail: "" });
   h.beat();
   h.write("inbox.md", "do this\n");
   busySince(h, 3);
-  // The fake serves the screen from the state file.
   const screen = (text) => h.patch({ screenText: text });
-  screen("Allow this command to run? Do you want to proceed?\n 1. Yes\n 2. No");
-  assert.match(h.beat(), /pointer not typed: a confirmation question is visible/);
+  const dialogs = ["Allow this command to run?\n 1. Yes\n 2. No", "Overwrite file? (y/n)", "Continue? [Y/n]: ", "Press Enter to continue"];
+  for (const d of dialogs) {
+    fs.rmSync(path.join(h.ctl, "heartbeat.dialog.json"), { force: true }); fs.rmSync(path.join(h.ctl, "heartbeat.pointer"), { force: true });
+    screen(d);
+    assert.match(h.beat(), /pointer not typed yet: a confirmation question is visible/, d);
+  }
   assert.equal(h.sent().length, 0);
-  screen("> ");
-  h.beat();
+  // Held, not suppressed: after wake.dialogHoldMinutes the pointer is typed.
+  h.write("heartbeat.dialog.json", JSON.stringify({ since: Date.now() - 16 * 60_000, last: Date.now() - 30_000 }));
+  assert.match(h.beat(), /visible for the whole hold time: typing the pointer anyway/);
   assert.equal(h.sent().length, 1);
+  // Ordinary prose, also in the last lines, does not hold it (the reviewer's examples).
+  for (const prose of ["Do you want to merge T7 now? I will wait.", "I will press enter later; the plan: do you want to proceed with T3?", "Are you sure about 1. yes or 2. no? (see the table above)"]) {
+    fs.rmSync(path.join(h.ctl, "heartbeat.pointer"), { force: true }); fs.rmSync(path.join(h.ctl, "heartbeat.dialog.json"), { force: true });
+    const n = h.sent().length;
+    screen(prose);
+    h.beat();
+    assert.equal(h.sent().length, n + 1, prose);
+  }
+  // A question that scrolled out of the last 8 lines no longer holds it.
+  fs.rmSync(path.join(h.ctl, "heartbeat.pointer"), { force: true });
+  const n = h.sent().length;
+  screen("Overwrite file? (y/n)\n" + "working\n".repeat(9));
+  h.beat();
+  assert.equal(h.sent().length, n + 1);
   h.done();
 });
 
@@ -178,55 +195,115 @@ test("hosts.controller.wake.busyPointerMinutes sets how long a busy Controller i
   h.done();
 });
 
-test("inbox.mjs --done moves exactly what was printed; a line that arrives meanwhile stays and wakes the Controller, identical text included", () => {
+// inbox.md is append-only: inbox.mjs never writes it, so a line appended with cat >> at any moment cannot be lost.
+const inboxIn = (h) => (args = []) => spawnSync("node", [path.join(h.ctl, "inbox.mjs"), ...args], { encoding: "utf8", env: { ...process.env, FACTORY_CONFIG: path.join(h.ctl, "factory.config.json") } });
+
+test("inbox.mjs never changes inbox.md; --done records how far it got; a line that arrives meanwhile, identical text included, stays new and wakes the Controller", () => {
   const h = setup();
   h.beat();
-  const inbox = (args = []) => spawnSync("node", [path.join(h.ctl, "inbox.mjs"), ...args], { encoding: "utf8", env: { ...process.env, FACTORY_CONFIG: path.join(h.ctl, "factory.config.json") } });
-  const text = () => fs.readFileSync(path.join(h.ctl, "inbox.md"), "utf8");
+  const inbox = inboxIn(h), path_ = path.join(h.ctl, "inbox.md"), text = () => fs.readFileSync(path_, "utf8");
   h.write("inbox.md", "yes\n");
   assert.match(h.beat(), /woke term_c \(inbox\)/, "no record: every line is new, as before");
+  const ino = fs.statSync(path_).ino;
   assert.equal(inbox().stdout, "yes\n");
-  fs.appendFileSync(path.join(h.ctl, "inbox.md"), "yes\n");   // the human's second answer, the same words, while the Controller works
+  fs.appendFileSync(path_, "yes\n");   // the human's second answer, the same words, while the Controller works
+  const before = fs.statSync(path_);
   const done = inbox(["--done"]);
   assert.equal(done.status, 0, done.stderr);
-  assert.match(done.stdout, /moved 1 line\(s\) to inbox-done\.md; 1 line\(s\) arrived since you read it and stay in inbox\.md/);
-  assert.equal(text(), "yes\n", "the second line was never printed and stays");
+  assert.match(done.stdout, /handled 1 line\(s\); 1 line\(s\) arrived since you read it and are still new/);
+  assert.equal(text(), "yes\nyes\n", "inbox.md is untouched");
+  assert.equal(fs.statSync(path_).mtimeMs, before.mtimeMs); assert.equal(fs.statSync(path_).ino, ino);
   assert.equal(fs.readFileSync(path.join(h.ctl, "inbox-done.md"), "utf8"), "yes\n");
   h.write("heartbeat.last", ""); h.age("heartbeat.last", 5 * 60_000);
-  assert.match(h.beat(), /woke term_c \(inbox\)/, "the unread line wakes it, with \"Needs\" open or not");
-  // Read and done again: nothing is new, not even at a tenth minute.
-  inbox(); assert.equal(inbox(["--done"]).status, 0);
-  assert.equal(text(), "");
+  assert.match(h.beat(), /woke term_c \(inbox\)/, "the unread line wakes it");
+  assert.equal(inbox().stdout, "yes\n", "only the new line is printed");
+  assert.equal(inbox(["--done"]).status, 0);
   h.age("heartbeat.last", 5 * 60_000);
-  assert.doesNotMatch(h.beat(), /woke/);
-  // Two copies sent again after the first were moved out are new again.
-  h.write("inbox.md", "yes\n");
+  assert.doesNotMatch(h.beat(), /woke/, "everything is handled: nothing wakes it");
+  fs.appendFileSync(path_, "yes\n");
   h.age("heartbeat.last", 5 * 60_000);
-  assert.match(h.beat(), /woke term_c \(inbox\)/);
+  assert.match(h.beat(), /woke term_c \(inbox\)/, "a third copy of the same words is new");
   h.done();
 });
 
-test("inbox.mjs: a half-written last line is neither printed nor moved, and a file that was edited under it is left alone; a stale or foreign record counts as all new", () => {
+test("inbox.mjs: no inbox is an empty inbox; a half-written last line is not counted; an edited, archived or foreign record means every line is new", () => {
   const h = setup();
   h.beat();
-  const inbox = (args = []) => spawnSync("node", [path.join(h.ctl, "inbox.mjs"), ...args], { encoding: "utf8", env: { ...process.env, FACTORY_CONFIG: path.join(h.ctl, "factory.config.json") } });
+  const inbox = inboxIn(h), path_ = path.join(h.ctl, "inbox.md");
+  assert.equal(inbox(["--done"]).status, 0, "--done without an inbox.md");
+  assert.match(inbox(["--done"]).stdout, /inbox\.md is empty/);
+  assert.match(inbox().stdout, /no new lines/);
+  assert.equal(inbox(["--done"]).status, 0);
   h.write("inbox.md", "one\ntw");
   assert.equal(inbox().stdout, "one\n");
   assert.equal(inbox(["--done"]).status, 0);
-  assert.equal(fs.readFileSync(path.join(h.ctl, "inbox.md"), "utf8"), "tw");
+  assert.equal(fs.readFileSync(path_, "utf8"), "one\ntw");
+  fs.appendFileSync(path_, "o\n");   // the half line gets its newline
+  assert.equal(inbox().stdout, "two\n");
+  inbox(["--done"]);
+  // Edited by hand between the two steps: nothing is recorded, the file is left alone.
   h.write("inbox.md", "alpha\nbeta\n");
   inbox();
-  h.write("inbox.md", "ALPHA\nbeta\nmore\n");   // edited by hand between the two steps
+  h.write("inbox.md", "ALPHA\nbeta\nmore\n");
   const refused = inbox(["--done"]);
   assert.equal(refused.status, 1);
-  assert.match(refused.stderr, /no longer starts with what you read; nothing was moved/);
-  assert.equal(fs.readFileSync(path.join(h.ctl, "inbox.md"), "utf8"), "ALPHA\nbeta\nmore\n");
-  assert.equal(inbox(["--done"]).status, 1, "done without a read of its own is refused too after the record is used up or missing");
-  for (const bad of ["not json", "[]", "null", JSON.stringify({ bytes: 9999, hash: "x" }), JSON.stringify({ bytes: 3, hash: "wrong" })]) {
+  assert.match(refused.stderr, /no longer starts with what you read; nothing was recorded/);
+  assert.equal(fs.readFileSync(path_, "utf8"), "ALPHA\nbeta\nmore\n");
+  // Archived or replaced: the record no longer matches, everything is new once.
+  inbox(); inbox(["--done"]);
+  h.write("heartbeat.last", ""); h.age("heartbeat.last", 5 * 60_000);
+  assert.doesNotMatch(h.beat(), /woke/);
+  h.write("inbox.md", "a different file\n");
+  assert.match(h.beat(), /woke term_c \(inbox\)/);
+  assert.equal(inbox().stdout, "a different file\n");
+  // Bad, old or foreign records: all new.
+  for (const bad of ["not json", "[]", "null", JSON.stringify({ bytes: 9999, hash: "x" }), JSON.stringify({ bytes: 3, hash: "wrong" }), JSON.stringify({ "9f86d081884c7d65": 2 })]) {
     h.write("inbox.handled.json", bad);
     h.write("heartbeat.last", ""); h.age("heartbeat.last", 5 * 60_000);
     assert.match(h.beat(), /woke term_c \(inbox\)/, bad);
   }
+  h.done();
+});
+
+test("upgrade: the marker the first version of this change wrote ({bytes: 0}) and main's inbox handling (no record, lines moved by hand) mean all new, and lines are never lost", () => {
+  const h = setup();
+  h.beat();
+  const inbox = inboxIn(h), path_ = path.join(h.ctl, "inbox.md");
+  // The first version emptied the file and wrote this record.
+  h.write("inbox.handled.json", JSON.stringify({ bytes: 0, hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" }));
+  h.write("inbox.md", "left over\nand another\n");
+  assert.match(h.beat(), /woke term_c \(inbox\)/);
+  assert.equal(inbox().stdout, "left over\nand another\n");
+  // Its read record has no "from": --done refuses and changes nothing.
+  h.write("inbox.read.json", JSON.stringify({ bytes: 5, hash: "x" }));
+  assert.equal(inbox(["--done"]).status, 1);
+  assert.equal(fs.readFileSync(path_, "utf8"), "left over\nand another\n");
+  // Main: no record, the Controller moved lines by hand (the file may be empty or short).
+  fs.rmSync(path.join(h.ctl, "inbox.handled.json")); fs.rmSync(path.join(h.ctl, "inbox.read.json"), { force: true });
+  h.write("inbox.md", "");
+  h.write("heartbeat.last", ""); h.age("heartbeat.last", 5 * 60_000);
+  assert.doesNotMatch(h.beat(), /woke/);
+  h.done();
+});
+
+test("stress: a writer that appends with O_APPEND (cat >>) all the time, while the Controller reads and records again and again, loses nothing and sees nothing twice", async () => {
+  const h = setup();
+  h.beat();
+  const inbox = inboxIn(h), path_ = path.join(h.ctl, "inbox.md");
+  const N = 400;
+  const writer = path.join(h.dir, "writer.mjs");
+  fs.writeFileSync(writer, `import fs from "node:fs"; const f = process.argv[2]; for (let i = 1; i <= ${N}; i++) { fs.appendFileSync(f, "line " + i + "\\n"); if (i % 7 === 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1); }`);
+  const { spawn } = await import("node:child_process");
+  const child = spawn("node", [writer, path_], { stdio: "ignore" });
+  const finished = new Promise((r) => child.on("exit", r));
+  const seen = [];
+  const cycle = () => { const r = inbox(); for (const l of r.stdout.split("\n")) if (/^line \d+$/.test(l)) seen.push(l); assert.equal(inbox(["--done"]).status, 0); };
+  let done = false; finished.then(() => { done = true; });
+  while (!done) { cycle(); await new Promise((r) => setTimeout(r, 5)); }
+  cycle(); cycle();
+  assert.deepEqual(seen, Array.from({ length: N }, (_, i) => `line ${i + 1}`), "every line exactly once, in order");
+  assert.equal(fs.readFileSync(path_, "utf8").split("\n").filter(Boolean).length, N, "inbox.md still has all of them");
+  assert.equal(fs.readFileSync(path.join(h.ctl, "inbox-done.md"), "utf8").split("\n").filter(Boolean).length, N);
   h.done();
 });
 

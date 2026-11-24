@@ -261,7 +261,7 @@ const noteBusy = (idle) => {
   fs.writeFileSync(file("heartbeat.busy.json"), JSON.stringify({ since, last: now }));
   return since;
 };
-const compile = (list, what) => list.flatMap((p) => { try { return [new RegExp(p, "i")]; } catch { log(`ignored a ${what} entry that is no regular expression: ${oneLine(p, 60)}`); return []; } });
+const compile = (list, what, flags = "i") => list.flatMap((p) => { try { return [new RegExp(p, flags)]; } catch { log(`ignored a ${what} entry that is no regular expression: ${oneLine(p, 60)}`); return []; } });
 const readScreen = () => {
   try {
     const read = orca("terminal", "read", "--terminal", terminal.handle, "--screen").result ?? {};
@@ -271,8 +271,10 @@ const readScreen = () => {
 };
 // A fixed line plus Enter is never typed where a confirmation question is visible (Enter would take its default). The patterns are
 // generic and configurable (hosts.controller.wake.dialogPatterns); a question they do not recognise is the residual risk.
-const dialogRegexes = compile(WAKE.dialogPatterns, "hosts.controller.wake.dialogPatterns");
-const dialogVisible = (screen) => screen !== null && dialogRegexes.some((re) => re.test(screen.split("\n").slice(-25).join("\n")));
+// Only the last 8 lines are looked at (where a prompt sits), per line (flag m). A match delays the pointer by at most
+// wake.dialogHoldMinutes (see below); it never suppresses it for good.
+const dialogRegexes = compile(WAKE.dialogPatterns, "hosts.controller.wake.dialogPatterns", "im");
+const dialogVisible = (screen) => screen !== null && dialogRegexes.some((re) => re.test(screen.split("\n").slice(-8).join("\n")));
 const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 // ---- A Controller that hangs. Hung is: busy, its terminal still changing, and no sign of work (status.md and the journal
@@ -294,7 +296,8 @@ const screenChanging = (text) => {
   return next.changedAt !== null && now - next.changedAt <= SCREEN_ACTIVE_MS;
 };
 // The same frame: counters, timers and spinner glyphs do not make a different one.
-const frame = (text) => String(text).replace(/\d+/g, "#").replace(/[⠀-⣿]/g, "*").replace(/\s+/g, " ").trim();
+// Digits (counters, clocks, timers), braille, arrows, box and geometric shapes, dingbats and a lone |/\- (spinner frames) do not count.
+const frame = (text) => String(text).replace(/\d+/g, "#").replace(/[⠀-⣿←-⇿▀-◿☀-➿]/g, "*").replace(/(^|[\s*])[|/\\-](?=[\s*]|$)/g, "$1*").replace(/\s+/g, " ").trim();
 const hungText = (n) => {
   if (n.escalated) return `HUNG AGAIN since ${hhmm(n.since)} (${n.why}) after the automatic restart at ${hhmm(n.restartedAt)}: it is not restarted again and needs a person: close the Controller's terminal and run agentic-factory start`;
   const what = n.restartFailed ? `the automatic restart failed (${n.restartFailed})`
@@ -385,8 +388,7 @@ const reasons = fullCheck ? pendingWork() : inboxWaiting ? ["inbox"] : [];
 if (fresh.length) reasons.unshift(`${fresh.length} worker message`);
 if (wave.state === "finished") reasons.unshift("wave finished");
 // A Controller that only waits for the human is not woken: it would achieve nothing and cost model time.
-// An answer the human gave must not wait for ever: with a "Needs" item open, an inbox newer than status.md still wakes it.
-if (needsHuman().length && readText("inbox.md").trim() && mtime("inbox.md") > mtime("status.md") && !reasons.includes("inbox")) reasons.push("inbox newer than status.md");
+// An answer the human gave must not wait for ever: a new inbox line is a reason (above) whether a "Needs" item is open or not.
 if (!reasons.length && needsHuman().length) process.exit(0);
 const lastWake = fs.existsSync(file("heartbeat.last")) ? fs.statSync(file("heartbeat.last")).mtimeMs : 0;
 // Idle (nothing new, nothing ready, no worker running) is woken at most every wake.idleMinutes; a source that cannot be read is no event.
@@ -408,8 +410,14 @@ if (!idle) {
   const finished = wave.state === "finished";
   if ((inboxWaiting || fresh.length || finished) && Date.now() - busySince >= WAKE.busyPointerMinutes * 60_000) {
     const key = JSON.stringify([inboxWaiting ? createHash("sha1").update(readText("inbox.md")).digest("hex") : null, fresh, finished ? wave.handle : null]);
-    if (readText("heartbeat.pointer") !== key && dialogVisible(readScreen())) log("pointer not typed: a confirmation question is visible in the Controller's terminal");
+    // A confirmation question on the screen delays the pointer (Enter would take its default), by at most wake.dialogHoldMinutes.
+    const onDialog = readText("heartbeat.pointer") !== key && dialogVisible(readScreen());
+    const dlg = readJson("heartbeat.dialog.json", {}), now = Date.now();
+    const heldSince = onDialog ? (dlg.since && dlg.last && now - dlg.last < 3 * 60_000 ? dlg.since : now) : 0;
+    if (onDialog) fs.writeFileSync(file("heartbeat.dialog.json"), JSON.stringify({ since: heldSince, last: now })); else fs.rmSync(file("heartbeat.dialog.json"), { force: true });
+    if (onDialog && now - heldSince < WAKE.dialogHoldMinutes * 60_000) log(`pointer not typed yet: a confirmation question is visible in the Controller's terminal (held ${Math.round((now - heldSince) / 60_000)} of ${WAKE.dialogHoldMinutes} minutes at most)`);
     else if (readText("heartbeat.pointer") !== key) {
+      if (onDialog) log("a confirmation question has been visible for the whole hold time: typing the pointer anyway");
       const inboxOnly = inboxWaiting && !fresh.length && !finished;
       orca("terminal", "send", "--terminal", terminal.handle, "--text", inboxOnly ? POINTER : POINTER_MAIL, "--enter");
       fs.writeFileSync(file("heartbeat.pointer"), key);

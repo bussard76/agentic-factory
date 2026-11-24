@@ -69,9 +69,12 @@ export const CONTROLLER_DIR = expand(CONTROLLER_HOME);
 // unusable value is the default; the defaults are documented in docs/orca.md.
 const positive = (v, fallback) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : fallback);
 // Text patterns (regular expressions, case-insensitive) of a confirmation question: a pointer is never typed where one is visible.
-const DIALOGS = ["\\(y/n\\)", "\\[y/n\\]", "do you want to", "press enter", "\\b1[.)] yes\\b", "are you sure"];
+// They look at the last 8 lines only and are anchored to how a prompt really ends or lists its options, so a sentence that merely
+// contains these words does not count: "(y/n)" or "[y/N]" at the end of a line, a menu option "1. Yes" at the start of one, and "press
+// enter" (optionally "to <something>") ending a line.
+const DIALOGS = ["\\((?:y/n|yes/no)\\)\\s*:?\\s*$", "\\[(?:y/n|yes/no)\\]\\s*:?\\s*$", "^\\W*1[.)]\\s+yes\\b", "\\bpress enter(?: to [a-z ]+)?\\s*$"];
 const patternList = (v, fallback) => (Array.isArray(v) ? v.filter((p) => typeof p === "string" && p) : fallback);
-export const WAKE = { idleMinutes: positive(ctl.wake?.idleMinutes, 30), busyPointerMinutes: positive(ctl.wake?.busyPointerMinutes, 2), dialogPatterns: patternList(ctl.wake?.dialogPatterns, DIALOGS) };
+export const WAKE = { idleMinutes: positive(ctl.wake?.idleMinutes, 30), busyPointerMinutes: positive(ctl.wake?.busyPointerMinutes, 2), dialogPatterns: patternList(ctl.wake?.dialogPatterns, DIALOGS), dialogHoldMinutes: positive(ctl.wake?.dialogHoldMinutes, 15) };
 export const HUNG = {
   minutes: positive(ctl.hung?.minutes, 25), restartAfterMinutes: positive(ctl.hung?.restartAfterMinutes, 15), 
   // Off unless a project sets exactly true: nothing else (false, "false", a typo of the value) turns a kill of a session on.
