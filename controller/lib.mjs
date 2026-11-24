@@ -12,6 +12,19 @@ import path from "node:path";
 export const DIR = path.dirname(new URL(import.meta.url).pathname);
 export const expand = (p) => (p ? p.replace(/^~(?=$|\/)/, os.homedir()) : p);
 
+// A temp directory this process removes when it ends, however it ends: the normal end, an uncaught error, process.exit(), and
+// SIGINT / SIGTERM / SIGHUP (turned into an exit, which runs the removal). Not SIGKILL; nothing can be.
+const scratch = new Set();
+export function scratchDir(prefix) {
+  if (!scratch.size) {
+    process.on("exit", () => { for (const d of scratch) fs.rmSync(d, { recursive: true, force: true }); });
+    for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]]) process.on(sig, () => process.exit(code));
+  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  scratch.add(dir);
+  return dir;
+}
+
 function loadConfig() {
   const candidates = [process.env.FACTORY_CONFIG, path.join(DIR, "factory.config.json")].filter(Boolean);
   for (const c of candidates) if (fs.existsSync(c)) return JSON.parse(fs.readFileSync(c, "utf8"));

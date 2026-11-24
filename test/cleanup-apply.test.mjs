@@ -1,6 +1,7 @@
 // cleanup.mjs deletes only with --apply. Without it (or with --dry) it prints an inventory and changes nothing, and exits
 // with code 3 when something would have been removed. Throwaway repositories and a fake Orca; no ORCA_* variable reaches a child.
 import "./support/safe-env.mjs";
+import { tempDir } from "./support/cleanup.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -13,7 +14,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FILES = ["cli.mjs", "cleanup.mjs", "lib.mjs", "journal.mjs", "names.mjs"];
 
 function setup() {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-cleanup-apply-")));
+  const dir = fs.realpathSync(tempDir("af-cleanup-apply-"));
   const ctl = path.join(dir, "ctl"), project = path.join(dir, "p"), ws = path.join(dir, "ws"), log = path.join(dir, "calls.log"), fake = path.join(dir, "fake-orca.mjs");
   fs.mkdirSync(ctl); fs.mkdirSync(project);
   for (const f of FILES) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));

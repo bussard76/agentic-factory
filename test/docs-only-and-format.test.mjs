@@ -2,6 +2,7 @@
 // factory's own hooks and guardrails copied in. No formatter is installed: a small node script stands in for one.
 import "./support/safe-env.mjs";
 import { bind } from "./support/bind.mjs";
+import { tempDir } from "./support/cleanup.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -17,7 +18,7 @@ const CLEAN_ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) =>
 
 // A repo with a bare origin, main pushed, the factory hooks armed. cfg is written as factory.config.json (committed).
 function repo(cfg = {}) {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "af-docs-"));
+  const base = tempDir("af-docs-");
   const dir = path.join(base, "work"), bare = path.join(base, "origin.git");
   spawnSync("git", ["init", "-q", "--bare", "-b", "main", bare]);
   spawnSync("git", ["init", "-q", "-b", "main", dir]);
@@ -827,7 +828,7 @@ test("a check on main that does not know --ticket (an older tools/factory-guardr
 
 test("the file names the check expects are the ones mkspec tells the Architect and the Developer to write (orca-tasks and github-issues)", () => {
   for (const [mode, task, ref, branchName, issueArgs] of [["orca-tasks", "T03", "docs/tasks/T03-document-api.md", "agents/t03", []], ["github-issues", "I12", "#12", "agents/i12", ["--issue", "12"]]]) {
-    const ctl = fs.mkdtempSync(path.join(os.tmpdir(), "af-mkspec-names-"));
+    const ctl = tempDir("af-mkspec-names-");
     fs.mkdirSync(path.join(ctl, "templates"));
     for (const f of ["cli.mjs", "lib.mjs", "templates/mkspec.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
     fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main", humanName: "Alex" }, steering: { mode }, agents: { runner: "orca" }, commands: { verify: "npm run verify" }, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local" }] } }));

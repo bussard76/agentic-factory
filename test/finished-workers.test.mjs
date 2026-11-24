@@ -2,6 +2,7 @@
 // rule (lib.mjs) and cleanup, capacity and the heartbeat against a fake Orca whose dispatch states the test sets, in
 // throwaway repositories. The rule throughout: cleanup deletes, so anything not positively finished is busy.
 import "./support/safe-env.mjs";
+import { tempDir } from "./support/cleanup.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -18,7 +19,7 @@ const FILES = ["cli.mjs", "keep.mjs", "cleanup.mjs", "capacity.mjs", "heartbeat.
 // (newest first, `pageSize` per page, `filler` unrelated rows first); worker-show answers for known ids and
 // dispatch_not_found for the rest; `broken` makes every orchestration call fail without an answer.
 function setup({ dispatches = {}, terminals = [], workers = {}, capacity = { gate: {} }, pageSize = 100, filler = 0, broken = false } = {}) {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-finished-")));
+  const dir = fs.realpathSync(tempDir("af-finished-"));
   const ctl = path.join(dir, "ctl"), project = path.join(dir, "p"), ws = path.join(dir, "ws");
   fs.mkdirSync(path.join(ctl, "steering"), { recursive: true });
   fs.mkdirSync(path.join(project, "docs/tasks"), { recursive: true });

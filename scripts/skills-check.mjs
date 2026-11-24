@@ -9,6 +9,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+// Temp directories (the upstream clones, the unpacked skills) are removed however this ends: normally, on an error (also one thrown
+// after a clone started and before it was recorded), process.exit() and SIGINT / SIGTERM / SIGHUP. Not SIGKILL; nothing can be.
+const scratch = new Set();
+process.on("exit", () => { for (const d of scratch) fs.rmSync(d, { recursive: true, force: true }); });
+for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]]) process.on(sig, () => process.exit(code));
+const scratchDir = (prefix) => { const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix)); scratch.add(dir); return dir; };
+
 const argv = process.argv.slice(2);
 const opt = (flag) => { const i = argv.indexOf(flag); return i >= 0 ? argv[i + 1] : undefined; };
 const apply = argv.includes("--apply");
@@ -28,7 +35,7 @@ const RISKS = [
 
 const git = (cwd, ...args) => execFileSync("git", ["-c", "core.hooksPath=/dev/null", ...args], { cwd, encoding: "utf8", maxBuffer: 1 << 28 }).trim();
 const tryGit = (cwd, ...args) => { const r = spawnSync("git", ["-c", "core.hooksPath=/dev/null", ...args], { cwd, encoding: "utf8", maxBuffer: 1 << 28 }); return r.status === 0 ? r.stdout.trim() : null; };
-const clone = (url) => { const dir = fs.mkdtempSync(path.join(os.tmpdir(), "skills-check-")); execFileSync("git", ["clone", "-q", "--filter=blob:none", "--no-checkout", url, dir], { stdio: ["ignore", "ignore", "pipe"] }); return dir; };
+const clone = (url) => { const dir = scratchDir("skills-check-"); execFileSync("git", ["clone", "-q", "--filter=blob:none", "--no-checkout", url, dir], { stdio: ["ignore", "ignore", "pipe"] }); return dir; };
 
 function risksIn(text) {
   const hits = new Set();
@@ -42,7 +49,7 @@ function risksIn(text) {
 const hasLink = (repo, commit, dir) => git(repo, "ls-tree", "-r", commit, "--", dir).split("\n").some((l) => l.startsWith("120000"));
 
 function replaceFromUpstream(repo, commit, upstreamPath, target) {
-  const unpacked = fs.mkdtempSync(path.join(os.tmpdir(), "skills-unpack-"));
+  const unpacked = scratchDir("skills-unpack-");
   const tar = spawnSync("git", ["archive", `${commit}:${upstreamPath}`], { cwd: repo, maxBuffer: 1 << 28 });
   if (tar.status !== 0) throw new Error(`git archive failed for ${upstreamPath}`);
   execFileSync("tar", ["-x", "-C", unpacked], { input: tar.stdout });

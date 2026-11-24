@@ -1,6 +1,7 @@
 // Onboarding: the Front agent kind (terminal or an Orca bot), the Controller directory, and install and release
 // commands that come from what the project has. Throwaway repositories and a temporary HOME; no real Orca (FACTORY_SKIP_ORCA).
 import "./support/safe-env.mjs";
+import { tempDir } from "./support/cleanup.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -14,7 +15,7 @@ const CLI = path.join(ROOT, "bin/agentic-factory.mjs");
 
 // A project with git, a temporary HOME, and fake package managers that create their lockfile like the real ones.
 function setup({ pkg, managers = [] } = {}) {
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-onb-")));
+  const base = fs.realpathSync(tempDir("af-onb-"));
   const project = path.join(base, "demo"), home = path.join(base, "home"), bin = path.join(base, "bin");
   for (const d of [project, home, bin]) fs.mkdirSync(d);
   const lock = { pnpm: "pnpm-lock.yaml", npm: "package-lock.json", yarn: "yarn.lock" };

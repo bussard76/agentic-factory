@@ -2,6 +2,7 @@
 // (issues #24, #38). Each runs in a sandbox where a real run would reach a fake orca/ssh/git/gh that records the call,
 // so "did nothing" means: exit 0 (help) or 2 (unknown argument), no recorded call, no file created or changed.
 import "./support/safe-env.mjs";
+import { tempDir } from "./support/cleanup.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -31,7 +32,7 @@ function snapshot(dir) {
 /** A sandbox with the bundles copied, a config (unless withConfig is false; "broken" writes one that is not JSON, also
  *  in the working directory), and fakes for every outside tool. */
 function sandbox({ withConfig = true } = {}) {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-cli-")));
+  const dir = fs.realpathSync(tempDir("af-cli-"));
   for (const d of ["controller", "front-agent"]) fs.cpSync(path.join(ROOT, d), path.join(dir, d), { recursive: true });
   for (const f of STANDALONE) { const to = path.join(dir, "alone", path.basename(f, ".mjs"), path.basename(f)); fs.mkdirSync(path.dirname(to), { recursive: true }); fs.copyFileSync(path.join(ROOT, f), to); }
   const project = path.join(dir, "project");

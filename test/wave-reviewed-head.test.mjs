@@ -3,6 +3,7 @@
 // The first two probes are the ones of the PR #65 review (finding 2): a branch that gets a code commit and a forged findings
 // file after its review, with and without the docs-only evidence.
 import "./support/safe-env.mjs";
+import { tempDir, onCleanup } from "./support/cleanup.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -77,10 +78,8 @@ test("classify and bindBranches: task branches get the commit, their review bran
 });
 
 // --- a project with a bare origin and the factory's hooks --------------------------------------
-const BASES = [];   // every throwaway project of this file is removed when the file ends
-process.on("exit", () => { for (const b of BASES) fs.rmSync(b, { recursive: true, force: true }); });
 function project(cfg = {}) {
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-rev-"))); BASES.push(base);
+  const base = fs.realpathSync(tempDir("af-rev-"));
   const dir = path.join(base, "work"), bare = path.join(base, "origin.git");
   spawnSync("git", ["init", "-q", "--bare", "-b", "main", bare]);
   spawnSync("git", ["init", "-q", "-b", "main", dir]);
@@ -383,6 +382,7 @@ function bundle(p, { journalText = "", runner = "terminal", hosts, extra = {} } 
   const events = () => (fs.existsSync(path.join(ctl, "journal.ndjson")) ? fs.readFileSync(path.join(ctl, "journal.ndjson"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
   const waitEnd = () => { const log = path.join(ctl, "logs/wave.log"); for (let i = 0; i < 300; i++) { const t = fs.existsSync(log) ? fs.readFileSync(log, "utf8") : ""; if (/\nWAVE-END\s*$/.test(t) || /^WAVE-END/m.test(t.replace(/echo WAVE-END/g, ""))) return t; spawnSync("sleep", ["0.2"]); } throw new Error("the wave did not end"); };
   const cleanup = () => { for (const f of [`/tmp/${name}-integ-wave.sh`, `/tmp/${name}-wave.out`]) fs.rmSync(f, { force: true }); fs.rmSync(`/tmp/${name}-wave`, { recursive: true, force: true }); };
+  onCleanup(cleanup);   // the wave script writes to fixed places in /tmp; also when the test fails before its finally
   return { name, ctl, integ, run, raw, events, waitEnd, bin, cleanup };
 }
 const rec = (task, head, extra = {}) => line({ type: "review", task, verdict: "pass", path: "tester", head, by: "reviewed.mjs", ...extra });

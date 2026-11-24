@@ -1,5 +1,6 @@
 // Two projects on one host: the shared gate, the load log, and the files start writes outside the project.
 import "./support/safe-env.mjs";
+import { tempDir } from "./support/cleanup.mjs";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -11,7 +12,7 @@ import { copyTreeAtomic, withLock, writeFileAtomic } from "../bin/safe-write.mjs
 import { addTomlAllowPaths, scanAllowPaths } from "../bin/read-grants.mjs";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
-const tmp = (name) => fs.mkdtempSync(path.join(os.tmpdir(), `af-${name}-`));
+const tmp = (name) => tempDir(`af-${name}-`);
 const SHIM = path.join(ROOT, "controller/gate");
 
 // --- the gate is the project's own file, called by its own path --------------------------------------------
@@ -107,7 +108,8 @@ test("the load log tags every line with its project, from start's FACTORY_PROJEC
   fs.copyFileSync(path.join(ROOT, "controller/loadlog.sh"), path.join(home, "controller-one/loadlog.sh"));
   // Another project's file in the old place must not decide the name.
   fs.mkdirSync(path.join(home, "controller")); fs.writeFileSync(path.join(home, "controller/factory.config.json"), JSON.stringify({ project: { name: "other" } }));
-  const run = (env, ...arg) => { spawnSync("bash", [path.join(home, "controller-one/loadlog.sh"), ...arg], { cwd: "/", timeout: 3000, killSignal: "SIGKILL", env: { ...process.env, HOME: home, ...env } }); const l = fs.readFileSync(path.join(home, "load.log"), "utf8").trim().split("\n"); fs.rmSync(path.join(home, "load.log")); return l[0]; };
+  // The logger is killed after the timeout, but its `sleep 60` child would live on: it runs in a group of its own, and the group is killed.
+  const run = (env, ...arg) => { const logger = spawnSync("bash", [path.join(home, "controller-one/loadlog.sh"), ...arg], { cwd: "/", detached: true, timeout: 3000, killSignal: "SIGKILL", env: { ...process.env, HOME: home, ...env } }); try { process.kill(-logger.pid, "SIGKILL"); } catch { /* nothing left */ } const l = fs.readFileSync(path.join(home, "load.log"), "utf8").trim().split("\n"); fs.rmSync(path.join(home, "load.log")); return l[0]; };
   assert.match(run({}), /gatewaiters=\d+ project=one$/);
   assert.match(run({ FACTORY_PROJECT: "named" }), / project=named$/);
   assert.match(run({ FACTORY_PROJECT: "env" }, "arg"), / project=arg$/, "the argument start passes wins");

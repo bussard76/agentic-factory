@@ -2,6 +2,7 @@
 // does not touch; and restart.mjs, which the Controller runs itself to start fresh. Fakes only: the fake Orca keeps its terminals in a
 // file, HOME is a throwaway directory, and no ORCA_* variable reaches a child process.
 import "./support/safe-env.mjs";
+import { tempDir } from "./support/cleanup.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -16,7 +17,7 @@ const ago = (ms) => new Date(Date.now() - ms);
 const MIN = 60_000;
 
 function setup({ controller = {}, agents = {}, frontAgent, terminals, screen = "changing", idle = false, workers = [] } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-hung-"));
+  const dir = tempDir("af-hung-");
   const home = path.join(dir, "home"), ctl = path.join(dir, "ctl"), project = path.join(dir, "p");
   fs.mkdirSync(home); fs.mkdirSync(path.join(ctl, "steering"), { recursive: true }); fs.mkdirSync(path.join(project, "docs/tasks"), { recursive: true });
   for (const f of FILES) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));

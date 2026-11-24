@@ -3,6 +3,7 @@
 // Trailing text after the SHA was accepted on main and still is; so is a second SHA on the line. Each case is a throwaway
 // repository with a code commit and a findings commit on top of it, run through `review-gate` as the pre-push hook runs it.
 import "./support/safe-env.mjs";
+import { tempDir } from "./support/cleanup.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -17,7 +18,7 @@ const UNCOVERED = /Commits without a passing independent review/;
 
 // `findings(sha)` returns the text of docs/reviews/T1-review-final.md for the code commit sha. Returns the gate's result.
 function gate(findings) {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "af-review-sha-"));
+  const base = tempDir("af-review-sha-");
   const dir = path.join(base, "work"), bare = path.join(base, "origin.git");
   try {
     spawnSync("git", ["init", "-q", "--bare", "-b", "main", bare]);

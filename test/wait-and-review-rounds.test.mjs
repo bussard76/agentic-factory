@@ -1,5 +1,6 @@
 // controller/wait.mjs against a fake Orca (payload shapes, bad messages), and the bounded review rounds in mkspec.
 import "./support/safe-env.mjs";
+import { tempDir } from "./support/cleanup.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -10,7 +11,7 @@ import path from "node:path";
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 
 function controllerDir(config) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-wait-rounds-"));
+  const dir = tempDir("af-wait-rounds-");
   fs.mkdirSync(path.join(dir, "templates"));
   for (const f of ["wait.mjs", "cli.mjs", "lib.mjs", "templates/mkspec.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
   fs.writeFileSync(path.join(dir, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main", humanName: "Alex" }, agents: { runner: "orca" }, commands: { verify: "npm run verify" }, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local" }] }, ...config }));
@@ -146,7 +147,7 @@ test("reviews.maxRounds must be a whole number of at least 1; a numeric string s
   assert.equal(spec(dir, "test", ...TASK, "abc", "--round", "3").status, 0);
   assert.notEqual(spec(dir, "test", ...TASK, "abc", "--round", "4").status, 0);
   fs.rmSync(dir, { recursive: true, force: true });
-  const proj = fs.mkdtempSync(path.join(os.tmpdir(), "af-init-rounds-"));
+  const proj = tempDir("af-init-rounds-");
   fs.writeFileSync(path.join(proj, "a.json"), JSON.stringify({ "reviews.maxRounds": "0" }));
   const init = spawnSync("node", [path.join(ROOT, "bin/agentic-factory.mjs"), "init", "--answers", "a.json"], { cwd: proj, encoding: "utf8", env: { ...process.env, HOME: proj, FACTORY_SKIP_ORCA: "1" } });
   assert.notEqual(init.status, 0);
@@ -173,7 +174,7 @@ test("from round 2 the Tester narrows what it reviews, not which checks; round 1
 });
 
 test("the round-2 commands keep main's commits out and spot a rewritten branch", () => {
-  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "af-scope-"));
+  const repo = tempDir("af-scope-");
   const g = (...a) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...a], { cwd: repo, encoding: "utf8" });
   const commit = (file, msg) => { fs.writeFileSync(path.join(repo, file), msg); g("add", file); g("commit", "-qm", msg); };
   g("init", "-q", "-b", "main"); commit("base", "base");
@@ -232,7 +233,7 @@ test("the failure line keeps the CLI's last stderr lines and drops --wait keepal
 
 // A bare origin with review branches, and the Controller's project clone of it.
 function originWithReviews(files) {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "af-verdicts-"));
+  const base = tempDir("af-verdicts-");
   const origin = path.join(base, "origin.git"), work = path.join(base, "work"), project = path.join(base, "project");
   const g = (cwd, ...a) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...a], { cwd, encoding: "utf8" });
   g(base, "init", "-q", "--bare", origin); g(base, "init", "-q", "-b", "main", work);
@@ -318,7 +319,7 @@ test("a rework without a findings file names what failed and no file that does n
 });
 
 test("an octopus merge is skipped by --remerge-diff, so the spec falls back to git show --cc, which shows its changes", () => {
-  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "af-octopus-"));
+  const repo = tempDir("af-octopus-");
   const g = (...a) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...a], { cwd: repo, encoding: "utf8" });
   const commit = (file, msg) => { fs.writeFileSync(path.join(repo, file), msg); g("add", file); g("commit", "-qm", msg); };
   g("init", "-q", "-b", "main"); commit("base", "base");

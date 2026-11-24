@@ -2,6 +2,7 @@
 // start's one automation per bot, status and doctor, and the optional read grants. Fake Orca, fake ssh, a temporary HOME:
 // no test may reach a real bot, a real automation or the real tool configs.
 import "./support/safe-env.mjs";
+import { tempDir, expectBackground, stopBackground } from "./support/cleanup.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -13,7 +14,7 @@ import { addTomlAllowPaths, applyReadGrants } from "../bin/read-grants.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = path.join(ROOT, "bin/agentic-factory.mjs");
-const tmp = (prefix) => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+const tmp = (prefix) => fs.realpathSync(tempDir(prefix));
 
 // --- the precheck ---------------------------------------------------------------------------------------
 function watchSetup() {
@@ -156,7 +157,7 @@ test("an existing allow_paths keeps its entries and gains only the missing ones"
 
 // --- start, status and doctor ----------------------------------------------------------------------------
 function machine() {
-  const base = tmp("af-bot-");
+  const base = tmp("af-bot-"); expectBackground(base);   // start launches detached loggers from here
   const home = path.join(base, "home"), bin = path.join(base, "bin"), tab = path.join(base, "tab"), orcaState = path.join(base, "orca.json"), orcaLog = path.join(base, "orca.log");
   for (const d of [home, bin]) fs.mkdirSync(d);
   fs.writeFileSync(tab, "");
@@ -195,7 +196,7 @@ else if (a[0] === "automations" && a[1] === "create") {
     c.hosts.controller.controllerDir = `~/controller-${name}`;
     Object.assign(c.hosts.frontAgent, front);
     fs.writeFileSync(file, JSON.stringify(c, null, 2));
-    const cli = (...a) => { const r = spawnSync("node", [CLI, ...a], { cwd: dir, encoding: "utf8", env }); spawnSync("pkill", ["-f", path.join(home, `controller-${name}`, "loadlog.sh")]); return r; };
+    const cli = (...a) => { const r = spawnSync("node", [CLI, ...a], { cwd: dir, encoding: "utf8", env }); stopBackground(path.join(home, `controller-${name}`)); return r; };
     assert.equal(cli("update").status, 0);
     return { dir, cli };
   };
@@ -304,7 +305,7 @@ test("a bot that Orca does not know fails start and shows in status and doctor; 
   assert.doesNotMatch(fs.readFileSync(path.join(t.dir, ".factory/controller/CONTROLLER.md"), "utf8"), /bot:|Orca bot/);
   assert.doesNotMatch(fs.readFileSync(path.join(t.dir, ".factory/controller/CONTROLLER.md"), "utf8"), /\{\{/);
   assert.equal(m.creates().length, 0);
-  spawnSync("pkill", ["-f", path.join(m.home, "front-agent")]);
+  stopBackground(path.join(m.home, "front-agent"));
   // A Controller on another host cannot reach the bot: its handbook says so and sends nothing.
   const remote = m.project("epsilon", { kind: "orca-bot", bot: "front-bot" });
   const file = path.join(remote.dir, "factory.config.json"), c = JSON.parse(fs.readFileSync(file, "utf8"));

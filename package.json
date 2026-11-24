@@ -9,7 +9,7 @@
   "files": ["bin", "controller", "front-agent", "server", "skills", "standard", "templates", "docs", "site", "factory.config.example.json"],
   "scripts": {
     "check": "node bin/agentic-factory.mjs selfcheck",
-    "test": "node --test test/*.test.mjs"
+    "test": "node test/run.mjs"
   },
   "keywords": ["agents", "devops", "codex", "claude-code", "orca", "workflow", "harness"]
 }

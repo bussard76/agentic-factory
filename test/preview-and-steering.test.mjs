@@ -1,5 +1,6 @@
 // The preview's update script run for real against a temporary HOME, and which tickets count as ready in both steering modes.
 import "./support/safe-env.mjs";
+import { tempDir, onCleanup } from "./support/cleanup.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -15,7 +16,7 @@ let previews = 0;
 
 // The start command records one variable only, so a failing assertion cannot print the environment.
 function preview(envFile) {
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-preview-")));
+  const base = fs.realpathSync(tempDir("af-preview-"));
   const home = path.join(base, "home"), origin = path.join(base, "o.git"), worktree = path.join(base, "wt"), record = path.join(base, "record");
   fs.mkdirSync(home);
   const git = (cwd, ...a) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...a], { cwd, stdio: "ignore" });
@@ -43,6 +44,7 @@ function preview(envFile) {
     for (const f of [pidFile, `/tmp/${project}-preview.log`, `/tmp/${project}-preview-install.log`]) fs.rmSync(f, { force: true });
     fs.rmSync(base, { recursive: true, force: true });
   };
+  onCleanup(done);   // also when the test fails before it calls done()
   return { base, home, record, run, seen, pid, done };
 }
 const envFileAt = (file, value = "from-file") => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `# a comment\n\nPREVIEW_TEST_VALUE=${value}\n`); };
@@ -135,14 +137,14 @@ test("the preview's launchd agent keeps what the script left running, and parses
   assert.match(text, /<key>AbandonProcessGroup<\/key><true\/>/);
   assert.doesNotMatch(text, /\{\{/);
   if (process.platform !== "darwin") return;
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-plist-")), file = path.join(dir, "p.plist");
+  const dir = tempDir("af-plist-"), file = path.join(dir, "p.plist");
   fs.writeFileSync(file, text);
   assert.equal(spawnSync("plutil", ["-lint", file], { encoding: "utf8" }).status, 0);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
 function steering(script, config = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-steering-"));
+  const dir = tempDir("af-steering-");
   const ctl = path.join(dir, "ctl"), project = path.join(dir, "p"), bin = path.join(dir, "bin");
   for (const d of [path.join(ctl, "steering"), path.join(project, "docs/tasks"), bin]) fs.mkdirSync(d, { recursive: true });
   for (const f of ["lib.mjs", "cli.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));

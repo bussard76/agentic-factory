@@ -1,6 +1,7 @@
 // End-to-end smoke test: init in a fresh repo, hooks bite, controller scripts run. `npm test` runs it.
 import "./support/safe-env.mjs";
 import { bind } from "./support/bind.mjs";
+import { tempDir, own, expectBackground, stopBackground, spawnBackground } from "./support/cleanup.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
@@ -13,15 +14,15 @@ import { createHash } from "node:crypto";
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const createHashHex = (s) => createHash("sha256").update(s).digest("hex").slice(0, 6);   // mirrors the CLI's bare-remote key
 const CLI = path.join(ROOT, "bin/agentic-factory.mjs");
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "af-smoke-"));
-const home = fs.mkdtempSync(path.join(os.tmpdir(), "af-home-"));   // a HOME outside the repo: the local bare remote and skills land here
+const tmp = tempDir("af-smoke-");
+const home = tempDir("af-home-");   // a HOME outside the repo: the local bare remote and skills land here
 const git = (...a) => { const r = spawnSync("git", a, { cwd: tmp, encoding: "utf8" }); if (r.status !== 0) throw new Error(`git ${a.join(" ")} failed:\n${r.stderr}${r.stdout}`); return r.stdout.trim(); };
 const gitTry = (...a) => spawnSync("git", a, { cwd: tmp, encoding: "utf8" });
 // FACTORY_SKIP_ORCA keeps the test from touching the developer's real Orca (no repo registration).
 const node = (...a) => execFileSync("node", a, { cwd: tmp, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } }).trim();
 
 test("a Controller on a remote host treats that host as local and leaves out the human's machine", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-remote-ctl-"));
+  const dir = tempDir("af-remote-ctl-");
   const cfg = path.join(dir, "factory.config.json");
   fs.writeFileSync(cfg, JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "server" }, workers: [
     { name: "local", kind: "local", projectDir: "~/Development/p", projectsDir: "~/Development" },
@@ -36,7 +37,7 @@ const h = hostNamed("server"); console.log(JSON.stringify({ kind: h.kind, env: o
 });
 
 test("two projects on one host: own controller dir everywhere, a foreign one is refused", () => {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "af-two-"));
+  const base = tempDir("af-two-"); expectBackground(base);   // start launches a detached load logger from here
   const twoHome = path.join(base, "home"), project = path.join(base, "second");
   fs.mkdirSync(twoHome); fs.mkdirSync(project);
   const env = { ...process.env, HOME: twoHome, FACTORY_SKIP_ORCA: "1" };
@@ -68,14 +69,14 @@ test("two projects on one host: own controller dir everywhere, a foreign one is 
   const loggers = () => spawnSync("ps", ["-ax", "-o", "pid=,command="], { encoding: "utf8" }).stdout.split("\n").filter((l) => l.includes(path.join(ctl, "loadlog.sh")));
   assert.match(loggers().join("\n"), /loadlog\.sh second$/m, "start passes the project to the logger");
   // A logger from before the project was passed (no argument, untagged lines) is replaced on the next start.
-  spawnSync("pkill", ["-f", path.join(ctl, "loadlog.sh")]);
-  spawn("bash", [path.join(ctl, "loadlog.sh")], { detached: true, stdio: "ignore" }).unref();
+  stopBackground(ctl);
+  spawnBackground("bash", [path.join(ctl, "loadlog.sh")]);
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
   assert.ok(loggers().some((l) => l.trim().endsWith("loadlog.sh")), "the old-form logger runs");
   r = run("start"); assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.ok(!loggers().some((l) => l.trim().endsWith("loadlog.sh")), "the old-form logger is gone");
   assert.match(loggers().join("\n"), /loadlog\.sh second$/m, "a tagged one runs instead");
-  spawnSync("pkill", ["-f", path.join(ctl, "loadlog.sh")]);
+  stopBackground(ctl);
   assert.ok(fs.existsSync(path.join(ctl, "CONTROLLER.md")));
   for (const f of ["CONTROLLER.md", "templates/mkspec.mjs", "wave.mjs", "runscript.mjs", "wavewait.mjs", "capacity.mjs"]) assert.doesNotMatch(fs.readFileSync(path.join(ctl, f), "utf8"), /~\/controller(?!-second)\b/, f);
   assert.match(fs.readFileSync(path.join(ctl, "CONTROLLER.md"), "utf8"), /~\/controller-second\/status\.md/);
@@ -96,7 +97,7 @@ test("two projects on one host: own controller dir everywhere, a foreign one is 
 });
 
 test("agent entry questions, answers, status and start in an isolated home", async () => {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "af-entry-"));
+  const base = tempDir("af-entry-"); expectBackground(base);
   const project = path.join(base, "project"), entryHome = path.join(base, "home"), bin = path.join(base, "bin");
   fs.mkdirSync(project); fs.mkdirSync(entryHome); fs.mkdirSync(bin);
   for (const name of ["orca", "claude"]) { fs.writeFileSync(path.join(bin, name), "#!/bin/sh\nexit 0\n", { mode: 0o755 }); }
@@ -204,7 +205,7 @@ test("agent entry questions, answers, status and start in an isolated home", asy
     r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
     assert.notEqual(r.status, 0); assert.match(r.stdout, /hosts\.workers\[\]\.orcaEnvironment/);
   } finally {
-    spawnSync("pkill", ["-f", path.join(entryHome, "controller", "loadlog.sh")]);
+    stopBackground(path.join(entryHome, "controller"));
     fs.rmSync(base, { recursive: true, force: true });
   }
 });
@@ -285,7 +286,7 @@ test("a wave of two reviewed tasks is accepted, one without its review branch is
 // The wave environment exactly as controller/wave.mjs builds it from the generated config.
 function waveEnv() {
   const cfg = JSON.parse(fs.readFileSync(path.join(tmp, "factory.config.json"), "utf8"));
-  return { ...process.env, MAIN: cfg.project.mainBranch, INSTALL_CMD: cfg.commands.install ?? "", VERIFY_CMD: cfg.commands.verify ?? "", E2E_CMD: cfg.commands.e2e ?? "", ...fakeController(tmp + "-ctl", { project: "smoke" }).env, TRAILER: "", HOME: home, FACTORY_PROJECT: "smoke", WAVE_WORKTREE_OK: "1" };
+  return { ...process.env, MAIN: cfg.project.mainBranch, INSTALL_CMD: cfg.commands.install ?? "", VERIFY_CMD: cfg.commands.verify ?? "", E2E_CMD: cfg.commands.e2e ?? "", ...fakeController(own(tmp + "-ctl"), { project: "smoke" }).env, TRAILER: "", HOME: home, FACTORY_PROJECT: "smoke", WAVE_WORKTREE_OK: "1" };
 }
 function runWave(title, branches) {
   const integ = path.join(tmp, "..", path.basename(tmp) + "-integration");
@@ -350,7 +351,7 @@ test("a hand-edited merge commit runs the static checks; a clean merge skips the
 });
 
 test("a fresh clone armed with init --yes rejects an unreviewed push", () => {
-  const clone = fs.mkdtempSync(path.join(os.tmpdir(), "af-clone-"));
+  const clone = tempDir("af-clone-");
   const bare = git("remote", "get-url", "origin");
   execFileSync("git", ["clone", "-q", bare, clone]); execFileSync("git", ["config", "user.email", "c@example.com"], { cwd: clone }); execFileSync("git", ["config", "user.name", "c"], { cwd: clone });
   const out = execFileSync("node", [CLI, "init", "--yes"], { cwd: clone, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } });
@@ -361,7 +362,7 @@ test("a fresh clone armed with init --yes rejects an unreviewed push", () => {
 });
 
 test("a repo with its own pre-commit (hooksPath already armed, trailing exit 0) keeps it, gets the review gate (merge), and its adoption is pushed; own ADR numbering is respected", () => {
-  const own = fs.mkdtempSync(path.join(os.tmpdir(), "af-own-"));
+  const own = tempDir("af-own-");
   const g = (...a) => { const r = spawnSync("git", a, { cwd: own, encoding: "utf8" }); if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`); return r.stdout.trim(); };
   g("init", "-q", "-b", "main"); g("config", "user.email", "o@example.com"); g("config", "user.name", "o");
   fs.mkdirSync(path.join(own, ".githooks")); fs.writeFileSync(path.join(own, ".githooks/pre-commit"), "#!/bin/sh\nset -e\necho OWN-HOOK-RAN >&2\nexit 0\n"); fs.chmodSync(path.join(own, ".githooks/pre-commit"), 0o755);
@@ -391,7 +392,7 @@ test("a repo with its own pre-commit (hooksPath already armed, trailing exit 0) 
 
 // A husky v8 layout: hooks in .husky, core.hooksPath=.husky, a prepare script that re-points hooksPath on every install.
 test("husky v8 hooks are merged in place; the prepare script cannot disarm the gate", () => {
-  const own = fs.mkdtempSync(path.join(os.tmpdir(), "af-husky8-"));
+  const own = tempDir("af-husky8-");
   const g = (...a) => { const r = spawnSync("git", a, { cwd: own, encoding: "utf8" }); if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`); return r.stdout.trim(); };
   g("init", "-q", "-b", "main"); g("config", "user.email", "h@example.com"); g("config", "user.name", "h");
   fs.mkdirSync(path.join(own, ".husky")); fs.writeFileSync(path.join(own, ".husky/pre-commit"), "#!/bin/sh\necho HUSKY-RAN >&2\n"); fs.chmodSync(path.join(own, ".husky/pre-commit"), 0o755); g("config", "core.hooksPath", ".husky");
@@ -407,7 +408,7 @@ test("husky v8 hooks are merged in place; the prepare script cannot disarm the g
 
 // A husky v9 layout: core.hooksPath=.husky/_ with shims that run .husky/<hook> through `sh -e`.
 test("husky v9 hooks are merged in place and the gate bites", () => {
-  const own = fs.mkdtempSync(path.join(os.tmpdir(), "af-husky9-"));
+  const own = tempDir("af-husky9-");
   const g = (...a) => { const r = spawnSync("git", a, { cwd: own, encoding: "utf8" }); if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`); return r.stdout.trim(); };
   g("init", "-q", "-b", "main"); g("config", "user.email", "h@example.com"); g("config", "user.name", "h");
   fs.mkdirSync(path.join(own, ".husky/_"), { recursive: true });
@@ -435,7 +436,7 @@ test("husky v9 hooks are merged in place and the gate bites", () => {
 });
 
 test("init on an empty repository (no commit yet) works and names the project after its directory", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-empty-"));
+  const dir = tempDir("af-empty-");
   const g = (...a) => execFileSync("git", a, { cwd: dir, encoding: "utf8" }).trim();
   g("init", "-q", "-b", "main"); g("config", "user.email", "e@example.com"); g("config", "user.name", "e");
   fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "empty", scripts: { test: "echo ok" } }));
@@ -452,30 +453,30 @@ test("init on an empty repository (no commit yet) works and names the project af
 });
 
 test("a relative filesystem remote names the project after its directory", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-rel-"));
+  const dir = tempDir("af-rel-");
   const g = (...a) => execFileSync("git", a, { cwd: dir, encoding: "utf8" }).trim();
   g("init", "-q", "-b", "main"); g("config", "user.email", "r@example.com"); g("config", "user.name", "r");
-  execFileSync("git", ["init", "-q", "--bare", path.join(dir, "..", `${path.basename(dir)}-rel.git`)]); g("remote", "add", "origin", `../${path.basename(dir)}-rel.git`);
+  execFileSync("git", ["init", "-q", "--bare", own(path.join(dir, "..", `${path.basename(dir)}-rel.git`))]); g("remote", "add", "origin", `../${path.basename(dir)}-rel.git`);
   fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "rel", scripts: { test: "echo ok" } })); g("add", "-A"); g("commit", "-qm", "init");
   execFileSync("node", [CLI, "init", "--yes"], { cwd: dir, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } });
   const c = JSON.parse(fs.readFileSync(path.join(dir, "factory.config.json"), "utf8")); assert.equal(c.project.name, path.basename(dir)); assert.match(c.project.repo, /^local:\//);
 });
 
 test("a foreign local bare remote makes init stop cleanly, without a dangling origin", () => {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-foreign-")));   // the CLI keys the bare by process.cwd(), the real path
+  const dir = fs.realpathSync(tempDir("af-foreign-"));   // the CLI keys the bare by process.cwd(), the real path
   const g = (...a) => execFileSync("git", a, { cwd: dir, encoding: "utf8" }).trim();
   g("init", "-q", "-b", "main"); g("config", "user.email", "f@example.com"); g("config", "user.name", "f");
   fs.writeFileSync(path.join(dir, "a.txt"), "a\n"); g("add", "a.txt"); g("commit", "-qm", "a");
   // Plant a bare with a different history where init would create this project's remote.
   const bare = path.join(home, ".factory-remotes", `${path.basename(dir)}-${createHashHex(dir)}.git`);
   fs.mkdirSync(path.dirname(bare), { recursive: true }); execFileSync("git", ["init", "-q", "--bare", bare]);
-  const other = fs.mkdtempSync(path.join(os.tmpdir(), "af-other-")); execFileSync("git", ["init", "-q", "-b", "main"], { cwd: other }); execFileSync("git", ["-c", "user.email=x@x", "-c", "user.name=x", "commit", "-q", "--allow-empty", "-m", "foreign"], { cwd: other }); execFileSync("git", ["push", "-q", bare, "main"], { cwd: other });
+  const other = tempDir("af-other-"); execFileSync("git", ["init", "-q", "-b", "main"], { cwd: other }); execFileSync("git", ["-c", "user.email=x@x", "-c", "user.name=x", "commit", "-q", "--allow-empty", "-m", "foreign"], { cwd: other }); execFileSync("git", ["push", "-q", bare, "main"], { cwd: other });
   const r = spawnSync("node", [CLI, "init", "--yes"], { cwd: dir, encoding: "utf8", env: { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1" } });
   assert.notEqual(r.status, 0); assert.match(r.stdout, /holds a different history/); assert.equal(g("remote"), "", "origin was not kept");
 });
 
 test("an absolute core.hooksPath inside the worktree is merged, not rejected", () => {
-  const own = fs.mkdtempSync(path.join(os.tmpdir(), "af-abs-"));
+  const own = tempDir("af-abs-");
   const g = (...a) => { const r = spawnSync("git", a, { cwd: own, encoding: "utf8" }); if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`); return r.stdout.trim(); };
   g("init", "-q", "-b", "main"); g("config", "user.email", "a@example.com"); g("config", "user.name", "a");
   fs.mkdirSync(path.join(own, ".hooks")); fs.writeFileSync(path.join(own, ".hooks/pre-commit"), "#!/bin/sh\necho OWN-ABS-RAN >&2\n"); fs.chmodSync(path.join(own, ".hooks/pre-commit"), 0o755);
@@ -488,8 +489,8 @@ test("an absolute core.hooksPath inside the worktree is merged, not rejected", (
 });
 
 test("a global core.hooksPath is left alone: the factory uses .githooks, commits and pushes the adoption, the gate bites", () => {
-  const own = fs.mkdtempSync(path.join(os.tmpdir(), "af-global-"));
-  const ghome = fs.mkdtempSync(path.join(os.tmpdir(), "af-ghome-"));
+  const own = tempDir("af-global-");
+  const ghome = tempDir("af-ghome-");
   const genv = { ...process.env, HOME: ghome, FACTORY_SKIP_ORCA: "1" };
   const g = (...a) => { const r = spawnSync("git", a, { cwd: own, encoding: "utf8", env: genv }); if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`); return r.stdout.trim(); };
   fs.mkdirSync(path.join(ghome, "hooks")); fs.writeFileSync(path.join(ghome, "hooks/pre-commit"), "#!/bin/sh\necho GLOBAL-HOOK >&2\n"); fs.chmodSync(path.join(ghome, "hooks/pre-commit"), 0o755);
@@ -505,7 +506,7 @@ test("a global core.hooksPath is left alone: the factory uses .githooks, commits
 });
 
 test("own commit-msg and own pre-push are merged too: the protected-files gate and the review gate exist", () => {
-  const own = fs.mkdtempSync(path.join(os.tmpdir(), "af-ownmsg-"));
+  const own = tempDir("af-ownmsg-");
   const g = (...a) => { const r = spawnSync("git", a, { cwd: own, encoding: "utf8" }); if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`); return r.stdout.trim(); };
   g("init", "-q", "-b", "main"); g("config", "user.email", "m@example.com"); g("config", "user.name", "m");
   fs.mkdirSync(path.join(own, ".githooks"));
@@ -523,7 +524,7 @@ test("own commit-msg and own pre-push are merged too: the protected-files gate a
 });
 
 test("init --keep-own-hooks leaves the project's hooks untouched (hooks.mode own) and says so", () => {
-  const own = fs.mkdtempSync(path.join(os.tmpdir(), "af-own2-"));
+  const own = tempDir("af-own2-");
   const g = (...a) => execFileSync("git", a, { cwd: own, encoding: "utf8" }).trim();
   g("init", "-q", "-b", "main"); g("config", "user.email", "o@example.com"); g("config", "user.name", "o");
   fs.mkdirSync(path.join(own, ".githooks")); for (const h of ["pre-commit", "pre-push"]) { fs.writeFileSync(path.join(own, `.githooks/${h}`), "#!/bin/sh\nexit 0\n"); fs.chmodSync(path.join(own, `.githooks/${h}`), 0o755); }
@@ -635,7 +636,7 @@ test("gate runs commands in slots and survives without flock", () => {
 });
 
 test("a worker's setup or shell terminal does not keep its worktree from cleanup", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-holds-"));
+  const dir = tempDir("af-holds-");
   fs.copyFileSync(path.join(ROOT, "controller", "lib.mjs"), path.join(dir, "lib.mjs"));
   fs.writeFileSync(path.join(dir, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local" }] } }));
   const titles = ["T1 · Worker Developer", "T1 · Worker Developer · Setup", "T1 · Worker Developer · Shell", "p · Controller", "p · Integration · Wave 3", "Coordinator old", "my notes"];
@@ -647,7 +648,7 @@ test("a worker's setup or shell terminal does not keep its worktree from cleanup
 });
 
 test("stallwatch watches a worker's own terminal, not its setup or shell terminal", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-stall-"));
+  const dir = tempDir("af-stall-");
   for (const f of ["stallwatch.mjs", "cli.mjs", "lib.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
   fs.writeFileSync(path.join(dir, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local" }] } }));
   const ws = path.join(os.homedir(), "orca/workspaces/p/");
@@ -669,7 +670,7 @@ console.log(JSON.stringify({ ok: true, result: { terminals: ${JSON.stringify(ter
 });
 
 test("names.mjs corrects only automatic names, by role, and leaves an unknown entry alone", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-names-"));
+  const dir = tempDir("af-names-");
   for (const f of ["names.mjs", "cli.mjs", "lib.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
   fs.writeFileSync(path.join(dir, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "server" }, workers: [{ name: "server", kind: "remote", ssh: "s", orcaEnvironment: "Server", orcaRepoId: "r" }] } }));
   fs.writeFileSync(path.join(dir, "workers.json"), JSON.stringify({ t1: { name: "T1 · Worker Developer", host: "server", worktree: "~/w/p/t1" } }));
