@@ -136,11 +136,12 @@ Open points are in [`debt.md`](debt.md), and past reviews of this repository in 
 
 ## What has run for real
 
-- **Run for real:** one end-to-end run on macOS, with a Claude Code Controller and an Orca bot as Front agent.
+- **Run for real, twice:** end to end on macOS in a throwaway project, with a Claude Code Controller and an Orca bot as Front agent. The second run followed START.md alone: three tickets reached the main branch without a manual wake-up, and cleanup removed the workers by itself.
+- **Not run for real since:** the last run was on a state before the latest heartbeat, cleanup and wave changes. Those are tested against fakes only.
 - **Tested against fakes:** the test suite replaces Orca, ssh, `launchctl`, `crontab` and `gh` with fakes that record their calls. That is how the heartbeat, the wake rules, cleanup, capacity, the bot watch and the second-factory rules are tested.
 - **Never run against a real Orca:** the automatic restart of a hung Controller (off by default). That closing the Controller's terminal leaves its workers alone is unproven. [Orca](docs/orca.md#heartbeat) lists what a restart kills and what is unproven.
 - **Not tested again:** a remote Controller host, and a documentation-only wave on a remote worker host.
-- **Opt-in and little mileage:** the documentation-only path did not apply in the one real run, because a task branch also carries its spec review and report. The formatter on staged files was tested with a stand-in, not with `prettier` itself. Both are off until you turn them on.
+- **Opt-in and little mileage:** the documentation-only path did not apply in a real run, because a task branch also carries its spec review and report. The formatter on staged files was tested with a stand-in, not with `prettier` itself. Both are off until you turn them on.
 - **Unproven:** why Orca read a Claude Code Controller at its prompt as busy for five minutes in one run. The heartbeat therefore does not guess from the screen. See "Busy or idle?" in [Orca](docs/orca.md#heartbeat).
 
 ## Documentation
