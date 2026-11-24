@@ -57,8 +57,8 @@ if (cfg.steering?.mode === "github-issues") {
   // The issue is not in the tree: its text, as it is now (the work has started, the Controller's claim changes labels only).
   const issue = /^#?(\d+)$/.exec(taskRef ?? "")?.[1];
   // The declaration must also hold as the Controller recorded it when it took the issue (steering/issues.mjs claim writes a
-  // `claim` event into its own journal, where a worker cannot write): the live text alone can be edited after the work started.
-  // An issue taken before that existed has no record and takes the full path.
+  // `claim` event into its own journal, a file outside every worktree that workers are not to write; the first record for an issue
+  // counts): the live text alone can be edited after the work started. An issue taken before that existed has no record.
   let recorded = null;
   try { recorded = fs.readFileSync(file("journal.ndjson"), "utf8").split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).find((e) => e?.type === "claim" && String(e.task) === String(issue)); } catch { /* no journal */ }
   if (issue && recorded?.documentation !== true) stop(3, `issue #${issue}: the Controller's journal has no claim record that says it was a documentation ticket when it was taken (${recorded ? "it recorded: not declared" : "no record, an issue taken before the declaration existed"}). Review as usual.`);
