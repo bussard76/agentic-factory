@@ -52,7 +52,9 @@ With `docsOnly.enabled: true` in the `factory.config.json` on the main branch, a
 
 Matching ignores case: on a case-insensitive file system `docs/ADR/` is `docs/adr/`. Configured paths (`docsOnly.paths`, `steering.tasksDir`) are normalised first: backslashes become slashes, a leading `./` or `/` and a trailing `/` are dropped, so `./docs/tickets`, `/docs/tickets` and `docs/tickets/` all name the same directory. A value that names nothing inside the repository (`../tickets`, `C:/…`, empty) makes the check unclear; it is never dropped silently. A rename is a delete plus an add, so both sides must be documentation. **Unclear (exit 4):** an empty diff, an unmerged path, a missing base or head, an invalid setting, a commit on the way whose own changes cannot be told, any git error.
 
-**The ticket's own process files.** Every task branch of the Controller's flow carries two files besides the ticket's change, and both sit in directories the factory reads as process state, so without a ticket the check refuses them. The files come from the flow itself (`controller/templates/mkspec.mjs`; a test keeps the names in step):
+### The ticket's own process files
+
+Every task branch of the Controller's flow carries two files besides the ticket's change, and both sit in directories the factory reads as process state, so without a ticket the check refuses them. The files come from the flow itself (`controller/templates/mkspec.mjs`; a test keeps the names in step):
 
 | File | Who writes it | Who reads it |
 |---|---|---|
@@ -64,7 +66,7 @@ The findings files (`-review-<n>`, `-review-final`, `-architecture-conformance`)
 With `--ticket <id>` (and `--issue <n>` in github-issues mode) the check accepts **exactly** those two names of **that** ticket, and only when all of this holds; every other path under `docs/reviews`, `docs/reports` or the tickets keeps the branch off the docs-only path as before:
 
 - **The ticket comes from the Controller's records, not from the branch.** `docsonly.mjs` passes its `<task>` argument, and only when `<branch>` is that task's own branch (`project.branchPrefix` plus the id in lower case). In orca-tasks mode the ticket's file must exist exactly once in `steering.tasksDir` of the **base** tree, and the report is named after it; a ticket file the branch adds does not count. Anything it cannot establish (no such file, two of them, a ticket directory that overlaps `docs/reviews` or `docs/reports`, another branch) accepts no process file, and the check says why.
-- **New files, plain and exact:** absent on the base (so not modified, deleted or renamed), mode `100644`, the exact name including case. A second file of a kind, another ticket's file (`T030` is not `T03`) and a case variant are other files.
+- **New files, plain and exact:** absent on the base and on the current main (so not modified, deleted or renamed, and not a file main has since got), mode `100644`, the exact name including case. A second file of a kind, another ticket's file (`T030` is not `T03`) and a case variant are other files.
 - **Never a findings file.** A content that mentions `Reviewed commit` in any spelling or spacing is refused, in every commit of the range, not only at the tip: a forged findings file would let unreviewed code through the push gate (the first review of #52, finding 2). A real spec review carries a `Verdict` and the SHA it read, never a `Reviewed commit`.
 - **At least one real documentation change** must be there: process files alone are not a docs-only task.
 

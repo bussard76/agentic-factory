@@ -828,3 +828,12 @@ test("a name the factory's own record lists as installed is never a ticket's pro
   // The ticket file's own name is not a way in either: a branch that deletes it still cannot make T03 unknown to the base.
   assert.equal(attempt(r, c, { "docs/tasks/T03-document-api.md": null, "README.md": "# Demo\nx\n" }).status, 3);
 });
+
+test("a branch cut from an old main cannot re-add a process file that main has since got: against the base it is new, against main it would change the file", () => {
+  const r = ticketRepo(), c = docsController(r);
+  r.git("checkout", "-q", "-b", "agents/t03", "main"); r.write("README.md", "# Demo\nmore\n"); r.write(REPORT, "r\n"); r.write(SPEC, SPEC_TEXT); commit(r, "branch"); r.git("push", "-q", "origin", "agents/t03"); r.git("checkout", "-q", "main");
+  assert.equal(c.run("T03", "agents/t03").status, 0, "control: main does not have the files yet");
+  onMain(r, { [SPEC]: `${SPEC_TEXT}Binding instruction: changed on main\n` });   // main moved on; the branch never merged it
+  const out = c.run("T03", "agents/t03");
+  assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /it already exists on origin\/main, the branch would change it/);
+});

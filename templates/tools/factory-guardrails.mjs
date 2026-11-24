@@ -63,7 +63,8 @@ const isDocsOnly = (paths) => paths.length > 0 && paths.every((p) => !REVIEWED_D
 // THAT ticket are accepted, and only when all of these hold; anything else under those directories stays "not docs-only":
 //   - the ticket comes from the caller (the Controller's record), never from the candidate; in orca-tasks mode the ticket's
 //     file must exist exactly once in the BASE tree's ticket directory, and the report is named after it;
-//   - the file is ADDED in the range (absent on the base): not modified, deleted or renamed, mode 100644, exact case;
+//   - the file is ADDED in the range (absent on the base and on the range's left side, main's tip): not modified, deleted or
+//     renamed, mode 100644, exact case;
 //   - its content never reads like a findings file ("Reviewed commit"): the push gate takes every file under docs/reviews/
 //     with `Verdict: pass` and a `Reviewed commit: <sha>` line as the independent review of that commit, so a forged one
 //     would let unreviewed code through. Every version of the file in the range is read, not only the last;
@@ -182,6 +183,8 @@ function pathProblem(p, ctx) {
 function processProblem(e, ctx, inCommit) {
   const what = `${ctx.expect.get(e.path)} of ${ctx.ticket}`;
   if (e.status === "U") return "unmerged";
+  // Absent on the base AND on the current left side of the range: a branch cut from an old main must not re-add (and so change) a file main has since got.
+  if (!inCommit && e.status === "A" && ctx.left && spawnSync("git", ["cat-file", "-e", `${ctx.left}:${e.path}`], { stdio: "ignore" }).status === 0) return `${what}: it already exists on ${ctx.leftName}, the branch would change it`;
   if (inCommit ? !/^[AM]$/.test(e.status) || !ctx.netAdded.has(e.path) : e.status !== "A") return `${what}: it must be added by this branch (it exists on the base, is changed or removed, or does not end up in the range)`;
   if ((e.status === "M" && !REGULAR.test(e.oldMode)) || !REGULAR.test(e.newMode)) return `${what}: only plain files (100644) are documentation`;
   let text;
@@ -259,6 +262,7 @@ function docsOnly(argv) {
       const head = git("rev-parse", "--verify", `${m[2]}^{commit}`).trim();
       const base = git("merge-base", git("rev-parse", "--verify", `${m[1]}^{commit}`).trim(), head).trim();
       const ctx = docsContext(configAt(base), base, ticketId === undefined ? undefined : { id: ticketId, issue });
+      if (ctx.expect) { ctx.left = git("rev-parse", "--verify", `${m[1]}^{commit}`).trim(); ctx.leftName = m[1]; }
       const what = `${rest[0]} (base ${base.slice(0, 12)}, head ${head.slice(0, 12)})`;
       const r = classify(parseRaw(git("diff", "--raw", "-z", "--no-renames", "--no-abbrev", base, head)), ctx);
       if (r.verdict === "docs-only") {
