@@ -9,6 +9,7 @@ The Controller appends one JSON line per event to `journal.ndjson` (`controller/
 - always: `ts`, `type`, `task`
 - where they apply: `role`, `model`, `agent`, `round`, `verdict`, `reason`, `minutes`, `wait_min`, `slot_pool`, `reruns`, `note`
 - `type`: `start`, `done`, `review`, `rerun`, `stall`, `nudge`, `wave`, `escalation`, `decision`, `retro`, `gate`, `capacity`, `cleanup`
+- a `review` event with a `head` (the commit a review covered), written by `reviewed.mjs` (also `path`, `branch`, `reviewSha`, `file`, `tip`, `by`) or by `docsonly.mjs` (`path: docs-only`, `paths`): the wave merges that commit. Reviews recorded without these fields (for calibration) carry a `role` and are not read by the wave
 - `reason`: `functional`, `coverage`, `load-timeout`, `environment`, `spec-gap`, `security`, `early-stop`, `other`
 
 ## Pipeline Auditor

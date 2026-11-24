@@ -10,7 +10,7 @@
 import "./cli.mjs";
 import fs from "node:fs";
 import { spawn } from "node:child_process";
-import { BRANCH_PREFIX, CMDS, CONTROLLER_HOME, MAIN, ORCA, PROJECT, RUNNER, argHost, file, integrationOn, journal, onHost, orcaEnvArgsOn, sh, worktreeRefOn } from "./lib.mjs";
+import { BRANCH_PREFIX, CMDS, config, CONTROLLER_HOME, MAIN, ORCA, PROJECT, RUNNER, argHost, file, integrationOn, journal, onHost, orcaEnvArgsOn, sh, worktreeRefOn } from "./lib.mjs";
 import { bindBranches, latestReview } from "./reviewrecord.mjs";
 
 const host = argHost(process.argv);
@@ -19,7 +19,7 @@ const [title, summary, ...branches] = args;
 if (!title || !branches.length) throw new Error('usage: node wave.mjs "<title>" "<summary>" origin/<branch>... [--on <host>]');
 const b64 = fs.readFileSync(file("integ-wave.sh")).toString("base64");
 const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
-const envs = { MAIN, INSTALL_CMD: CMDS.install ?? "", VERIFY_CMD: CMDS.verify ?? "", E2E_CMD: CMDS.e2e ?? "", GATE: `${CONTROLLER_HOME.replace(/^~(?=\/|$)/, "$HOME")}/gate`, WAVE_PROJECT: PROJECT, TRAILER: process.env.WAVE_TRAILER ?? "" };
+const envs = { MAIN, TASKS_DIR: config.steering?.tasksDir ?? "docs/tasks", INSTALL_CMD: CMDS.install ?? "", VERIFY_CMD: CMDS.verify ?? "", E2E_CMD: CMDS.e2e ?? "", GATE: `${CONTROLLER_HOME.replace(/^~(?=\/|$)/, "$HOME")}/gate`, WAVE_PROJECT: PROJECT, TRAILER: process.env.WAVE_TRAILER ?? "" };
 if (!envs.VERIFY_CMD.trim()) throw new Error("commands.verify is empty or only whitespace: a wave without a verification command is not allowed");
 if (!branches.some((b) => /-review-\d+$|-review-final$/.test(b))) console.error("warning: no review branch among the wave branches; the push gate needs the findings files in the pushed tree (a docs-only task has none)");
 if (!envs.E2E_CMD.trim()) envs.E2E_CMD = "";
