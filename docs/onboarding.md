@@ -20,6 +20,7 @@ The Front agent asks these questions in conversation, one at a time, using the I
 | 12 | **Review rounds** before a working feature is integrated | back pressure without endless loops | 2 |
 | 13 | **Design tool:** Figma MCP, Pencil, none | stage 1 of outside-in and the export convention `design/<feature>/` | Figma if its MCP endpoint answers locally |
 | 13b | **Architecture document:** a Worker Architect creates and maintains `ARCHITECTURE.md`, or none | existing code: described as the first task; a new repo: after the first merged wave; an existing file is kept and checked; reviews compare against it, and one Architect worker runs after each wave | yes |
+| 13c | **Documentation-only tasks** may skip their separate review (`docsOnly.enabled`) | the setting is read from `factory.config.json` on the main branch, which the push gate reviews: at onboarding it rides the adoption commit, later it takes a ticket (`docs/testing.md`, "Turning it on") | no |
 | 14 | **Hard rules to confirm** (printed as one list): no real data or secrets in the repo, no outward effects from the factory, workers never push to `main`, `--no-verify` forbidden, tests on demo data only, no real model calls in tests | one confirmation for the list; they end up in `AGENTS.md` and `docs/coordinator.md` | confirmed |
 | 15 | **Install the user-level skills on this machine now?** | the Front agent (and a local Controller) run outside the repo and need `orchestration`, `orca-cli`, `retro`, `writing-for-agents` and the coordination skills in `~/.claude/skills` / `~/.agents/skills` | yes |
 

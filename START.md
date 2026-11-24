@@ -54,6 +54,10 @@ With a bot (`hosts.frontAgent.kind` is `orca-bot`), `start` does not schedule th
 
 The Controller takes it from here. If the human chose a maintained `ARCHITECTURE.md` (`architecture.mode`), a Worker Architect creates it: as the first task when the repo holds code, otherwise after the first merged wave.
 
+### Documentation-only tasks (optional)
+
+`docsOnly.enabled` lets a task that changes only Markdown or images skip its separate review. It is **off** unless the human chose otherwise (the onboarding question `docsOnly.enabled`, default no), and it counts only from `factory.config.json` **on the main branch**. That file is reviewed like code, so a plain push of it is refused: with the setting off, turning it on later is **a ticket through the normal path** (a task whose result is the config change, with its Tester), not a push, not a Controller command, and not an `agentic-factory` command. Offer it to the human when the project has real documentation work; say that it saves the Tester round of such tasks (only tickets that declare themselves with `Documentation only: yes` and `Level: 1`, both when the work started and when the check runs; the wave still runs the full gates once), that each one still passes the push gate unchanged, and that code and everything the factory reads as process state (tickets, reviews, protocols, agent instructions) always keeps its review. Details: `docs/testing.md` of the factory, "Turning it on".
+
 ## 4. From now on
 
 **With an Orca bot, your part ends here.** The bot is the Front agent now. Tell the human to talk to the bot in Orca from here on, and that the bot reads `~/front-agent/<project>/FRONT_BOT.md`. The Controller's first messages reach the bot directly; the watch only records a baseline on its first run, so a question open at that moment comes through the Controller's message, not the watch. If the human wants the first status at once, they ask the bot for it in its chat. Do not take over the bot's role, and do not steer the Controller's workers.

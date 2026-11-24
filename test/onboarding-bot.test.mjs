@@ -154,3 +154,14 @@ test("START.md names the answer ids it tells the agent to use, in the order of t
   const at = (needle) => { const i = start.indexOf(needle); assert.ok(i >= 0, needle); return i; };
   assert.ok(at("orca bot list") < at("SOUL.md") && at("SOUL.md") < at("`init`") && at("`init`") < at("Run `factory start`") && at("Run `factory start`") < at("`doctor`", at("Run `factory start`")));
 });
+
+test("docsOnly.enabled is a question of its own: off without an answer (old answer files keep working), on only for yes, refused for anything else", () => {
+  const t = setup();
+  const q = JSON.parse(spawnSync("node", [CLI, "init", "--print-questions"], { cwd: t.project, env: t.env, encoding: "utf8" }).stdout).questions.find((x) => x.id === "docsOnly.enabled");
+  assert.deepEqual(q.options.map((o) => o.value), ["no", "yes"]); assert.equal(q.recommended, "no"); assert.match(q.context, /ticket through the normal review path/);
+  let r = t.run(base); assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(t.config().docsOnly.enabled, false); assert.ok(t.config().docsOnly.paths, "the rest of the docsOnly block is kept");
+  const on = setup(); r = on.run({ ...base, "docsOnly.enabled": "yes" }); assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(on.config().docsOnly.enabled, true);
+  const bad = setup(); r = bad.run({ ...base, "docsOnly.enabled": "maybe" }); assert.equal(r.status, 1); assert.match(r.stderr, /"docsOnly\.enabled" must be one of yes, no/);
+});

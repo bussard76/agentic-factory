@@ -212,3 +212,23 @@ export const isHelperTerminal = (title = "") => / · (Setup|Shell)$/.test(title)
 /** Whether a terminal keeps its worktree from being cleaned up. */
 export const holdsWorktree = (title = "") => /· Worker|Controller|Coordinator|· Integration/.test(title) && !isHelperTerminal(title);
 export const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
+// The ticket's own declaration of a documentation ticket (`Level: 1` and `Documentation only: yes`), read the way
+// templates/tools/factory-guardrails.mjs reads it (a test keeps the two in step). "" when the text declares it, else why not.
+export function declaredProblem(text) {
+  // Only the ticket's own prose counts: not an HTML comment (the task template carries the field as one) and not a fenced
+  // code block. Then exactly one line starting `Level:` (any case) that reads exactly `Level: 1`, and exactly one starting
+  // `Documentation only:` that reads exactly `Documentation only: yes`: the documented spelling, at the start of a line, once.
+  const prose = String(text).replace(/<!--[\s\S]*?(-->|$)/g, ""), kept = [];
+  let fence = "";
+  for (const l of prose.split(/\r?\n/)) {
+    const m = /^ {0,3}(`{3,}|~{3,})/.exec(l);
+    if (fence) { if (m && m[1][0] === fence[0] && m[1].length >= fence.length) fence = ""; continue; }
+    if (m) { fence = m[1]; continue; }
+    kept.push(l);
+  }
+  const level = kept.filter((l) => /^level:/i.test(l)), decl = kept.filter((l) => /^documentation only:/i.test(l));
+  if (level.length !== 1 || !/^Level: 1[ \t]*$/.test(level[0])) return "its Level is not 1";
+  if (decl.length !== 1 || !/^Documentation only: yes[ \t]*$/.test(decl[0])) return "it does not say `Documentation only: yes`";
+  return "";
+}

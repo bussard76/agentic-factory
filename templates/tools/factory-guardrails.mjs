@@ -8,8 +8,12 @@
 //   review-gate      pushes to the main branch need review coverage under docs/reviews/
 //   format-staged    the project's formatter on the fully staged files (commands.formatStaged); off when not configured
 //   format-staged --finish <status>   after the other pre-commit steps: takes the formatting back if one failed
-//   docs-only [<base>..<head> | --staged] [--base <ref>] [--json]
+//   docs-only [<base>..<head> [--ticket <id> [--issue <n> --ticket-text <file>]] | --staged] [--base <ref>] [--json]
 //                    does a candidate change documentation only? Prints the changed paths and the verdict.
+//                    --ticket <id>: the Controller's ticket for that branch. The branch is docs-only only when the ticket says it is
+//                    a documentation ticket (`Level: 1` and `Documentation only: yes`) both at the branch's base and on main now; then its own spec review and
+//                    report (and nothing else under docs/reviews, docs/reports or the tickets) may be on it. --issue <n>: the issue
+//                    number (github-issues); --ticket-text <file>: the issue's text, which stands in for the ticket file.
 //                    Exit 0 docs-only, 3 not docs-only, 4 unclear (fail closed: treat as not docs-only), 2 usage.
 // Never bypass with --no-verify. Rules: docs/review-protocol.md.
 import { execFileSync, spawnSync } from "node:child_process";
@@ -52,6 +56,29 @@ const isDocsOnly = (paths) => paths.length > 0 && paths.every((p) => !REVIEWED_D
 // every commit in it is judged as well, so code added and removed again on the way is not docs-only. Anything unclear
 // (empty diff, unmerged path, missing ref, invalid setting, git error) is "unclear", which every caller treats as "not".
 // The settings and the factory's record are read from the BASE of the candidate, never from the candidate itself.
+//
+// The ticket's own process files (--ticket). The Controller's flow puts two files on every task branch besides the
+// ticket's change: the architecture spec review the Developer merges (docs/reviews/<ticket>-architecture-spec.md, written
+// by the Worker Architect) and the Developer's report (docs/reports/<ticket file name>.md, or issue-<n>.md for a GitHub
+// issue); controller/templates/mkspec.mjs names both, and a test keeps the two in step. Both sit in directories the
+// factory reads as process state, so without a ticket they are not documentation. With one, EXACTLY those two names of
+// THAT ticket are accepted, and only when all of these hold; anything else under those directories stays "not docs-only":
+//   - the ticket comes from the caller (the Controller's record), never from the candidate; in orca-tasks mode the ticket's
+//     file must exist exactly once in the BASE tree's ticket directory, and the report is named after it;
+//   - the file is ADDED in the range (absent on the base and on the range's left side, main's tip): not modified, deleted or
+//     renamed, mode 100644, exact case;
+//   - its content never reads like a findings file ("Reviewed commit"): the push gate takes every file under docs/reviews/
+//     with `Verdict: pass` and a `Reviewed commit: <sha>` line as the independent review of that commit, so a forged one
+//     would let unreviewed code through. Every version of the file in the range is read, not only the last;
+//   - it is not also a ticket file, an installed file or an agent instruction file (an overlap makes the check unclear);
+//   - at least one other path (a change to documentation) is there: process files alone are no documentation change.
+// The ticket's own word (--ticket). The diff cannot tell a documentation ticket from a code ticket delivered as words (a
+// spec review, a report saying "implemented" and one README line), and the process files used to keep every such branch
+// off this path by accident. So with --ticket the path applies only when the ticket says so at the BASE and on main's tip now
+// (never on the branch; a ticket that was turned into a code ticket since the cut is no documentation ticket any more): exactly one `Level: 1` line and exactly one `Documentation only: yes` line (a field that is absent
+// means the full path). A ticket that cannot be found, or does not say it, is not docs-only whatever the diff is.
+// Findings files (-review-<n>, -review-final, -architecture-conformance) are written on their own branches and never
+// belong to a docs-only task; a ticket file changing its Status is the wave's own status branch, never the task's.
 const DEFAULT_DOCS_PATHS = ["docs/**", "*.md"];
 const DOC_TYPES = ["md", "png", "jpg", "jpeg", "gif", "webp"];
 const OPT_IN_TYPES = ["svg", "mdx"];
@@ -92,13 +119,71 @@ function repoPath(p) {
   s = s.replace(/\/+$/, "");
   return !s || s.includes("\0") || /^[A-Za-z]:/.test(s) || s.split("/").some((x) => x === "." || x === "..") ? null : s;
 }
+// The directories where the Controller's flow keeps the process files of a ticket (mkspec.mjs and the push gate name them).
+const PROCESS_FILE_MAX = 256 * 1024;
+const PROCESS_DIRS = ["docs/reviews/**", "docs/reports/**"];
+// The two files of one ticket as { files: path → kind }. { error } for an option that is not a ticket id (a caller's bug:
+// unclear); { note } when the ticket cannot be established from the base tree or the settings: then NO process file is
+// accepted (the plain check, which refuses them) and the note says why.
+// Why a ticket's text does not declare a documentation ticket, or "": exactly one `Level: 1` line (a level above the lowest
+// is never documentation; "Level: 1 | 2 | 3" of an unfilled template is not a level) and exactly one `Documentation only: yes` line.
+function declaredProblem(text) {
+  // Only the ticket's own prose counts: not an HTML comment (the task template carries the field as one) and not a fenced
+  // code block. Then exactly one line starting `Level:` (any case) that reads exactly `Level: 1`, and exactly one starting
+  // `Documentation only:` that reads exactly `Documentation only: yes`: the documented spelling, at the start of a line, once.
+  const prose = String(text).replace(/<!--[\s\S]*?(-->|$)/g, ""), kept = [];
+  let fence = "";
+  for (const l of prose.split(/\r?\n/)) {
+    const m = /^ {0,3}(`{3,}|~{3,})/.exec(l);
+    if (fence) { if (m && m[1][0] === fence[0] && m[1].length >= fence.length) fence = ""; continue; }
+    if (m) { fence = m[1]; continue; }
+    kept.push(l);
+  }
+  const level = kept.filter((l) => /^level:/i.test(l)), decl = kept.filter((l) => /^documentation only:/i.test(l));
+  if (level.length !== 1 || !/^Level: 1[ \t]*$/.test(level[0])) return "its Level is not 1";
+  if (decl.length !== 1 || !/^Documentation only: yes[ \t]*$/.test(decl[0])) return "it does not say `Documentation only: yes`";
+  return "";
+}
+function ticketFiles(cfg, rev, ticket, issue, others, textFile, left) {
+  if (typeof ticket !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(ticket) || ticket.includes("..")) return { error: `--ticket must be a ticket id (letters, digits, . _ -), got ${JSON.stringify(ticket)}` };
+  const files = new Map([[`docs/reviews/${ticket}-architecture-spec.md`, "spec review"]]);
+  const mode = cfg.steering?.mode ?? "orca-tasks";
+  let declared = "";
+  if (mode === "github-issues") {
+    if (issue !== undefined) { if (!/^[1-9]\d{0,9}$/.test(issue)) return { error: `--issue must be a number, got ${JSON.stringify(issue)}` }; files.set(`docs/reports/issue-${issue}.md`, "report"); }
+    // The issue is not in the tree: the Controller hands over its text as it is now; docsonly.mjs also requires its own claim record.
+    try { if (!textFile) return { note: "the issue's text was not supplied (--ticket-text)" }; const p = declaredProblem(readFileSync(textFile, "utf8")); declared = p && `the issue's text now: ${p}`; } catch { return { note: "the issue's text cannot be read" }; }
+  } else if (mode === "orca-tasks") {
+    if (issue !== undefined) return { note: "--issue belongs to steering.mode github-issues; this project's tickets are task files" };
+    const dir = repoPath(cfg.steering?.tasksDir ?? "docs/tasks");
+    if (!dir || /[*?{}[\]]/.test(dir)) return { note: `steering.tasksDir must name a directory inside the repository (got ${JSON.stringify(cfg.steering?.tasksDir)})` };
+    // The ticket's own file in the base tree, exactly once: that is where the Controller's records say the ticket exists.
+    let listed;
+    try { listed = git("ls-tree", "-z", rev, "--", `${dir}/`).split("\0").filter(Boolean).map((l) => /^(\d{6}) (\w+) [0-9a-f]+\t(.*)$/s.exec(l)); } catch (e) { return { note: `the ticket directory ${dir} cannot be read on the base: ${String(e.stderr || e.message).trim().split("\n")[0]}` }; }
+    const mine = listed.filter((m) => m && m[2] === "blob" && m[3].startsWith(`${dir}/`) && m[3].slice(dir.length + 1).startsWith(`${ticket}-`) && m[3].endsWith(".md") && !m[3].slice(dir.length + 1).includes("/"));
+    if (mine.length !== 1) return { note: `ticket ${ticket}: ${mine.length ? "more than one" : "no"} ticket file ${dir}/${ticket}-*.md on the base` };
+    // The ticket must say so when the work started (the base) AND now (main's tip): either reading that says no, finds no
+    // file or cannot be made means the full path.
+    const readAt = (at, name) => { try { const p = declaredProblem(git("show", `${at}:${mine[0][3]}`)); return p && `the ticket ${name}: ${p}`; } catch { return `the ticket ${name}: its file cannot be read`; } };
+    declared = readAt(rev, "at the branch's base") || (left ? readAt(left, "on main now") : "the ticket on main now: not read");
+    const report = mine[0][3].slice(dir.length + 1, -3);
+    if (!/^[\x21-\x7e][\x20-\x7e]*$/.test(report)) return { note: `ticket ${ticket}: the ticket file name is not plain text` };
+    files.set(`docs/reports/${report}.md`, "report");
+  } else return { note: `steering.mode ${JSON.stringify(mode)} is not known` };
+  for (const p of files.keys()) {
+    if (NEVER_DOCS.some((re) => re.test(p))) return { note: `${p}: a dot path or an agent instruction file` };
+    if (others.some((re) => re.test(p))) return { note: `${p} is also a ticket, installed or process-state file of the factory (does steering.tasksDir overlap docs/reviews or docs/reports?)` };
+  }
+  return { files, undeclared: declared };
+}
 // The settings, the allowlist and the factory's set for a config and the tree it was read from; or an error message.
-function docsContext(cfg, rev) {
+// ticket: { id, issue } of the Controller's ticket when its own process files are accepted (see above).
+function docsContext(cfg, rev, ticket) {
   const raw = cfg.docsOnly?.paths ?? DEFAULT_DOCS_PATHS, extra = cfg.docsOnly?.extraTypes ?? [];
   const paths = Array.isArray(raw) ? raw.map(repoPath) : null;
   if (!paths || !paths.length || !paths.every(narrowPattern)) return { error: "docsOnly.paths must be a non-empty list of patterns inside the repository that each start with a directory name (docs/**) or name top-level files (*.md)" };
   if (!Array.isArray(extra) || !extra.every((t) => OPT_IN_TYPES.includes(t))) return { error: `docsOnly.extraTypes may only list ${OPT_IN_TYPES.join(", ")}` };
-  const factory = [...FACTORY_PATHS];
+  const factory = FACTORY_PATHS.filter((g) => !PROCESS_DIRS.includes(g));   // the process directories are added back below
   const tasksDir = cfg.steering?.tasksDir;
   if (tasksDir !== undefined) {
     const dir = repoPath(tasksDir);
@@ -110,7 +195,13 @@ function docsContext(cfg, rev) {
   if (rev) try { recorded.push(...Object.keys(JSON.parse(git("show", `${rev}:.factory/manifest.json`)).files ?? {})); } catch {}
   try { const common = git("rev-parse", "--path-format=absolute", "--git-common-dir").trim(); recorded.push(...(JSON.parse(readFileSync(join(common, "factory/standard.json"), "utf8")).links ?? []).map((l) => l.path)); } catch {}
   for (const r of recorded) { const p = repoPath(r); if (!p) return { error: `the factory's record lists a path outside the repository: ${JSON.stringify(r)}` }; factory.push(p.replace(/[*?{}[\]]/g, "?")); }
-  try { return { globs: paths, res: paths.map(globToRegExp), types: [...DOC_TYPES, ...extra], factory: factory.map(globToRegExp) }; } catch (e) { return { error: `docsOnly.paths: ${e.message}` }; }
+  try {
+    const others = factory.map(globToRegExp);
+    let expect, ticketNote;
+    let undeclared;
+    if (ticket) { const t = ticketFiles(cfg, rev, ticket.id, ticket.issue, others, ticket.textFile, ticket.left); if (t.error) return { error: t.error }; expect = t.files; ticketNote = t.note; undeclared = t.note ? (t.note.startsWith("ticket ") ? t.note : `ticket ${ticket.id}: ${t.note}`) : t.undeclared; }
+    return { globs: paths, res: paths.map(globToRegExp), types: [...DOC_TYPES, ...extra], factory: [...others, ...PROCESS_DIRS.map(globToRegExp)], expect, ticket: ticket?.id, ticketNote, undeclared };
+  } catch (e) { return { error: `docsOnly.paths: ${e.message}` }; }
 }
 // One path: why it is not documentation, or "" when it is.
 function pathProblem(p, ctx) {
@@ -122,26 +213,50 @@ function pathProblem(p, ctx) {
   return ctx.res.some((re) => re.test(p)) ? "" : "outside the docs allowlist";
 }
 // entries: { status, oldMode, newMode, path } from `git diff --raw -z --no-renames` (a rename is a delete plus an add).
-function classify(entries, ctx) {
+// One of the ticket's own process files (ctx.expect, exact name): why it is refused, or "" when it may be there. inCommit:
+// judged as one commit of the range (a report is written over many commits, so M is fine there when the range adds it).
+function processProblem(e, ctx, inCommit) {
+  const what = `${ctx.expect.get(e.path)} of ${ctx.ticket}`;
+  if (e.status === "U") return "unmerged";
+  // Absent on the base AND on the current left side of the range: a branch cut from an old main must not re-add (and so change) a file main has since got.
+  if (!inCommit && e.status === "A" && ctx.left && spawnSync("git", ["cat-file", "-e", `${ctx.left}:${e.path}`], { stdio: "ignore" }).status === 0) return `${what}: it already exists on ${ctx.leftName}, the branch would change it`;
+  if (inCommit ? !/^[AM]$/.test(e.status) || !ctx.netAdded.has(e.path) : e.status !== "A") return `${what}: it must be added by this branch (it exists on the base, is changed or removed, or does not end up in the range)`;
+  if ((e.status === "M" && !REGULAR.test(e.oldMode)) || !REGULAR.test(e.newMode)) return `${what}: only plain files (100644) are documentation`;
+  // The push gate reads every file under docs/reviews/ on every push: a process file is a page or two, not megabytes.
+  try { if (Number(git("cat-file", "-s", e.newSha).trim()) > PROCESS_FILE_MAX) return `${what}: larger than ${PROCESS_FILE_MAX / 1024} KiB`; } catch { return `${what}: its size cannot be read`; }
+  let text;
+  try { text = git("cat-file", "blob", e.newSha); } catch { return `${what}: its content cannot be read`; }
+  // The push gate reads every file under docs/reviews/ as the independent review of the commit it names.
+  if (/reviewed[\s_-]*commit/i.test(text)) return `${what}: it reads like a findings file (a "Reviewed commit" line); only a Tester writes those, on a review branch`;
+  if (text.includes("\0")) return `${what}: not text`;
+  return "";
+}
+function classify(entries, ctx, inCommit = false) {
   if (ctx.error) return { verdict: "unclear", reason: ctx.error, rows: [] };
   if (!entries.length) return { verdict: "unclear", reason: "no changed paths (empty diff)", rows: [] };
+  if (!inCommit && ctx.expect) ctx.netAdded = new Set(entries.filter((e) => e.status === "A").map((e) => e.path));
   const rows = entries.map((e) => {
-    let why = "";
-    if (!/^[AMD]$/.test(e.status)) why = e.status === "U" ? "unmerged" : `change type ${e.status}`;
+    let why = "", note = "";
+    if (ctx.expect?.has(e.path)) { why = processProblem(e, ctx, inCommit); if (!why) note = `${ctx.expect.get(e.path)} of ${ctx.ticket}`; }
+    else if (!/^[AMD]$/.test(e.status)) why = e.status === "U" ? "unmerged" : `change type ${e.status}`;
     else if ((e.status !== "A" && !REGULAR.test(e.oldMode)) || (e.status !== "D" && !REGULAR.test(e.newMode))) why = `mode ${e.status === "A" ? e.newMode : e.oldMode}${e.status === "M" ? ` -> ${e.newMode}` : ""}: only plain files (100644) are documentation`;
     else why = pathProblem(e.path, ctx);
-    return { ...e, why };
+    return { ...e, why, note };
   });
   const bad = rows.filter((r) => r.why);
   const unclear = bad.find((r) => r.why === "unmerged" || r.why.startsWith("change type X"));
-  return { verdict: unclear ? "unclear" : bad.length ? "not-docs-only" : "docs-only", reason: unclear ? `unmerged or unknown change: ${JSON.stringify(unclear.path)}` : bad.length ? `${bad.length} of ${rows.length} paths are not documentation` : `all ${rows.length} paths are documentation`, rows };
+  const own = rows.filter((r) => r.note).length;
+  if (ctx.ticketNote && !inCommit) rows.forEach((r) => { if (r.why && /^(docs\/reviews|docs\/reports)\//.test(r.path)) r.why += ` (the ticket's own process files were not accepted: ${ctx.ticketNote})`; });
+  // A branch with nothing but its process files changes no documentation (a ticket whose work is missing or elsewhere).
+  if (!inCommit && !bad.length && own === rows.length) return { verdict: "not-docs-only", reason: `only the ticket's own process files (${own}), no change to documentation`, rows };
+  return { verdict: unclear ? "unclear" : bad.length ? "not-docs-only" : "docs-only", reason: unclear ? `unmerged or unknown change: ${JSON.stringify(unclear.path)}` : bad.length ? `${bad.length} of ${rows.length} paths are not documentation` : `all ${rows.length} paths are documentation${own ? `, ${own} of them the ticket's own process files` : ""}`, rows };
 }
 function parseRaw(out) {
   const parts = out.split("\0"); const entries = [];
   for (let i = 0; i < parts.length - 1; i += 2) {
-    const m = /^:(\d{6}) (\d{6}) [0-9a-f]+ [0-9a-f]+ ([A-Z])\d*$/.exec(parts[i]);
+    const m = /^:(\d{6}) (\d{6}) [0-9a-f]+ ([0-9a-f]+) ([A-Z])\d*$/.exec(parts[i]);
     if (!m) throw new Error(`unreadable diff line: ${parts[i]}`);
-    entries.push({ oldMode: m[1], newMode: m[2], status: m[3], path: parts[i + 1] });
+    entries.push({ oldMode: m[1], newMode: m[2], newSha: m[3], status: m[4], path: parts[i + 1] });
   }
   return entries;
 }
@@ -162,34 +277,40 @@ function docsOnly(argv) {
   const json = argv.includes("--json");
   argv = argv.filter((a) => a !== "--json");
   const report = (r, what, extra = {}) => {
-    if (json) console.log(JSON.stringify({ verdict: r.verdict, reason: r.reason, candidate: what, ...extra, rows: r.rows.map(({ status, path, why }) => ({ status, path, why })) }));
+    if (json) console.log(JSON.stringify({ verdict: r.verdict, reason: r.reason, candidate: what, ...extra, rows: r.rows.map(({ status, path, why, note }) => ({ status, path, why, ...(note ? { note } : {}) })) }));
     else {
       console.log(`[factory] docs-only check: ${what}`);
-      for (const row of r.rows) console.log(`  ${row.status} ${shownPath(row.path)}${row.why ? `  <- ${row.why}` : ""}`);
+      for (const row of r.rows) console.log(`  ${row.status} ${shownPath(row.path)}${row.why ? `  <- ${row.why}` : row.note ? `  (${row.note})` : ""}`);
       console.log(`[factory] docs-only verdict=${r.verdict} paths=${r.rows.length} reason="${r.reason}"`);
     }
     process.exit(EXIT[r.verdict]);
   };
-  const baseAt = argv.indexOf("--base");
-  const baseRef = baseAt >= 0 ? argv[baseAt + 1] : `origin/${MAIN}`;
-  const rest = baseAt < 0 ? argv : argv.filter((a, i) => i !== baseAt && i !== baseAt + 1);
-  if ((baseAt >= 0 && !baseRef) || rest.length > 1 || (rest[0]?.startsWith("-") && rest[0] !== "--staged")) { console.error("usage: factory-guardrails.mjs docs-only [<base>..<head> | --staged] [--base <ref>] [--json]"); process.exit(2); }
+  const usage = () => { console.error("usage: factory-guardrails.mjs docs-only [<base>..<head> [--ticket <id> [--issue <n> --ticket-text <file>]] | --staged] [--base <ref>] [--json]"); process.exit(2); };
+  // Options that take a value: [flag, value] pairs come out of the argument list.
+  const takeOpt = (flag) => { const i = argv.indexOf(flag); if (i < 0) return undefined; const v = argv[i + 1]; argv.splice(i, 2); return v === undefined || argv.includes(flag) ? usage() : v; };
+  const baseOpt = takeOpt("--base"), ticketId = takeOpt("--ticket"), issue = takeOpt("--issue"), textFile = takeOpt("--ticket-text");
+  const baseRef = baseOpt ?? `origin/${MAIN}`;
+  const rest = argv;
+  if (rest.length > 1 || (rest[0]?.startsWith("-") && rest[0] !== "--staged") || ((issue !== undefined || textFile !== undefined) && ticketId === undefined) || (ticketId !== undefined && !(rest[0] && rest[0] !== "--staged"))) usage();
   try {
     if (rest[0] && rest[0] !== "--staged") {
       const m = /^(.+?)\.\.\.?(.+)$/.exec(rest[0]);
       if (!m) throw new Error(`not a range: ${rest[0]}`);
       const head = git("rev-parse", "--verify", `${m[2]}^{commit}`).trim();
       const base = git("merge-base", git("rev-parse", "--verify", `${m[1]}^{commit}`).trim(), head).trim();
-      const ctx = docsContext(configAt(base), base);
+      const left = git("rev-parse", "--verify", `${m[1]}^{commit}`).trim();
+      const ctx = docsContext(configAt(base), base, ticketId === undefined ? undefined : { id: ticketId, issue, textFile, left });
+      if (ctx.expect) { ctx.left = left; ctx.leftName = m[1]; }
       const what = `${rest[0]} (base ${base.slice(0, 12)}, head ${head.slice(0, 12)})`;
-      const r = classify(parseRaw(git("diff", "--raw", "-z", "--no-renames", "--no-abbrev", base, head)), ctx);
+      let r = classify(parseRaw(git("diff", "--raw", "-z", "--no-renames", "--no-abbrev", base, head)), ctx);
+      if (r.verdict === "docs-only" && ctx.undeclared) r = { ...r, verdict: "not-docs-only", reason: `not a declared documentation ticket: ${ctx.undeclared}` };
       if (r.verdict === "docs-only") {
         // Every commit on the way, too: the net diff hides code that was added and removed again.
         for (const sha of git("rev-list", `${base}..${head}`).trim().split("\n").filter(Boolean)) {
           const entries = commitEntries(sha);
           if (entries === null) report({ verdict: "unclear", reason: `commit ${sha.slice(0, 12)}: its own changes cannot be told (octopus or conflicting merge)`, rows: r.rows }, what, { base, head });
           if (!entries.length) continue;
-          const c = classify(entries, ctx);
+          const c = classify(entries, ctx, true);
           if (c.verdict !== "docs-only") { const b = c.rows.find((x) => x.why); report({ verdict: c.verdict, reason: `commit ${sha.slice(0, 12)} on the way changes ${b ? `${shownPath(b.path)} (${b.why})` : "something unclear"}`, rows: [...r.rows, ...c.rows.filter((x) => x.why)] }, what, { base, head }); }
         }
       }
