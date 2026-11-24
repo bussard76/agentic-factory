@@ -90,8 +90,8 @@
       "$kind": "terminal (default): the Front agent is an agent session in a terminal, woken by statuswatch.mjs; orca-bot: an Orca bot on this machine is the Front agent, woken by one Orca automation with a precheck (botwatch.mjs). One bot can serve several projects: name the same bot in each.",
       "bot": "",
       "$bot": "orca-bot only: the bot's name as `orca bot list` shows it. Create the bot in Orca first; start creates its watch automation.",
-      "staleMinutes": 25,
-      "$staleMinutes": "orca-bot only: the bot's watch wakes it once when the Controller's status.md gets older than this.",
+      "staleMinutes": null,
+      "$staleMinutes": "How old the Controller's status.md may get before the Front agent is told (the bot's watch wakes the bot once; the terminal watch alerts once). null: hosts.controller.wake.idleMinutes + 15 minutes (45 by default). An idle Controller is woken only every wake.idleMinutes and refreshes status.md then, so a value below idleMinutes + 15 is raised to that, and doctor and the watch say so: set this at least that high, or null.",
       "preview": {
         "enabled": true,
         "port": 8180,

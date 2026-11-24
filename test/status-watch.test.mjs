@@ -148,10 +148,10 @@ test("a fresh start gives no false alert while the Controller has not written it
 
 test("a lasting problem is announced once, and again after it went away", () => {
   const h = setup({ terminals: (p) => [agentIn(p)] });
-  h.status("nothing", 40); h.run(); h.run();
+  h.status("nothing", 50); h.run(); h.run();
   assert.equal(h.calls("send").length, 1);
   assert.match(JSON.stringify(h.calls("send")), /STALE/);
-  h.status("nothing"); h.run(); h.status("nothing", 40); h.run();
+  h.status("nothing"); h.run(); h.status("nothing", 50); h.run();
   assert.equal(h.calls("send").length, 2);
   h.done();
 });
@@ -263,4 +263,59 @@ test("start schedules the watch and runs it once; status shows whether it runs, 
   config.hosts.frontAgent.statusWatch = false; fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
   assert.doesNotMatch(JSON.parse(cli("status", "--json").stdout).next, /status watch/);
   fs.rmSync(base, { recursive: true, force: true });
+});
+
+// Stale vs idle: an idle Controller is woken every wake.idleMinutes (30) and writes status.md then, so its status is up to
+// 30 minutes plus a few old, and that is healthy. Simulated time: the file's age is set per step, no real minutes pass.
+const config = (h, fn) => { const f = path.join(h.watch, "factory.config.json"), c = JSON.parse(fs.readFileSync(f, "utf8")); fn(c); fs.writeFileSync(f, JSON.stringify(c)); };
+const texts = (h) => h.calls("send").map((a) => a[a.indexOf("--text") + 1]).join("\n");
+
+test("an idle Controller woken every 30 minutes is never stale, over six hours; one whose status stops changing is, after the limit", () => {
+  const h = setup({ terminals: (p) => [agentIn(p)] });
+  h.status("nothing", 0); h.run();
+  for (let t = 5; t <= 360; t += 5) { h.status("nothing", (t % 30) + 4); h.run(); }   // woken at :00 and :30, written a few minutes later
+  assert.doesNotMatch(texts(h), /STALE/);
+  h.status("nothing", 44); h.run();
+  assert.doesNotMatch(texts(h), /STALE/, "within one idle interval plus the margin");
+  h.status("nothing", 46); h.run();
+  assert.match(texts(h), /STALE: status\.md is older than 45 min/);
+  h.done();
+});
+
+test("a missing status and an unreachable host are still reported at once", () => {
+  const h = setup({ terminals: (p) => [agentIn(p)] });
+  h.run();
+  const f = path.join(h.watch, "statuswatch-state.json"), state = JSON.parse(fs.readFileSync(f, "utf8")); state.firstRun = Date.now() - 16 * 60_000; fs.writeFileSync(f, JSON.stringify(state));
+  h.run();
+  assert.match(texts(h), /NO STATUS/);
+  const bin = path.join(h.dir, "bin"); fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, "ssh"), '#!/bin/sh\necho "ssh: connect to host srv: timed out" >&2\nexit 255\n', { mode: 0o755 });
+  config(h, (c) => { c.hosts.workers = [{ name: "srv", kind: "remote", ssh: "srv" }]; c.hosts.controller.host = "srv"; });
+  const r = spawnSync("node", [path.join(h.watch, "statuswatch.mjs")], { encoding: "utf8", env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /UNREACHABLE/);
+  h.done();
+});
+
+test("a staleMinutes below the idle interval is raised, said once, and the larger limit applies; a larger idleMinutes raises the default", () => {
+  const h = setup({ terminals: (p) => [agentIn(p)] });
+  config(h, (c) => { c.hosts.frontAgent = { staleMinutes: 20 }; });
+  h.status("nothing", 30); h.run();
+  assert.match(texts(h), /CONFIG: hosts\.frontAgent\.staleMinutes is 20, below the Controller's idle wake interval 30 min.*limit is 45 min/);
+  assert.doesNotMatch(texts(h), /STALE/, "20 is not the limit");
+  h.run();
+  assert.equal(h.calls("send").length, 1, "said once");
+  h.status("nothing", 50); h.run();
+  assert.match(texts(h), /STALE: status\.md is older than 45 min/);
+  assert.equal((texts(h).match(/CONFIG:/g) ?? []).length, 1);
+  // A value at or above the floor is kept and not mentioned; the default follows idleMinutes.
+  config(h, (c) => { c.hosts.frontAgent = { staleMinutes: 90 }; });
+  h.status("nothing", 80); h.run();
+  assert.equal((texts(h).match(/CONFIG:/g) ?? []).length, 1);
+  config(h, (c) => { c.hosts.frontAgent = {}; c.hosts.controller.wake = { idleMinutes: 60 }; });
+  h.status("nothing", 70); h.run();
+  assert.equal((texts(h).match(/STALE/g) ?? []).length, 1, "70 min is within idleMinutes 60 + 15");
+  h.status("nothing", 80); h.run();
+  assert.match(texts(h), /older than 75 min/);
+  h.done();
 });
