@@ -26,6 +26,9 @@ const MESSAGE = "Heartbeat: run the next cycle of \"The loop\" in CONTROLLER.md 
 // title says goes only into the sidebar comment, on one line.
 const oneLine = (text, n) => String(text ?? "").replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, n);
 const POINTER = "Heartbeat: inbox.md has a new instruction. Read it after your current step.";
+// Typed once when a hang is first reported: a Controller that sits at its prompt (Orca may misread it as busy) runs a cycle and writes
+// status.md, which ends the hang; one that really hangs does not.
+const POINTER_HUNG = "Heartbeat: you have shown no sign of work for a while. Run step 1 of \"The loop\" in CONTROLLER.md after your current step, and write status.md.";
 const POINTER_MAIL = "Heartbeat: something new is waiting (inbox.md, worker mail or a finished wave). Run step 1 of \"The loop\" in CONTROLLER.md after your current step.";
 const title = `${PROJECT} · Controller`;
 
@@ -304,7 +307,10 @@ const hangCheck = () => {
   if (!why) { if (state.since) log(`Controller no longer hung (${state.why})`); }
   else {
     Object.assign(next, { since: state.since ?? now, why: state.why ?? why, acted: state.acted, escalated: state.escalated, restartFailed: state.restartFailed });
-    if (!state.since) { log(hungText(next)); tell.push(["HUNG", () => hungText(next)]); }
+    if (!state.since) {
+      log(hungText(next)); tell.push(["HUNG", () => hungText(next)]);
+      try { orca("terminal", "send", "--terminal", terminal.handle, "--text", POINTER_HUNG, "--enter"); log("typed the pointer for a Controller that may only look busy"); } catch (error) { log(`pointer not typed: ${short(error)}`); }
+    }
     else if (!next.acted && now - next.since >= HUNG.restartAfterMinutes * 60_000) {
       next.acted = true;
       if (next.hangRestarts >= 1) {

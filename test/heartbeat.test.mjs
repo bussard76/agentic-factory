@@ -9,6 +9,8 @@ import path from "node:path";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 
+// No ORCA_* variable of the machine running the tests reaches a script under test (only what a test sets itself does).
+const cleanEnv = (extra = {}) => { const env = { ...process.env, ...extra }; for (const k of Object.keys(env)) if (/^ORCA_/.test(k) && !(k in extra)) delete env[k]; return env; };
 function setup({ state = {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-heartbeat-"));
   const ctl = path.join(dir, "ctl"), project = path.join(dir, "p");
@@ -35,7 +37,7 @@ else if (a[0] === "orchestration" && a[1] === "inbox") out({ messages: s.message
 else out({});`);
   fs.chmodSync(fake, 0o755);
   const beat = () => {
-    const r = spawnSync("node", [path.join(ctl, "heartbeat.mjs")], { encoding: "utf8", env: { ...process.env, ORCA_CLI_COMMAND: fake, FACTORY_CONFIG: path.join(ctl, "factory.config.json") } });
+    const r = spawnSync("node", [path.join(ctl, "heartbeat.mjs")], { encoding: "utf8", env: cleanEnv({ ORCA_CLI_COMMAND: fake, FACTORY_CONFIG: path.join(ctl, "factory.config.json") }) });
     assert.equal(r.status, 0, r.stderr);
     return r.stdout;
   };
@@ -164,7 +166,7 @@ test("hosts.controller.wake.busyPointerMinutes sets how long a busy Controller i
 test("a line the Controller handled (inbox.mjs) does not wake it again; a new line, even while it works, does", () => {
   const h = setup();
   h.beat();
-  const inbox = (args = []) => spawnSync("node", [path.join(h.ctl, "inbox.mjs"), ...args], { encoding: "utf8", env: { ...process.env, FACTORY_CONFIG: path.join(h.ctl, "factory.config.json") } });
+  const inbox = (args = []) => spawnSync("node", [path.join(h.ctl, "inbox.mjs"), ...args], { encoding: "utf8", env: cleanEnv({ FACTORY_CONFIG: path.join(h.ctl, "factory.config.json") }) });
   h.write("inbox.md", "2026-11-05 do this\n");
   assert.match(h.beat(), /woke term_c \(inbox\)/, "no marker: every line is new, as before");
   const read = inbox();

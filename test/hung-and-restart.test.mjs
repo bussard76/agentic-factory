@@ -39,6 +39,7 @@ else if (a[0] === "terminal" && a[1] === "create") {
   s.terminals.push({ handle, title: arg("--title"), worktreePath: arg("--worktree").replace(/^path:/, ""), agentIdentity: "claude", orphaned: false }); save(); out({ terminal: { handle } });
 }
 else if (a[0] === "terminal" && a[1] === "close") { if (s.closeFails) { console.error("orca: cannot close"); process.exit(1); } s.terminals = s.terminals.filter((t) => t.handle !== arg("--terminal")); save(); out({}); }
+else if (a[0] === "terminal" && a[1] === "send") { if (s.answerBySending) { const t = new Date(); fs.utimesSync(s.answerBySending, t, t); } out({}); }
 else if (a[0] === "orchestration" && a[1] === "inbox") out({ messages: s.messages });
 else out({});`, { mode: 0o755 });
   const env = { ...process.env, ORCA_CLI_COMMAND: fake, HOME: home, FACTORY_RESTART_LOCK_WAIT_MS: "300" };
@@ -69,6 +70,25 @@ test("hung: busy, its terminal changing, no sign of work for 25 minutes: the Fro
   assert.match(h.read("front-events.log"), /FRONT-EVENT HUNG: HUNG since/);
   assert.equal(h.of("terminal", "create").length, 0);
   assert.equal(h.read("status.md"), "# Status\n", "the heartbeat never writes status.md: its age is the sign of work");
+  h.done();
+});
+
+test("a Controller that only looks busy (idle at its prompt, long workers to wait for, a screen that changes) answers the pointer typed with the report and is not restarted", () => {
+  const h = setup();
+  h.beat();
+  h.patch({ answerBySending: path.join(h.ctl, "status.md") });   // a Controller at its prompt runs a cycle when the line arrives
+  const out = h.beat();
+  assert.match(out, /HUNG since/);
+  assert.match(out, /typed the pointer for a Controller that may only look busy/);
+  const typed = h.of("terminal", "send");
+  assert.equal(typed.length, 1);
+  assert.equal(typed[0][typed[0].indexOf("--text") + 1], 'Heartbeat: you have shown no sign of work for a while. Run step 1 of "The loop" in CONTROLLER.md after your current step, and write status.md.');
+  assert.match(h.beat(), /Controller no longer hung/);
+  assert.equal(h.read("heartbeat-health.md"), null);
+  h.write("heartbeat.hung.json", JSON.stringify({ hangRestarts: 0 }));
+  for (let i = 0; i < 3; i++) h.beat();
+  assert.equal(h.of("terminal", "create").length, 0, "no restart");
+  assert.equal(h.of("terminal", "send").length, 1, "the pointer is typed once per hang, not every minute");
   h.done();
 });
 

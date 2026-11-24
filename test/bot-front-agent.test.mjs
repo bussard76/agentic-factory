@@ -15,6 +15,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = path.join(ROOT, "bin/agentic-factory.mjs");
 const tmp = (prefix) => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 
+// No ORCA_* variable of the machine running the tests reaches a script under test (only what a test sets itself does).
+const cleanEnv = (extra = {}) => { const env = { ...process.env, ...extra }; for (const k of Object.keys(env)) if (/^ORCA_/.test(k) && !(k in extra)) delete env[k]; return env; };
 // --- the precheck ---------------------------------------------------------------------------------------
 function watchSetup() {
   const dir = tmp("af-botwatch-");
@@ -37,7 +39,7 @@ function watchSetup() {
     fs.writeFileSync(p.status, `# Status\n## Running\n| a |\n## Needs Hu\n${needs}\n${front ? `## Needs front agent\n${front}\n` : ""}## Problems\n${problems}\n## Next\n- more\n`);
     const t = new Date(Date.now() - age * 60_000); fs.utimesSync(p.status, t, t);
   };
-  const run = () => spawnSync("node", [path.join(watch, "botwatch.mjs")], { encoding: "utf8", env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` } });
+  const run = () => spawnSync("node", [path.join(watch, "botwatch.mjs")], { encoding: "utf8", env: { ...cleanEnv(), PATH: `${bin}${path.delimiter}${process.env.PATH}` } });
   const wake = () => fs.readFileSync(path.join(watch, "wake.md"), "utf8");
   return { dir, watch, alpha, beta, write, run, wake, down: (on) => (on ? fs.writeFileSync(down, "") : fs.rmSync(down, { force: true })), done: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }

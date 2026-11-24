@@ -7,8 +7,8 @@
 //     is the sign that the Controller works.
 //  2. A FRONT-EVENT line in front-events.log, the record a Front agent on the server or a bot follows.
 //  3. At once, where the Front agent is on this machine: the bot gets `orca orchestration send --to bot:<name>`, a terminal
-//     Front agent gets a run of its own statuswatch.mjs (it delivers into an idle terminal, else the sidebar shows it).
-//     A Front agent on another machine cannot be reached from here, and waits for its next watch (1).
+//     Front agent gets a run of its own statuswatch.mjs (it delivers into an idle terminal, else the sidebar shows it), unless
+//     hosts.frontAgent.statusWatch is false. A Front agent on another machine cannot be reached from here and waits for its next watch (1).
 // Usage: none; a module, imported by the scripts
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -48,7 +48,7 @@ export function tellFront(kind, text, { type = "status", from, push = true } = {
     if (front.kind === "orca-bot" && front.bot) {
       execFileSync(ORCA, ["orchestration", "send", "--to", `bot:${front.bot}`, "--type", type, "--subject", kind, "--body", `${kind}: ${line}`, ...(from ? ["--from", from] : []), "--json"], { encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
       done.push(`bot ${front.bot}`);
-    } else if (!front.kind || front.kind === "terminal") {
+    } else if ((!front.kind || front.kind === "terminal") && front.statusWatch !== false) {
       const watch = path.join(os.homedir(), "front-agent", PROJECT, "statuswatch.mjs");
       if (fs.existsSync(watch)) { execFileSync("node", [watch], { encoding: "utf8", timeout: 90_000, stdio: ["ignore", "pipe", "pipe"] }); done.push("statuswatch"); }
     }

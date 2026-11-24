@@ -46,7 +46,7 @@ function saveHandover({ stamp, kind, reason, oldHandle }) {
     "## What to read, in this order",
     "1. `handover.md`: what was in flight and queued (the previous Controller rewrites it before a restart it starts itself; after a hang nobody did).",
     `2. \`status.md\` as it was, and the last journal lines: copies are in \`restart/${stamp}/\` (\`status.md\`, \`journal-tail.ndjson\`, \`inbox.md\`, \`workers.json\`).`,
-    "3. The worker mail: `orca orchestration inbox --limit 200 --json`. A worker that finished while no Controller ran has a `worker_done` there. Workers the previous session started may report to its mailbox: take every message whose `from` is a terminal or dispatch in `workers.json`, as an event of this cycle.", "",
+    "3. The worker mail: `orca orchestration inbox --limit 200 --json` (without `--terminal` it lists messages across recipients, so mail addressed to the previous session is in it; `--terminal " + (oldHandle ?? "<old handle>") + "` reads just that session's). A worker that finished while no Controller ran has a `worker_done` there: take every message whose `from` is a terminal or dispatch in `workers.json` as an event of this cycle.", "",
     "## Workers recorded when the previous session ended", ...(workers.length ? workers : ["- none"]), "",
     "## Then",
     "- Check each worker above with `orca orchestration worker-show --dispatch <id>`; do not start a duplicate of a task that is running.",
