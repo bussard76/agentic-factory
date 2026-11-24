@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { scaled } from "./support/wait.mjs";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 
@@ -19,7 +20,8 @@ function controllerDir(config) {
 }
 
 // The fake Orca answers each `orchestration check` with the next batch from batches.json and logs its arguments.
-function waitWith(batches, hours = "0.002") {
+// `hours` is the window wait.mjs is given; the default is long because the call returns on the first real message, so a quick run does not wait for it.
+function waitWith(batches, hours = "0.05") {
   const dir = controllerDir();
   const fake = path.join(dir, "fake-orca.mjs"), calls = path.join(dir, "calls.log"), state = path.join(dir, "batches.json");
   fs.writeFileSync(state, JSON.stringify(batches));
@@ -34,7 +36,7 @@ if (next && next.fail) { process.stderr.write(next.fail); process.exit(1); }
 console.log(typeof next === "string" ? next : JSON.stringify(next));
 `);
   fs.chmodSync(fake, 0o755);
-  const r = spawnSync("node", ["wait.mjs", "--hours", hours], { cwd: dir, encoding: "utf8", timeout: 20_000, env: { ...process.env, ORCA_CLI_COMMAND: fake, FACTORY_CONFIG: "" } });
+  const r = spawnSync("node", ["wait.mjs", "--hours", hours], { cwd: dir, encoding: "utf8", timeout: scaled(120_000), env: { ...process.env, ORCA_CLI_COMMAND: fake, FACTORY_CONFIG: "" } });
   const log = fs.readFileSync(calls, "utf8").trim().split("\n").map((l) => JSON.parse(l));
   fs.rmSync(dir, { recursive: true, force: true });
   return { ...r, calls: log };
@@ -87,7 +89,7 @@ test("wait.mjs pauses on ok:false or a result without a message list instead of 
     assert.match(r.stdout, /orca check returned no message list, retrying in 30 s: \{/);
     assert.match(r.stdout, /no event after 0\.0005h/);
     assert.equal(r.calls.length, 1, "one call, then a pause that ends with the window");
-    assert.ok(Date.now() - t0 < 10_000, "the pause never outlasts the window");
+    assert.ok(Date.now() - t0 < scaled(25_000), "the pause never outlasts the window");   // a pause that ignored the window would last 30 s on top of the start-up
   }
 });
 

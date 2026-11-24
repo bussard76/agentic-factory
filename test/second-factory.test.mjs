@@ -7,6 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { scaled, waitUntil, stallwatchPass } from "./support/wait.mjs";
 import { applyReadGrants } from "../bin/read-grants.mjs";
 import { copyTreeAtomic, withLock, writeFileAtomic } from "../bin/safe-write.mjs";
 import { addTomlAllowPaths, scanAllowPaths } from "../bin/read-grants.mjs";
@@ -54,7 +55,7 @@ test("a config in the worktree being judged cannot choose the gate: not exit 0, 
   for (const dir of [evil, path.join(home, ".local/bin")]) {
     fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, "gate.mjs"), "process.exit(0);\n");
     fs.writeFileSync(path.join(a.repo, "factory.config.json"), JSON.stringify({ project: { name: "alpha" }, hosts: { controller: { controllerDir: dir } } }));
-    const r = spawnSync(a.gate, ["false"], { cwd: a.repo, encoding: "utf8", env: { ...process.env, HOME: home }, timeout: 20000 });
+    const r = spawnSync(a.gate, ["false"], { cwd: a.repo, encoding: "utf8", env: { ...process.env, HOME: home }, timeout: scaled(60_000) });
     assert.equal(r.status, 1, `controllerDir ${dir}: the gate ran \`false\` and failed`);
   }
   fs.rmSync(home, { recursive: true, force: true });
@@ -62,15 +63,17 @@ test("a config in the worktree being judged cannot choose the gate: not exit 0, 
 
 test("a gate call that sits in the gate shim while it is replaced in place never ends with 0 without running", async () => {
   const home = tmp("gate-race"), a = controllerDir(home, "alpha", `process.exit(7);\n`);
-  // A dirname that is slow: the shim runs it inside its body, so the call certainly sits in the shim while the file is replaced.
+  // A dirname that waits for the test: the shim runs it inside its body, so the call certainly sits in the shim while the file is replaced,
+  // however long the machine takes (it is let go once the file has been replaced, or after a minute at the latest).
   const fake = path.join(home, "fakebin"); fs.mkdirSync(fake);
-  fs.writeFileSync(path.join(fake, "dirname"), `#!/bin/sh\n: > ${JSON.stringify(path.join(home, "entered"))}\nsleep 1.5\nexec /usr/bin/dirname "$@"\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(fake, "dirname"), `#!/bin/sh\n: > ${JSON.stringify(path.join(home, "entered"))}\ni=0; while [ ! -e ${JSON.stringify(path.join(home, "release"))} ] && [ $i -lt 1200 ]; do i=$((i+1)); sleep 0.05; done\nexec /usr/bin/dirname "$@"\n`, { mode: 0o755 });
   const child = spawn(a.gate, ["anything"], { cwd: a.repo, env: { ...process.env, HOME: home, PATH: `${fake}:${process.env.PATH}` }, stdio: ["ignore", "ignore", "inherit"] });
   const done = new Promise((r) => child.on("exit", (code) => r(code)));
-  for (let i = 0; i < 200 && !fs.existsSync(path.join(home, "entered")); i++) await new Promise((r) => setTimeout(r, 50));
+  try { await waitUntil(() => fs.existsSync(path.join(home, "entered")), { timeout: 30_000, what: "the gate shim to call dirname" }); } catch (e) { fs.writeFileSync(path.join(home, "release"), ""); child.kill(); throw e; }
   // what start does to the Controller directory on every run: copy the bundle's file over the old one, in place
   const before = fs.statSync(a.gate).ino; fs.writeFileSync(a.gate, "#!/usr/bin/env bash\nexit 0\n");
   assert.equal(fs.statSync(a.gate).ino, before, "the same inode, other content");
+  fs.writeFileSync(path.join(home, "release"), "");
   assert.equal(await done, 7, "the project's gate ran and its status came back");
   fs.rmSync(home, { recursive: true, force: true });
 });
@@ -149,34 +152,35 @@ test("writeFileAtomic does not touch a file that already has the content and mod
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("stallwatch: a worker in workers.json is watched wherever its worktree is, others are ignored with a notice, and with none of its own there is nothing to watch", () => {
+test("stallwatch: a worker in workers.json is watched wherever its worktree is, others are ignored with a notice, and with none of its own there is nothing to watch", async () => {
   // Nothing here depends on where the repository is checked out: the child gets a home and a working directory of its own, and the
   // "default layout" paths below are built from that home.
   const home = tmp("stall-home");
-  const run = (workersJson, terminals) => {
+  const run = async (workersJson, terminals, owned) => {   // owned: how many terminals the pass must read
     const dir = tmp("stall-layout");
     for (const f of ["stallwatch.mjs", "cli.mjs", "lib.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
     fs.writeFileSync(path.join(dir, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local" }] } }));
     if (workersJson) fs.writeFileSync(path.join(dir, "workers.json"), JSON.stringify(workersJson));
-    const log = path.join(dir, "reads.log"), fake = path.join(dir, "fake-orca.mjs");
-    fs.writeFileSync(fake, `#!/usr/bin/env node\nimport fs from "node:fs";\nconst a = process.argv.slice(2);\nif (a[1] === "read") fs.appendFileSync(${JSON.stringify(log)}, a[a.indexOf("--terminal") + 1] + "\\n");\nconsole.log(JSON.stringify({ ok: true, result: { terminals: ${JSON.stringify(terminals)}, terminal: { tail: [] } } }));\n`, { mode: 0o755 });
-    const r = spawnSync("node", [path.join(dir, "stallwatch.mjs")], { encoding: "utf8", timeout: 6000, cwd: dir, env: { ...process.env, HOME: home, FACTORY_CONFIG: path.join(dir, "factory.config.json"), ORCA_CLI_COMMAND: fake } });
+    const log = path.join(dir, "reads.log"), pass = path.join(dir, "pass.log"), fake = path.join(dir, "fake-orca.mjs");
+    fs.writeFileSync(fake, `#!/usr/bin/env node\nimport fs from "node:fs";\nconst a = process.argv.slice(2);\nif (a[1] === "read") fs.appendFileSync(${JSON.stringify(log)}, a[a.indexOf("--terminal") + 1] + "\\n");\nif (a[1] === "list") process.on("exit", () => fs.appendFileSync(${JSON.stringify(pass)}, "list\\n"));\nconsole.log(JSON.stringify({ ok: true, result: { terminals: ${JSON.stringify(terminals)}, terminal: { tail: [] } } }));\n`, { mode: 0o755 });
+    // It runs until killed and sleeps after its first pass: wait for the pass (the list, the reads of the terminals it owns) instead of for a clock.
+    const r = await stallwatchPass(dir, { passLog: pass, ready: () => !owned || (fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").length : 0) >= owned, env: { ...process.env, HOME: home, FACTORY_CONFIG: path.join(dir, "factory.config.json"), ORCA_CLI_COMMAND: fake } });
     const reads = fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n") : [];
     fs.rmSync(dir, { recursive: true, force: true });
-    return { reads, out: r.stdout ?? "" };
+    return { reads, out: r.out };
   };
   const t = (handle, wt) => ({ handle, title: "T1 · Worker Developer", worktreePath: wt });
   // own worker outside the configured workspace directory (a changed layout), known by its handle
-  let r = run({ t1: { name: "T1 · Worker Developer", host: "local", terminal: "mine" } }, [t("mine", "/elsewhere/p/t1"), t("theirs", "/elsewhere/q/t1")]);
+  let r = await run({ t1: { name: "T1 · Worker Developer", host: "local", terminal: "mine" } }, [t("mine", "/elsewhere/p/t1"), t("theirs", "/elsewhere/q/t1")], 1);
   assert.deepEqual(r.reads, ["mine"]); assert.match(r.out, /1 worker terminal\(s\) on local ignored: not this project's/);
   // this project has no worker running, other projects do: nothing is read, nothing is reported, nothing reaches the journal
-  r = run(null, [t("a", "/elsewhere/p/t1"), t("b", "/elsewhere/q/t1")]);
+  r = await run(null, [t("a", "/elsewhere/p/t1"), t("b", "/elsewhere/q/t1")], 0);
   assert.deepEqual(r.reads, []); assert.doesNotMatch(r.out, /IDLE|GONE|CAPACITY/);
   // a stale workers.json entry (its terminal is gone) does not make the others this project's
-  r = run({ t1: { name: "T1 · Worker Developer", host: "local", terminal: "gone" } }, [t("a", "/elsewhere/q/t1")]);
+  r = await run({ t1: { name: "T1 · Worker Developer", host: "local", terminal: "gone" } }, [t("a", "/elsewhere/q/t1")], 0);
   assert.deepEqual(r.reads, []);
   // the default layout: this project's workspace directory by path
-  r = run(null, [t("own", path.join(home, "orca/workspaces/p/t1")), t("foreign", path.join(home, "orca/workspaces/other/t1"))]);
+  r = await run(null, [t("own", path.join(home, "orca/workspaces/p/t1")), t("foreign", path.join(home, "orca/workspaces/other/t1"))], 1);
   assert.deepEqual(r.reads, ["own"]);
   fs.rmSync(home, { recursive: true, force: true });
 });

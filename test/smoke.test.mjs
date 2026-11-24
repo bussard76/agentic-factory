@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { fakeController } from "./fake-controller.mjs";
+import { scaled, stallwatchPass } from "./support/wait.mjs";
 import { createHash } from "node:crypto";
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const createHashHex = (s) => createHash("sha256").update(s).digest("hex").slice(0, 6);   // mirrors the CLI's bare-remote key
@@ -102,7 +103,7 @@ test("agent entry questions, answers, status and start in an isolated home", asy
   fs.mkdirSync(project); fs.mkdirSync(entryHome); fs.mkdirSync(bin);
   for (const name of ["orca", "claude"]) { fs.writeFileSync(path.join(bin, name), "#!/bin/sh\nexit 0\n", { mode: 0o755 }); }
   const env = { ...process.env, HOME: entryHome, PATH: `${bin}${path.delimiter}${process.env.PATH}`, FACTORY_SKIP_ORCA: "1" };
-  const run = (...args) => spawnSync("node", [CLI, ...args], { cwd: project, env, encoding: "utf8", timeout: 30000 });
+  const run = (...args) => spawnSync("node", [CLI, ...args], { cwd: project, env, encoding: "utf8", timeout: scaled(120_000) });
   const gitEntry = (...args) => { const r = spawnSync("git", args, { cwd: project, env, encoding: "utf8" }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
   try {
     gitEntry("init", "-q", "-b", "main"); gitEntry("config", "user.name", "Test"); gitEntry("config", "user.email", "test@example.com");
@@ -111,7 +112,7 @@ test("agent entry questions, answers, status and start in an isolated home", asy
     const status = await new Promise((resolve, reject) => {
       const child = spawn("node", [CLI, "status", "--json"], { cwd: project, env });
       let out = "", err = ""; child.stdout.on("data", (b) => { out += b; }); child.stderr.on("data", (b) => { err += b; });
-      const timer = setTimeout(() => { child.kill(); reject(new Error("status waited for stdin")); }, 5000);
+      const timer = setTimeout(() => { child.kill(); reject(new Error("status waited for stdin")); }, scaled(30_000));
       child.on("error", reject); child.on("close", (code) => { clearTimeout(timer); resolve({ code, out, err }); });
     });
     assert.equal(status.code, 0, status.err); assert.equal(JSON.parse(status.out).phase, "onboarding");
@@ -647,7 +648,7 @@ test("a worker's setup or shell terminal does not keep its worktree from cleanup
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("stallwatch watches a worker's own terminal, not its setup or shell terminal", () => {
+test("stallwatch watches a worker's own terminal, not its setup or shell terminal", async () => {
   const dir = tempDir("af-stall-");
   for (const f of ["stallwatch.mjs", "cli.mjs", "lib.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
   fs.writeFileSync(path.join(dir, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local" }] } }));
@@ -661,10 +662,11 @@ test("stallwatch watches a worker's own terminal, not its setup or shell termina
 import fs from "node:fs";
 const a = process.argv.slice(2);
 if (a[1] === "read") fs.appendFileSync(${JSON.stringify(log)}, a[a.indexOf("--terminal") + 1] + "\\n");
+if (a[1] === "list") process.on("exit", () => fs.appendFileSync(${JSON.stringify(log + ".pass")}, "list\\n"));
 console.log(JSON.stringify({ ok: true, result: { terminals: ${JSON.stringify(terminals)}, terminal: { tail: [] } } }));`);
   fs.chmodSync(fake, 0o755);
-  // It runs until killed and sleeps after its first pass.
-  spawnSync("node", [path.join(dir, "stallwatch.mjs")], { encoding: "utf8", timeout: 4000, env: { ...process.env, FACTORY_CONFIG: path.join(dir, "factory.config.json"), ORCA_CLI_COMMAND: fake } });
+  // It runs until killed and sleeps after its first pass: wait for the pass (the list, then the read of the one terminal that is the worker's), not for a clock.
+  await stallwatchPass(dir, { passLog: log + ".pass", ready: () => fs.existsSync(log), env: { ...process.env, FACTORY_CONFIG: path.join(dir, "factory.config.json"), ORCA_CLI_COMMAND: fake } });
   assert.deepEqual(fs.readFileSync(log, "utf8").trim().split("\n"), ["worker"]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
