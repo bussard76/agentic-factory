@@ -97,7 +97,7 @@ export const HUNG = {
   restart: ctl.hung?.restart === true, restartInvalid: ctl.hung?.restart !== undefined && typeof ctl.hung.restart !== "boolean",
   patterns: patternList(ctl.hung?.patterns, []), patternMinutes: positive(ctl.hung?.patternMinutes, 10), resetAfterDays: positive(ctl.hung?.resetAfterDays, 7),
 };
-export const RESTART = { minGapMinutes: positive(ctl.restart?.minGapMinutes, 30), contextGapMinutes: positive(ctl.restart?.contextGapMinutes, 120), afterGateMinutes: positive(ctl.restart?.afterGateMinutes, 15), contextPercent: positive(ctl.restart?.contextPercent, 50) };
+export const RESTART = { minGapMinutes: positive(ctl.restart?.minGapMinutes, 30), contextGapMinutes: positive(ctl.restart?.contextGapMinutes, 120), afterGateMinutes: positive(ctl.restart?.afterGateMinutes, 15), contextPercent: positive(ctl.restart?.contextPercent, 50), withoutKeepOpen: ctl.restart?.withoutKeepOpen !== false };
 
 // --- orca --------------------------------------------------------------------------------------
 export function hasBin(name) { return spawnSync("sh", ["-c", `command -v ${name}`], { stdio: "ignore" }).status === 0; }

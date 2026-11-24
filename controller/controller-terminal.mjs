@@ -10,6 +10,7 @@
 //  An unnamed agent session in the project's checkout (a person's own, the Front agent's) is never the Controller, however
 //  alone it is. The checks: live (not orphaned), an agent session, running in this Controller's directory or the project's
 //  worktree (Orca lists a Controller's worktreePath as the project), and not named for another role.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -77,3 +78,17 @@ export const controllerSession = ({ dir, project, agent, args }) => `cd ${dir} &
 export const createArgs = ({ where, title, session, keepOpen = false }) => ["terminal", "create", ...where, "--title", title, "--command", session, ...(keepOpen ? ["--keep-open"] : []), "--json"];
 /** The handle in Orca's answer to `terminal create`, or undefined. */
 export const createdHandle = (stdout) => { try { const j = JSON.parse(stdout).result; return j?.terminal?.handle ?? j?.handle; } catch { return undefined; } };
+
+// Which options the installed Orca's `terminal create` has. --keep-open is not on every Orca: 1.4.266 refuses it ("Unknown flag
+// --keep-open for command: terminal create"), 1.4.272 has it; the versions between were not tried. `--help` is read-only and creates
+// nothing, so it is asked first, and the option is passed only when the help names it. keepOpen: true, false, or null when the help
+// could not be read (then nothing is assumed).
+export const KEEP_OPEN_FROM = "1.4.272";
+export const parseCreateHelp = (text) => (String(text ?? "").includes("terminal create") ? /--keep-open\b/.test(text) : null);
+export function orcaCreateSupport(orca) {
+  const help = spawnSync(orca, ["terminal", "create", "--help"], { encoding: "utf8", timeout: 20_000 });
+  const ver = spawnSync(orca, ["--version"], { encoding: "utf8", timeout: 20_000 });
+  return { keepOpen: help.status === 0 ? parseCreateHelp(help.stdout) : null, version: (String(ver.stdout ?? "").match(/\d+(?:\.\d+)+/) ?? [])[0] };
+}
+/** The refusal of the option by an Orca that does not know it. */
+export const refusedKeepOpen = (text) => /unknown (flag|option)[^\n]*--keep-open/i.test(String(text ?? ""));

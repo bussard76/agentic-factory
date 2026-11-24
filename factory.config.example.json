@@ -51,7 +51,8 @@
         "minGapMinutes": 30,
         "contextGapMinutes": 120,
         "afterGateMinutes": 15,
-        "contextPercent": 50
+        "contextPercent": 50,
+        "withoutKeepOpen": true
       },
       "$restart": "contextPercent: the Controller starts itself fresh (restart.mjs) after a wave or when idle once its context use is above this share. contextGapMinutes / minGapMinutes: restart.mjs refuses a restart sooner than this after the last (asked by the Controller / any other). afterGateMinutes: no restart this soon after a gate, wave or push."
     },

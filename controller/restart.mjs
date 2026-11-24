@@ -7,15 +7,17 @@
 // restart the Controller asks for, within restart.contextGapMinutes of the last one. Run by the Controller it needs its own terminal
 // handle (ORCA_TERMINAL_HANDLE) and must be that terminal. --force is for a person: it skips the gap, the gate guard and the handle
 // check, never the wave guard. Exit 0 restarted, 1 failed (the old Controller was left alone, or is named in the message), 3 refused.
+// The new terminal is made with --keep-open where the installed Orca has it (read from `terminal create --help`) and without where
+// it has not (1.4.266); the old terminal is closed only after the new one is confirmed in Orca's list.
 // Usage: node restart.mjs --reason "<why>" [--dry] [--force]
 import "./cli.mjs";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { controllerPlaces, controllerSession, createArgs, createdHandle, locateController } from "./controller-terminal.mjs";
+import { KEEP_OPEN_FROM, controllerPlaces, controllerSession, createArgs, createdHandle, locateController, orcaCreateSupport, refusedKeepOpen } from "./controller-terminal.mjs";
 import { CONTROLLER_HOME, MAIN, ORCA, PROJECT, PROJECT_DIR, RESTART, config, file, journalQuiet, orcaCall, writeJson, writeText } from "./lib.mjs";
-import { oneLine, tellFront } from "./front-notice.mjs";
+import { clearAlert, oneLine, raiseAlert, tellFront } from "./front-notice.mjs";
 
 const LOCK = file("heartbeat.lock.d");
 const LOCK_STALE_MS = 5 * 60_000;
@@ -33,6 +35,36 @@ function takeLock(waitMs = Number(process.env.FACTORY_RESTART_LOCK_WAIT_MS) || 4
     try { fs.mkdirSync(LOCK); return () => { try { fs.rmdirSync(LOCK); } catch { /* gone */ } }; } catch { /* held */ }
     if (Date.now() > until) return null;
   }
+}
+
+// A new terminal counts as live when Orca lists it, not orphaned; the list is polled because it can lag a moment behind a create.
+const LIST_WAIT_MS = Number(process.env.FACTORY_RESTART_LIST_WAIT_MS) || 10_000;   // the variable is for tests
+const terminalsNow = () => orcaCall(["terminal", "list"])?.result?.terminals;
+function waitListed(handle) {
+  for (const until = Date.now() + LIST_WAIT_MS; ; sleep(500)) {
+    if (terminalsNow()?.some((t) => t.handle === handle && !t.orphaned)) return true;
+    if (Date.now() > until) return false;
+  }
+}
+// Closes a terminal this restart made and could not confirm, ONLY by a handle: the one Orca's answer to this run's own create named,
+// or one restart.pending.json recorded from such an answer (needListed: and it is still listed). Never by title, and never a
+// terminal that is the old or recorded Controller or the caller's own session (`protect`). Nothing is believed that cannot be
+// shown: the close has to answer ok and the listing must not show the handle afterwards, else the result is "unconfirmed" (a hidden
+// background terminal is not in the list, so only Orca's own "ok" counts for it).
+// Returns { ok, closed, unconfirmed, skipped }: ok means closed and shown; anything else needs a person.
+function discardStray({ handle, protect = [], needListed = false }) {
+  const out = { ok: false, closed: [], unconfirmed: [], skipped: "" };
+  if (typeof handle !== "string" || !handle) return { ...out, skipped: "no handle is known" };
+  if (protect.includes(handle)) return { ...out, skipped: `${handle} is the Controller or the session that runs this` };
+  const now = terminalsNow();
+  const listedBefore = Array.isArray(now) && now.some((t) => t.handle === handle && !t.orphaned);
+  if (needListed && !listedBefore) return { ...out, skipped: `${handle} is not listed` };
+  const r = spawnSync(ORCA, ["terminal", "close", "--terminal", handle, "--json"], { encoding: "utf8", timeout: 30_000 });
+  const answered = r.status === 0 && /"ok":\s*true/.test(r.stdout ?? "");
+  const after = terminalsNow();
+  const stillThere = !Array.isArray(after) || after.some((t) => t.handle === handle && !t.orphaned);
+  if (answered && !stillThere) return { ...out, ok: true, closed: [handle] };
+  return { ...out, unconfirmed: [handle] };
 }
 
 // A wave runs in its own terminal (wave-handle.txt: "<host> <handle>") and says WAVE-END when it is over: the same reading as the
@@ -119,21 +151,77 @@ export function restartController({ reason, kind = "context", lockHeld = false, 
     const agent = config.agents?.default;
     if (!agent) return fail(1, "agents.default is not set in factory.config.json; nothing was changed");
     // --keep-open: a terminal made from a session Orca counts as a worker closes with it, and the old terminal is closed right after.
+    // Not every Orca has the option (orcaCreateSupport reads `terminal create --help`, which changes nothing). On 1.4.266 it does
+    // not exist; one observation there: a terminal made without it outlived the worker session that made it. So the terminal is made
+    // without the option, from the Controller's own session too, unless hosts.controller.restart.withoutKeepOpen is false. That the
+    // new terminal survives rests on the Orca version, not on an option: the heartbeat reports a restart that ends with no Controller.
+    // Help that cannot be read: nothing is assumed, nothing is done.
+    const support = orcaCreateSupport(ORCA);
+    const installed = `the installed Orca${support.version ? ` ${support.version}` : ""}`;
+    if (support.keepOpen === null) return fail(1, `${installed} did not say what \`orca terminal create\` accepts, so a restart is not safe; nothing was changed`);
+    const keepOpen = support.keepOpen;
+    if (!keepOpen && process.env.ORCA_TERMINAL_HANDLE && !RESTART.withoutKeepOpen)
+      return fail(3, `refused: ${installed} has no \`terminal create --keep-open\` (it has from ${KEEP_OPEN_FROM}) and hosts.controller.restart.withoutKeepOpen is false, so a restart from the Controller's own session is not made. The running Controller was left alone; carry on with this context and note it in status.md under "Problems"`);
+    const how = keepOpen ? "with --keep-open" : `without --keep-open (${installed} has no such option, from ${KEEP_OPEN_FROM} on it has; that the new terminal survives the end of this session rests on this Orca version's behaviour, observed once on 1.4.266, not on an option)`;
+    // A terminal an earlier restart made and could not confirm or close again is removed before another is made.
+    // Only by a handle an earlier create of ours returned, never by title; with no such handle a person decides.
+    const pending = readJson("restart.pending.json", null);
+    if (pending && !dry) {
+      const protect = [old.handle, recorded, process.env.ORCA_TERMINAL_HANDLE].filter(Boolean);
+      const ph = typeof pending.handle === "string" ? pending.handle : "";
+      if (!ph) return fail(1, `an earlier restart may have left a second Controller: Orca named no handle for the terminal it made, so nothing is closed by guessing. Look in Orca for a second \`${title}\` terminal and close it if it is one, then delete ${file("restart.pending.json")}; nothing was changed`);
+      // Not listed is no proof that it is gone (a hidden background terminal is not listed): the record stays, and so does the alert,
+      // until Orca answers ok to the close of that handle and the list does not show it, or a person removes the file.
+      if (protect.includes(ph)) { fs.rmSync(file("restart.pending.json"), { force: true }); clearAlert("RESTART-LEFTOVER"); }   // it became the Controller: nothing is closed
+      else {
+        const cleaned = discardStray({ handle: ph, protect });
+        if (!cleaned.ok) return fail(1, `a terminal that an earlier restart made (${ph}) is not confirmed closed (${cleaned.unconfirmed.length ? "the close is unconfirmed: Orca did not answer ok, or the list still shows it" : cleaned.skipped}); no third one is made. Look in Orca for it and close it by hand, then delete ${file("restart.pending.json")}; nothing was changed`);
+        fs.rmSync(file("restart.pending.json"), { force: true });
+        clearAlert("RESTART-LEFTOVER");
+      }
+    }
     const session = controllerSession({ dir: CONTROLLER_HOME, project: PROJECT, agent, args: config.agents?.controllerArgs });
-    const create = createArgs({ where: ["--worktree", `path:${worktree}`], title, session, keepOpen: true });
-    if (dry) return { ok: true, code: 0, message: `dry run: would save the handover, run \`orca ${create.join(" ")}\`, record the new handle and close ${old.handle}` };
+    const create = createArgs({ where: ["--worktree", `path:${worktree}`], title, session, keepOpen });
+    if (dry) return { ok: true, code: 0, message: `dry run: would save the handover, run \`orca ${create.join(" ")}\` (${how}), record the new handle and close ${old.handle}` };
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     saveHandover({ stamp, kind, reason, oldHandle: old.handle });
     const created = spawnSync(ORCA, create, { encoding: "utf8", timeout: 60_000 });
     if (created.status !== 0 || !/"ok":\s*true/.test(created.stdout ?? "")) {
       fs.rmSync(file("restart.md"), { force: true });   // the old Controller lives on: a stale file would mislead a later fresh start
       journalQuiet("restart", "controller", { kind, reason, from: old.handle, failed: oneLine(created.stderr || created.stdout, 160) });
+      if (keepOpen && refusedKeepOpen(`${created.stderr}${created.stdout}`)) return fail(1, `${installed} refused --keep-open although its help names it; nothing was created and the old Controller is still there`);
       return fail(1, `Orca could not create the new terminal (${oneLine(created.stderr || created.stdout, 160)}); the old Controller is still there`);
     }
     const handle = createdHandle(created.stdout);
+    // The old terminal is closed only once the new one is confirmed: Orca named its handle and LISTS it as live (polled for a few
+    // seconds: a list can lag). An Orca that could not put the terminal on screen (1.4.266: surface "background", "could not make it
+    // discoverable") lists it only after `terminal focus`, and a focus that exits 0 proves nothing until the listing shows it.
+    // Unconfirmed: the terminal this run made is closed again (never two Controllers), the old one stays recorded, exit 1.
+    writeJson("restart.pending.json", { handle: handle ?? null, before: listed.map((t) => t.handle), title, at: Date.now() });
+    let live = false;
+    if (handle) {
+      if (/"surface":\s*"background"|terminal focus/.test(created.stdout)) {
+        const f = spawnSync(ORCA, ["terminal", "focus", "--terminal", handle, "--json"], { encoding: "utf8", timeout: 30_000 });
+        live = f.status === 0 && /"ok":\s*true/.test(f.stdout ?? "") && waitListed(handle);
+      } else live = waitListed(handle);
+    }
+    if (!live) {
+      const gone = discardStray({ handle, protect: [old.handle, recorded, process.env.ORCA_TERMINAL_HANDLE].filter(Boolean) });
+      journalQuiet("restart", "controller", { kind, reason: oneLine(reason, 200), from: old.handle, to: handle ?? null, unconfirmed: true, discarded: gone.closed });
+      fs.rmSync(file("restart.md"), { force: true });
+      const what = handle ? `Orca created ${handle} but did not list it as live` : "Orca's answer carried no handle";
+      if (gone.ok) { fs.rmSync(file("restart.pending.json"), { force: true }); clearAlert("RESTART-LEFTOVER"); }
+      if (gone.ok) return fail(1, `${what}; the new terminal (${gone.closed.join(", ")}) was closed again (Orca answered ok and the list does not show it) and the old Controller ${old.handle} stays the recorded, running one. Nothing else changed; try again later`);
+      const known = gone.unconfirmed.length ? `closing ${gone.unconfirmed.join(", ")} was tried and is UNCONFIRMED (Orca did not answer ok, or the list still shows it)` : `nothing was closed: ${gone.skipped}`;
+      const alert = `POSSIBLE SECOND CONTROLLER: a restart created a terminal for the Controller that could not be confirmed${handle ? ` (${handle})` : ""} (${what}); ${known}. The old Controller ${old.handle} is still the recorded one. Look in Orca for a second \`${title}\` terminal and close it if it is one; the next restart makes none until this is settled`;
+      raiseAlert("RESTART-LEFTOVER", alert, { kind: "TWO-CONTROLLERS" });
+      return fail(1, alert);
+    }
+    fs.rmSync(file("restart.pending.json"), { force: true });
+    clearAlert("RESTART-LEFTOVER");
     // The record is the Controller's identity (controller-terminal.mjs): the new handle from the create receipt, with its worktree.
     if (handle) writeText("controller-terminal.txt", `${handle}\n${worktree}\n`); else fs.rmSync(file("controller-terminal.txt"), { force: true });
-    const state = { at: Date.now(), kind, reason: oneLine(reason, 200), from: old.handle, to: handle ?? null };
+    const state = { at: Date.now(), kind, reason: oneLine(reason, 200), from: old.handle, to: handle };
     writeJson("heartbeat.restarted.json", state);
     for (const name of ["heartbeat.busy.json", "heartbeat.pointer"]) fs.rmSync(file(name), { force: true });
     unlock();   // before the close: when the Controller runs this itself, closing its terminal ends this process
@@ -145,13 +233,13 @@ export function restartController({ reason, kind = "context", lockHeld = false, 
       ? `the Controller was restarted fresh (${kind}: ${oneLine(reason, 200)}); new terminal ${handle ?? "unknown"}, but the old terminal ${old.handle} could NOT be closed: two Controllers may be running, close ${old.handle} by hand`
       : `the Controller was restarted fresh (${kind}: ${oneLine(reason, 200)}); new terminal ${handle ?? "unknown"}, old ${old.handle} closed`;
     if (closeFailed) writeJson("heartbeat.restarted.json", { ...state, closeFailed: old.handle });
-    journalQuiet("restart", "controller", { kind, reason: oneLine(reason, 200), from: old.handle, to: handle ?? null, ...(closeFailed ? { closeFailed: old.handle } : {}) });
+    journalQuiet("restart", "controller", { kind, reason: oneLine(reason, 200), from: old.handle, to: handle ?? null, keepOpen, ...(closeFailed ? { closeFailed: old.handle } : {}) });
     // The heartbeat (tell: false) tells the Front agent itself, once its health file says so. A routine fresh start is only recorded;
     // two Controllers are always an alert.
     const told = closeFailed ? tellFront("TWO-CONTROLLERS", event, { type: "question" }) : tell ? tellFront("RESTARTED", event, { push: kind === "hang" }) : [];
     return closeFailed
-      ? { ok: true, code: 0, handle, event, closeFailed: old.handle, message: `restarted, but the old terminal ${old.handle} is still open (${told.join(", ")}): close it by hand, two Controllers must not run` }
-      : { ok: true, code: 0, handle, event, message: `restarted; new terminal ${handle ?? "unknown"}, ${old.handle} closed` };
+      ? { ok: true, code: 0, handle, event, closeFailed: old.handle, message: `restarted (${how}), but the old terminal ${old.handle} is still open (${told.join(", ")}): close it by hand, two Controllers must not run` }
+      : { ok: true, code: 0, handle, event, message: `restarted; new terminal ${handle ?? "unknown"} created ${how}, ${old.handle} closed` };
   } finally { unlock(); }
 }
 

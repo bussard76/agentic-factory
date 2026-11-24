@@ -31,6 +31,45 @@ export function writeHealth(lines) {
   return true;
 }
 
+// Alerts that outlive one heartbeat run (heartbeat.alerts.json: key → line). The heartbeat adds them to every health file it
+// writes, so a hang check does not erase them; whoever raised one clears it when the problem is gone.
+const ALERTS_FILE = "heartbeat.alerts.json";
+const readAlerts = () => { try { const v = JSON.parse(fs.readFileSync(file(ALERTS_FILE), "utf8")); return v && typeof v === "object" && !Array.isArray(v) ? v : {}; } catch { return {}; } };
+export const alertLines = () => Object.values(readAlerts()).map(String);
+export const hasAlert = (key) => key in readAlerts();
+export function clearAlert(key) {
+  const all = readAlerts();
+  if (!(key in all)) return;
+  const gone = all[key];
+  delete all[key];
+  try { writeHealth(fs.readFileSync(file(HEALTH_FILE), "utf8").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2)).filter((l) => l !== gone)); } catch { /* no health file */ }
+  try { if (Object.keys(all).length) fs.writeFileSync(file(ALERTS_FILE), JSON.stringify(all)); else fs.rmSync(file(ALERTS_FILE), { force: true }); } catch { /* retried */ }
+}
+/**
+ * Makes the alert true now, from what the caller sees on disk: raised (and told) when it is missing, and, when it is already
+ * known, only put back into the health file if that lost it. A corrupt alerts file reads as empty and is rebuilt here.
+ */
+export function ensureAlert(key, text, opts) {
+  if (key in readAlerts()) {
+    let current = [];
+    try { current = fs.readFileSync(file(HEALTH_FILE), "utf8").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2)); } catch { /* none yet */ }
+    const line = oneLine(readAlerts()[key]);
+    if (!current.includes(line)) writeHealth([...current, line]);
+    return [];
+  }
+  return raiseAlert(key, text, opts);
+}
+/** Raises an alert on all three channels: the health file (also for a Front agent on another machine), front-events.log, and at once where reachable. */
+export function raiseAlert(key, text, { type = "question", kind = key } = {}) {
+  const all = readAlerts();
+  all[key] = oneLine(text);
+  try { fs.writeFileSync(file(ALERTS_FILE), JSON.stringify(all)); } catch { /* read-only directory */ }
+  let current = [];
+  try { current = fs.readFileSync(file(HEALTH_FILE), "utf8").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2)); } catch { /* none yet */ }
+  writeHealth([...current.filter((l) => l !== all[key]), all[key]]);
+  return tellFront(kind, text, { type });
+}
+
 // The Controller is on another machine than the Front agent when its host is a remote one in the configuration.
 const controllerRemote = () => (config.hosts?.workers ?? []).some((h) => h.name === (config.hosts?.controller?.host ?? "local") && h.kind === "remote");
 
