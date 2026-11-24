@@ -18,8 +18,8 @@
 import "./cli.mjs";
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
-import { BRANCH_PREFIX, MAIN, PROJECT_DIR, file, journal } from "./lib.mjs";
-import { isSha, lastHead } from "./reviewrecord.mjs";
+import { BRANCH_PREFIX, MAIN, PROJECT_DIR, config, file, journal } from "./lib.mjs";
+import { isSha, lastHead, failedTesterRounds } from "./reviewrecord.mjs";
 
 const args = process.argv.slice(2);
 const architect = args[0] === "--architect";
@@ -61,7 +61,7 @@ if (!kind) refuse(`${reviewBranch} is not a review branch of ${task}: expected $
 const [path, fileTail] = kind;
 const rbSha = resolve(rb);
 if (!rbSha) refuse(`origin/${rb} not found.`);
-if (reviewSha === undefined) refuse(`no review SHA given. The reviewer reports its review branch and full SHA in worker_done (the Tester, re-evaluation and conformance specs ask for it) and you pass that SHA, so the commit read is the one reported. A review written before this check reported none: it cannot be recorded, and it is not accepted without one. Send the task back to review (a new Tester round on the current head, the full path), then record that review with the SHA from its worker_done.`);
+if (reviewSha === undefined) refuse(`no review SHA given. The reviewer reports its review branch and full SHA in worker_done (the Tester, re-evaluation and conformance specs ask for it) and you pass that SHA, so the commit read is the one reported. A review written before this check reported none: it cannot be recorded, and it is not accepted without one. Send the task back to review (the full path: a new Tester round on the current head, (mkspec test); where the round limit refuses a new round, the re-evaluation mkspec reeval on the commit the last round reviewed), then record that review with the SHA from its worker_done.`);
 if (reviewSha !== undefined && reviewSha !== rbSha) refuse(`origin/${rb} is at ${rbSha}, not at ${reviewSha} that the reviewer reported: it was pushed to after the report. Ask for the review again.`);
 if (reviewSha !== undefined && !isSha(reviewSha)) refuse(`${JSON.stringify(reviewSha)} is not a full commit id.`);
 const findings = `docs/reviews/${task}-${fileTail}.md`;
@@ -80,6 +80,11 @@ if (!tip) refuse(`origin/${taskBranch} not found: there is no branch of ${task} 
 if (git("cat-file", "-e", `${head}^{commit}`).status !== 0) refuse(`the reviewed commit ${head} is not in this clone.`);
 if (git("merge-base", "--is-ancestor", head, tip).status !== 0) refuse(`the reviewed commit ${head} is not on origin/${taskBranch} (tip ${tip}): the findings do not review this task's branch.`);
 if (git("merge-base", "--is-ancestor", head, rbSha).status !== 0) refuse(`origin/${rb} (${rbSha}) was not made from the reviewed commit ${head}.`);
+// A re-evaluation (-review-final) starts only after reviews.maxRounds failed Tester rounds, which is what lets it undo the last failed round.
+if (path === "final") {
+  const limit = Number(config.reviews?.maxRounds ?? 2), failed = failedTesterRounds(journalText(), task);
+  if (failed < limit) refuse(`a re-evaluation (${rb}) follows reviews.maxRounds (${limit}) failed Tester rounds, but ${failed} are recorded for ${task}. Record the failed rounds first (node reviewed.mjs ${task} <review-branch> <review-sha> for each), or continue with rework and a new round.`);
+}
 // A verdict is for a commit the task has not left behind: recording an older head would move the binding backwards.
 const before = lastHead(journalText(), task);
 if (before && before !== head && git("merge-base", "--is-ancestor", head, before).status === 0) refuse(`${head} is older than ${before}, the head already recorded for ${task}: nothing is recorded for an older review.`);

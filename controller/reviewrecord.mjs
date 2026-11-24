@@ -33,12 +33,15 @@ const events = (text, key) => {
 /** Which later event may undo which earlier failed review of THE SAME commit. A failed review is final for its commit against
  *  everything except the one event written for this: the re-evaluation (`final`) that follows the last failed Tester round
  *  (PR #53: after the round limit the final functional re-evaluation reviews the very commit that round failed). So:
- *    tester fail       is superseded by a LATER passing final; by nothing else (not by another Tester pass, not by docs-only
+ *    tester fail       is superseded by a LATER passing final, once the task's failed Tester rounds have reached reviews.maxRounds
+ *                      (the `maxRounds` argument); by nothing else (not by another Tester pass, not by docs-only
  *                      or Architect, not by a conformance pass)
  *    final fail        is never superseded
  *    conformance fail  is never superseded (a new commit needs a new review)
  *  Every pass event is judged against the failures that are still standing for its commit. */
 export const SUPERSEDES = { final: new Set(["tester"]) };   // a passing event of this path supersedes earlier failed events of these paths
+// ... but only once the failed Tester rounds of the task (distinct review branches) have reached reviews.maxRounds, which is when the
+// handbook starts a re-evaluation; before that the failed round goes back to rework, not to a re-evaluation.
 
 /** The state of a task's review, from the text of the journal, in the order the events were written.
  *  { state: "ok", head, event, covers }   the latest primary review (Tester round, re-evaluation, docs-only, Architect) passed
@@ -49,19 +52,21 @@ export const SUPERSEDES = { final: new Set(["tester"]) };   // a passing event o
  *  { state: "unreadable", why }           the journal cannot be read, or a line that mentions the task cannot be parsed
  *  A conformance review never binds a head by itself, it can only fail one. `text` is the journal's text, or an Error
  *  (ENOENT: no journal). `key` is the task id in lower case, the part of the branch name after the branch prefix. */
-export function latestReview(text, key) {
+export function latestReview(text, key, maxRounds) {
   if (text instanceof Error) return text.code === "ENOENT" ? { state: "none" } : { state: "unreadable", why: text.message };
   const r = events(text, key);
   if (r.unreadable) return { state: "unreadable", why: r.unreadable };
+  const limit = Number.isInteger(maxRounds) && maxRounds >= 1 ? maxRounds : Infinity;   // unknown limit: a re-evaluation supersedes nothing
+  const failedRounds = new Set();
   const standing = new Map();   // head -> the failed events that still stand
   let last = null;
   for (const e of r.list) {
     const conformance = e.path === "conformance";
     if (!conformance && !PRIMARY.has(e.path)) return { state: "unreadable", why: `a review event of ${key} has the path ${JSON.stringify(e.path)}` };
-    if (e.verdict === "fail") { standing.set(e.head, [...(standing.get(e.head) ?? []), e]); if (!conformance || last?.event.head === e.head) last = { ok: false, event: e }; }
+    if (e.verdict === "fail") { if (e.path === "tester") failedRounds.add(e.branch ?? e.ts); standing.set(e.head, [...(standing.get(e.head) ?? []), e]); if (!conformance || last?.event.head === e.head) last = { ok: false, event: e }; }
     else if (e.verdict === "pass" || e.verdict === "docs-only") {
       if (conformance) continue;
-      const undone = SUPERSEDES[e.path];
+      const undone = failedRounds.size >= limit ? SUPERSEDES[e.path] : undefined;
       if (undone) standing.set(e.head, (standing.get(e.head) ?? []).filter((f) => !undone.has(f.path)));
       last = { ok: true, event: e };
     } else return { state: "unreadable", why: `the review event of ${key} has the verdict ${JSON.stringify(e.verdict)}` };
@@ -129,9 +134,16 @@ export function bindBranches(branches, { prefix, read }) {
       + `    Either the verdict was not recorded: then run, with the review branch and the full SHA from the reviewer's worker_done,\n`
       + `      node reviewed.mjs <task> origin/${prefix}${p.key}-review-<n> <review-sha>      (-review-final after a re-evaluation; the conformance branch for a level 2/3 task)\n`
       + `    It reads that findings file at that commit, checks that the commit it names is on origin/${prefix}${p.key}, and records it; the wave then merges exactly that commit, and stops with both commits if the branch has moved since.\n`
-      + `    Or the review is older than this check (one-time): its reviewer reported no review SHA, so it cannot be recorded and is not accepted without one. Send the task back to review (the full path: a new Tester round on the current head, whose worker_done carries the SHA), then record that.\n`
+      + `    Or the review is older than this check (one-time): its reviewer reported no review SHA, so it cannot be recorded and is not accepted without one. Send the task back to review (the full path: a new Tester round on the current head (mkspec test), whose worker_done carries the SHA; where the round limit already refuses a new round, the re-evaluation, mkspec reeval, on the commit the last round reviewed), then record that.\n`
       + `    No Tester review: a docs-only task is recorded by node docsonly.mjs; an Architect branch (architecture-baseline, stewardship-*) by node reviewed.mjs --architect <task>.`);
   }
   if (problems.length) return { problems };
   return { args, tasks: [...new Set(parsed.filter((p) => p.kind === "task").map((p) => p.key))] };
+}
+
+/** How many Tester rounds (distinct review branches) of a task are recorded as failed. */
+export function failedTesterRounds(text, key) {
+  if (text instanceof Error) return 0;
+  const r = events(text, key);
+  return new Set((r.list ?? []).filter((e) => e.path === "tester" && e.verdict === "fail").map((e) => e.branch ?? e.ts)).size;
 }

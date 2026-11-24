@@ -26,7 +26,7 @@ if (!envs.E2E_CMD.trim()) envs.E2E_CMD = "";
 // Before anything is launched or journaled: every task branch needs the Controller's record of what was reviewed. A handbook
 // that predates this (an older CONTROLLER.md after `update`) never writes the record, so it ends here, and says so.
 const journalText = () => { try { return fs.readFileSync(file("journal.ndjson"), "utf8"); } catch (e) { return e; } };
-const bound = bindBranches(branches, { prefix: BRANCH_PREFIX, read: (key) => latestReview(journalText(), key) });
+const bound = bindBranches(branches, { prefix: BRANCH_PREFIX, read: (key) => latestReview(journalText(), key, Number(config.reviews?.maxRounds ?? 2)) });
 if (bound.problems) {
   console.error(`WAVE-NOT-STARTED: ${bound.problems.length} branch(es) cannot be bound to a reviewed commit. Nothing was launched, merged or journaled.\n${bound.problems.map((p) => `  ${p}`).join("\n")}\n`
     + `The wave merges exactly the commit a review passed, from the Controller's journal. If CONTROLLER.md never told you to run reviewed.mjs, your handbook is older than these scripts: the new one is in .factory/new/CONTROLLER.md after \`agentic-factory update\`; ask the human to merge it.`);

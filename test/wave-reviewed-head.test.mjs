@@ -475,14 +475,15 @@ test("reviewed.mjs: a branch that moved is recorded with a note; findings for a 
 });
 
 test("a backticked SHA on the Reviewed commit line is read like the push gate reads it; a re-evaluation and a conformance branch are recorded with their path", () => {
-  const p = project(); const sha = p.task("t1");
+  const p = project(); const sha = p.task("t1"); p.review("t1", sha, { round: 1, verdict: "fail" });
   p.git("checkout", "-q", "-b", "agents/t1-review-final", sha); p.write("docs/reviews/T1-review-final.md", `Verdict: pass\nReviewed commit: \`${sha}\`\n`); p.commit("final"); p.git("push", "-q", "origin", "agents/t1-review-final");
   p.git("checkout", "-q", "-b", "agents/t1-conformance", sha); p.write("docs/reviews/T1-architecture-conformance.md", `Verdict: fail\nReviewed commit: ${sha}\n`); p.commit("conf"); p.git("push", "-q", "origin", "agents/t1-conformance"); p.git("checkout", "-q", "main");
-  const b = bundle(p);
+  const b = bundle(p, { extra: { reviews: { maxRounds: 1 } } });
+  assert.equal(b.run("reviewed.mjs", ["T1", "agents/t1-review-1"]).status, 0);
   assert.equal(b.run("reviewed.mjs", ["T1", "origin/agents/t1-review-final"]).status, 0);
   assert.equal(b.run("reviewed.mjs", ["T1", "agents/t1-conformance"]).status, 0);
-  assert.deepEqual(b.events().map((e) => [e.path, e.verdict]), [["final", "pass"], ["conformance", "fail"]]);
-  assert.equal(latestReview(fs.readFileSync(path.join(b.ctl, "journal.ndjson"), "utf8"), "t1").state, "failed");
+  assert.deepEqual(b.events().map((e) => [e.path, e.verdict]), [["tester", "fail"], ["final", "pass"], ["conformance", "fail"]]);
+  assert.equal(latestReview(fs.readFileSync(path.join(b.ctl, "journal.ndjson"), "utf8"), "t1", 1).state, "failed");
   b.cleanup();
 });
 
@@ -625,9 +626,9 @@ test("legitimate flows stay green: a level 2 task with its conformance branch, a
   const p = project();
   const s1 = p.task("t1"); p.review("t1", s1);
   p.git("checkout", "-q", "-b", "agents/t1-conformance", s1); p.write("docs/reviews/T1-architecture-conformance.md", `Verdict: pass\nReviewed commit: ${s1}\n`); p.commit("conf"); p.git("push", "-q", "origin", "agents/t1-conformance"); p.git("checkout", "-q", "main");
-  const s2 = p.task("t2"); p.git("checkout", "-q", "-b", "agents/t2-review-final", s2); p.write("docs/reviews/T2-review-final.md", `Verdict: pass\nReviewed commit: ${s2}\n`); p.commit("final"); p.git("push", "-q", "origin", "agents/t2-review-final"); p.git("checkout", "-q", "main");
-  const b = bundle(p);
-  for (const [t, br] of [["T1", "agents/t1-review-1"], ["T1", "agents/t1-conformance"], ["T2", "agents/t2-review-final"]]) assert.equal(b.run("reviewed.mjs", [t, br]).status, 0);
+  const s2 = p.task("t2"); p.review("t2", s2, { round: 1, verdict: "fail" }); p.git("checkout", "-q", "-b", "agents/t2-review-final", s2); p.write("docs/reviews/T2-review-final.md", `Verdict: pass\nReviewed commit: ${s2}\n`); p.commit("final"); p.git("push", "-q", "origin", "agents/t2-review-final"); p.git("checkout", "-q", "main");
+  const b = bundle(p, { extra: { reviews: { maxRounds: 1 } } });
+  for (const [t, br] of [["T1", "agents/t1-review-1"], ["T1", "agents/t1-conformance"], ["T2", "agents/t2-review-1"], ["T2", "agents/t2-review-final"]]) assert.equal(b.run("reviewed.mjs", [t, br]).status, 0);
   const args = ["T", "S", "origin/agents/t1", "origin/agents/t1-review-1", "origin/agents/t1-conformance", "origin/agents/t2", "origin/agents/t2-review-final"];
   // a red wave: the gate fails; the same call again after the gate is fixed merges the same commits
   fs.writeFileSync(path.join(b.ctl, "factory.config.json"), fs.readFileSync(path.join(b.ctl, "factory.config.json"), "utf8").replace('"verify":"true"', '"verify":"false"'));
@@ -653,16 +654,16 @@ test("which event may supersede which: every ordered pair of review events on on
     if (standing.length) return "failed";
     return primary.length && KINDS[primary.at(-1)][1] !== "fail" ? "ok" : "none";
   };
-  for (const x of Object.keys(KINDS)) for (const y of Object.keys(KINDS)) assert.equal(latestReview(seq(x, y), "t1").state, expected(x, y), `${x} then ${y}`);
+  for (const x of Object.keys(KINDS)) for (const y of Object.keys(KINDS)) assert.equal(latestReview(seq(x, y), "t1", 1).state, expected(x, y), `${x} then ${y}`);
   // the cases that matter, spelled out
-  assert.equal(latestReview(seq("TF", "FP"), "t1").state, "ok", "the re-evaluation passes the commit the last round failed");
-  assert.equal(latestReview(seq("TF", "TP"), "t1").state, "failed", "a second Tester verdict does not undo a Tester fail");
-  assert.equal(latestReview(seq("FP", "TF"), "t1").state, "failed", "a fail after the pass is the latest verdict");
-  assert.equal(latestReview(seq("TF", "FP", "TF"), "t1").state, "failed", "a later Tester fail is not undone by the earlier re-evaluation");
-  assert.equal(latestReview(seq("FF", "FP"), "t1").state, "failed", "a failed re-evaluation is final");
-  assert.equal(latestReview(seq("CF", "FP"), "t1").state, "failed", "a failed conformance review is final, the re-evaluation does not undo it");
-  assert.equal(latestReview(seq("TF", "TF", "FP"), "t1").state, "ok", "every failed Tester round of the commit is undone by it");
-  assert.equal(latestReview(seq("TF", "FP", "CF"), "t1").state, "failed");
+  assert.equal(latestReview(seq("TF", "FP"), "t1", 1).state, "ok", "the re-evaluation passes the commit the last round failed");
+  assert.equal(latestReview(seq("TF", "TP"), "t1", 1).state, "failed", "a second Tester verdict does not undo a Tester fail");
+  assert.equal(latestReview(seq("FP", "TF"), "t1", 1).state, "failed", "a fail after the pass is the latest verdict");
+  assert.equal(latestReview(seq("TF", "FP", "TF"), "t1", 1).state, "failed", "a later Tester fail is not undone by the earlier re-evaluation");
+  assert.equal(latestReview(seq("FF", "FP"), "t1", 1).state, "failed", "a failed re-evaluation is final");
+  assert.equal(latestReview(seq("CF", "FP"), "t1", 1).state, "failed", "a failed conformance review is final, the re-evaluation does not undo it");
+  assert.equal(latestReview(seq("TF", "TF", "FP"), "t1", 1).state, "ok", "every failed Tester round of the commit is undone by it");
+  assert.equal(latestReview(seq("TF", "FP", "CF"), "t1", 1).state, "failed");
 });
 
 test("probe 10 of the PR #68 re-check: round 1 fails, rework, round 2 fails, the re-evaluation passes the commit round 2 failed: the wave takes it", () => {
@@ -687,7 +688,7 @@ test("the review sha is required: without it nothing is recorded, and the messag
   const p = project(); const sha = p.task("t1"); p.review("t1", sha);
   const b = bundle(p);
   let r = b.raw("reviewed.mjs", ["T1", "agents/t1-review-1"]);
-  assert.equal(r.status, 3, r.stdout); assert.match(r.stdout, /no review SHA given/); assert.match(r.stdout, /written before this check reported none: it cannot be recorded, and it is not accepted without one/); assert.match(r.stdout, /Send the task back to review/);
+  assert.equal(r.status, 3, r.stdout); assert.match(r.stdout, /no review SHA given/); assert.match(r.stdout, /written before this check reported none: it cannot be recorded, and it is not accepted without one/); assert.match(r.stdout, /Send the task back to review/); assert.match(r.stdout, /mkspec test/); assert.match(r.stdout, /round limit refuses a new round, the re-evaluation mkspec reeval/);
   assert.equal(b.events().length, 0, "nothing recorded");
   for (const bad of ["abc", "z".repeat(40)]) assert.equal(b.raw("reviewed.mjs", ["T1", "agents/t1-review-1", bad]).status, 3, bad);
   // the conformance and re-evaluation branches need it too
@@ -696,7 +697,7 @@ test("the review sha is required: without it nothing is recorded, and the messag
   assert.equal(b.raw("reviewed.mjs", ["T1", "agents/t1-review-1", p.tip("agents/t1-review-1")]).status, 0);
   // the wave's message for a task with no record says the same, without recommending an unchecked way
   const q = project(); const qs = q.task("t1"); q.review("t1", qs); const c = bundle(q); const w = c.run("wave.mjs", ["T", "S", "origin/agents/t1", "origin/agents/t1-review-1"]);
-  assert.equal(w.status, 1); assert.match(w.stderr, /older than this check \(one-time\)/); assert.match(w.stderr, /reviewed\.mjs <task> origin\/agents\/t1-review-<n> <review-sha>/); assert.doesNotMatch(w.stderr, /journal\.mjs/);
+  assert.equal(w.status, 1); assert.match(w.stderr, /older than this check \(one-time\)/); assert.match(w.stderr, /mkspec test\), whose worker_done carries the SHA; where the round limit already refuses a new round, the re-evaluation, mkspec reeval,/); assert.match(w.stderr, /reviewed\.mjs <task> origin\/agents\/t1-review-<n> <review-sha>/); assert.doesNotMatch(w.stderr, /journal\.mjs/);
   [b, c].forEach((x) => x.cleanup());
 });
 
@@ -704,4 +705,71 @@ test("a -specreview branch in a wave gets the right message: leave it out", () =
   const read = () => ({ state: "ok", head: A, covers: new Map() });
   const r = bindBranches(["origin/agents/t1", "origin/agents/t1-specreview"], { prefix: "agents/", read });
   assert.equal(r.problems.length, 1); assert.match(r.problems[0], /spec review branch is not merged by a wave.*Leave this branch out/);
+});
+
+// --- the four low items of the final check of PR #68 --------------------------------------------
+function ticketProject(base) {
+  const p = project(); p.git("config", "core.whitespace", "cr-at-eol");   // a project that keeps CRLF tickets tells git so, or its own commit hook would refuse them
+  p.write("docs/tasks/T1-x.md", base); p.commit("ticket"); p.git(...NOHOOKS, "push", "-q", "origin", "main");
+  return { p, status: (next) => { p.git("checkout", "-q", "-b", "status-wave-1", "main"); p.write("docs/tasks/T1-x.md", next); p.commit("status"); p.git("push", "-q", "origin", "status-wave-1"); p.git("checkout", "-q", "main"); } };
+}
+const wavePasses = (p) => script(p, ["origin/status-wave-1"], { env: { WAVE_TASKS: "t1" } });
+
+test("a ticket with CRLF line endings, or whose Status: is the last line without a final newline, can be integrated; any other difference still stops the wave (low item 1)", () => {
+  const crlf = (s) => s.replace(/\n/g, "\r\n");
+  const lf = "# T1: x\n\nStatus: building\nDepends on: nothing\n\n## Goal\nx\n";
+  const cases = {
+    "CRLF throughout": [crlf(lf), crlf(lf).replace("building", "integrated"), true],
+    "no final newline, Status last": ["# T1: x\n\nStatus: building", "# T1: x\n\nStatus: integrated", true],
+    "CRLF and Status last without newline": [crlf("# T1: x\n\nStatus: building"), crlf("# T1: x\n\nStatus: integrated"), true],
+    "no final newline elsewhere": [lf.replace(/\n$/, ""), lf.replace(/\n$/, "").replace("building", "integrated"), true],
+    "the Status line loses its CR": [crlf(lf), crlf(lf).replace("building\r\n", "integrated\n"), false],
+    "another line loses its CR": [crlf(lf), crlf(lf).replace("building", "integrated").replace("Goal\r\n", "Goal\n"), false],
+    "a final newline is added": ["# T1: x\n\nStatus: building", "# T1: x\n\nStatus: integrated\n", false],
+    "a final newline is dropped": [lf, lf.replace("building", "integrated").replace(/\n$/, ""), false],
+    "CR inside the value": [crlf(lf), crlf(lf).replace("building", "integrated\r"), false],
+  };
+  for (const [name, [before, after, ok]] of Object.entries(cases)) {
+    const { p, status } = ticketProject(before); status(after);
+    const out = wavePasses(p);
+    assert.equal(out.status === 0, ok, `${name}: ${out.stdout}`);
+    if (ok) assert.match(p.origin("show", "main:docs/tasks/T1-x.md"), /Status: integrated/, name); else assert.match(out.stdout, /status-wave-1: a status branch may only set Status: to integrated/, name);
+  }
+});
+
+test("a Status line that is moved and changed in one go is refused: the changed line must be the same line of the file (low item 2)", () => {
+  const lf = "# T1: x\n\nStatus: building\nDepends on: nothing\n\n## Goal\nx\n";
+  const moved = "# T1: x\n\nDepends on: nothing\n\n## Goal\nx\nStatus: integrated\n";
+  const { p, status } = ticketProject(lf); status(moved);
+  const out = wavePasses(p);
+  assert.notEqual(out.status, 0); assert.match(out.stdout, /Status: to integrated/); assert.match(out.stdout, /lines differ/);
+  assert.equal(p.origin("show", "main:docs/tasks/T1-x.md"), lf.trimEnd(), "main is unchanged");
+  // the control: the same change in place passes
+  const q = ticketProject(lf); q.status(lf.replace("building", "integrated")); assert.equal(wavePasses(q.p).status, 0);
+  // a second Status line added elsewhere, the first one changed in place: refused (exactly one Status line)
+  const r = ticketProject(lf); r.status(lf.replace("building", "integrated") + "Status: building\n"); assert.notEqual(wavePasses(r.p).status, 0);
+});
+
+test("a re-evaluation supersedes failed Tester rounds only once reviews.maxRounds of them are recorded (low item 3)", () => {
+  const ev = (o) => ({ type: "review", task: "T1", head: A, by: "reviewed.mjs", ...o });
+  const tf = (round) => ev({ path: "tester", verdict: "fail", branch: `agents/t1-review-${round}` }), fp = ev({ path: "final", verdict: "pass", branch: "agents/t1-review-final" });
+  const state = (limit, ...events) => latestReview(journal(...events), "t1", limit).state;
+  assert.equal(state(2, tf(1), fp), "failed", "one failed round of two: the re-evaluation does not undo it");
+  assert.equal(state(2, tf(1), tf(2), fp), "ok", "two failed rounds of two: it does");
+  assert.equal(state(2, tf(1), tf(1), fp), "failed", "the same round recorded twice is one round");
+  assert.equal(state(1, tf(1), fp), "ok"); assert.equal(state(3, tf(1), tf(2), fp), "failed"); assert.equal(state(3, tf(1), tf(2), tf(3), fp), "ok");
+  assert.equal(state(undefined, tf(1), tf(2), fp), "failed", "an unknown limit supersedes nothing");
+  assert.equal(state(2, tf(1), tf(2), fp, tf(3)), "failed", "a later failed round still stands");
+  // reviewed.mjs refuses to record a re-evaluation before the limit, and says what to record first
+  const p = project(); const sha = p.task("t1"); p.review("t1", sha, { round: 1, verdict: "fail" });
+  p.git("checkout", "-q", "-b", "agents/t1-review-final", sha); p.write("docs/reviews/T1-review-final.md", `Verdict: pass\nReviewed commit: ${sha}\n`); p.commit("final"); p.git("push", "-q", "origin", "agents/t1-review-final"); p.git("checkout", "-q", "main");
+  const b = bundle(p);
+  assert.equal(b.run("reviewed.mjs", ["T1", "agents/t1-review-1"]).status, 0);
+  const r = b.run("reviewed.mjs", ["T1", "agents/t1-review-final"]);
+  assert.equal(r.status, 3, r.stdout); assert.match(r.stdout, /follows reviews\.maxRounds \(2\) failed Tester rounds, but 1 are recorded/); assert.equal(b.events().length, 1);
+  // and a journal that does hold a premature final (written by hand with the right marks) does not start the wave
+  fs.appendFileSync(path.join(b.ctl, "journal.ndjson"), line({ type: "review", task: "T1", verdict: "pass", path: "final", head: sha, by: "reviewed.mjs", branch: "agents/t1-review-final", reviewSha: p.tip("agents/t1-review-final"), file: "docs/reviews/T1-review-final.md" }) + "\n");
+  const w = b.run("wave.mjs", ["T", "S", "origin/agents/t1", "origin/agents/t1-review-final"]);
+  assert.equal(w.status, 1); assert.match(w.stderr, /review of t1 says fail/);
+  b.cleanup();
 });

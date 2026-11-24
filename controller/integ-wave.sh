@@ -94,12 +94,33 @@ review_extra() {
   done < <(git diff --no-renames --raw -z "$1" "$2")
   [ "$n" = 1 ] || echo "$n changed files, expected exactly one ($3)"
 }
+# $1 old file, $2 new file (a ticket before and after): prints why not when they differ in anything but ONE `Status:` line that is the
+# same line of the file, changed from an allowed value other than integrated to `integrated`. Line endings are kept out of the
+# comparison of the Status line itself only (a CRLF ticket, or a last line without a final newline, can be integrated), but every
+# other line must be identical byte for byte, the ending of the Status line must stay what it was, and so must the final newline.
+status_same_but_status() {
+  local e1 e2; [ "$(tail -c 1 "$1" | od -An -tx1 | tr -d ' ')" = 0a ] && e1=1 || e1=0; [ "$(tail -c 1 "$2" | od -An -tx1 | tr -d ' ')" = 0a ] && e2=1 || e2=0
+  [ "$e1" = "$e2" ] || { echo "final newline changed"; return; }
+  awk -v CR="$(printf '\r')" '
+    function cr(s) { return substr(s, length(s)) == CR }
+    function bare(s) { return cr(s) ? substr(s, 1, length(s) - 1) : s }
+    FNR == NR { o[FNR] = $0; no = FNR; if ($0 ~ /^Status:/) so++; next }
+    { n[FNR] = $0; nn = FNR; if ($0 ~ /^Status:/) sn++ }
+    END {
+      if (no != nn) { print "line count changed"; exit }
+      if (so != 1 || sn != 1) { print "not exactly one Status: line"; exit }
+      for (i = 1; i <= no; i++) if (o[i] != n[i]) { d++; at = i }
+      if (d != 1) { print d + 0 " lines differ"; exit }
+      if (cr(o[at]) != cr(n[at])) { print "line ending of the Status line changed"; exit }
+      if (bare(o[at]) !~ /^Status: (draft|ready|building|review|passed|paused)$/ || bare(n[at]) != "Status: integrated") print "not a change to Status: integrated"
+    }' "$1" "$2"
+}
 # The values of `Status:` in a ticket (templates/docs/tasks/T00-template.md): draft | ready | building | review | passed | integrated | paused.
 # $1 base, $2 tip. A status branch only moves tickets of THIS wave ($WAVE_TASKS: the task ids of the branches wave.mjs was given) to
 # integrated: per ticket file exactly one `Status:` line, from an allowed value other than integrated to integrated, and nothing else
-# on the line or in the file. Parsed from the hunk of `git diff -U0`, not filtered by prefixes. Prints what is not allowed.
+# on the line or in the file: the two versions of the file are compared whole (status_same_but_status). Prints what is not allowed.
 status_extra() {
-  local meta path om nm os ns st d f lf k ok body
+  local meta path om nm os ns st d f lf k ok why
   while IFS= read -r -d '' meta && IFS= read -r -d '' path; do
     read -r om nm os ns st <<< "${meta#:}"
     d="${path%/*}"; f="${path##*/}"
@@ -107,8 +128,9 @@ status_extra() {
     lf=$(printf %s "$f" | tr 'A-Z' 'a-z'); ok=0
     for k in $WAVE_TASKS; do case "$lf" in "$k".md|"$k"-*.md) ok=1 ;; esac; done
     if [ "$ok" != 1 ]; then echo "$st $path (not a ticket of this wave: ${WAVE_TASKS:-none})"; continue; fi
-    body=$(git diff --no-renames -U0 "$1" "$2" -- "$path" | sed -n '/^@@/,$p' | grep -v '^@@')
-    if [ "$(printf '%s\n' "$body" | wc -l | tr -d ' ')" != 2 ] || ! printf '%s\n' "$body" | sed -n 1p | grep -Eq '^-Status: (draft|ready|building|review|passed|paused)$' || [ "$(printf '%s\n' "$body" | sed -n 2p)" != "+Status: integrated" ] || [ "$(git show "$2:$path" | grep -c '^Status:')" != 1 ]; then echo "$st $path (more than one Status: line changed from an allowed value to integrated)"; fi
+    git show "$1:$path" > "$LOGS/status-old" 2>/dev/null; git show "$2:$path" > "$LOGS/status-new" 2>/dev/null
+    why=$(status_same_but_status "$LOGS/status-old" "$LOGS/status-new")
+    if [ -n "$why" ]; then echo "$st $path ($why: only one Status: line, the same one, may change to integrated)"; fi
   done < <(git diff --no-renames --raw -z "$1" "$2")
 }
 TASKS_DIR="${TASKS_DIR:-docs/tasks}"; WAVE_TASKS="${WAVE_TASKS:-}"
