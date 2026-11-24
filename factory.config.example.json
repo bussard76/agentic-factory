@@ -173,6 +173,10 @@
       "waitMinutes": 60
     }
   },
+  "cleanup": {
+    "pendingWarnMinutes": 30,
+    "$pendingWarnMinutes": "How long removable work may wait before status and doctor report it. cleanup.mjs deletes only with --apply; a run without it records since when something waited (cleanup-pending.json in the Controller directory), and a run with --apply clears that. Default 30."
+  },
   "improvement": {
     "auditNightly": true,
     "fastLaneMaxParallel": 1

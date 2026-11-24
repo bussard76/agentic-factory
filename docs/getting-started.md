@@ -68,7 +68,7 @@ Try the integrated behaviour on the preview with the Front agent. If enabled, th
 | Controller is idle | Check `~/controller/status.md`, `inbox.md`, and `node capacity.mjs --verbose`. |
 | Worker is idle | Check `node stallwatch.mjs` and its Orca terminal. |
 | Tests flake under load | Check `~/load.log` (the lines ending in `project=<your project>`) and the gate journal; lower `capacity.calibration.startSuite`. |
-| Update keeps your edited file | Merge the new version from `.factory/new/`. |
+| Update keeps your edited file | Merge the new version from `.factory/new/`. An edited `CONTROLLER.md` matters most: an older one calls `cleanup.mjs` without `--apply`, and cleanup then removes nothing (exit code 3, `status` and `doctor` report it). |
 
 ## What `start` writes on your machine
 
@@ -85,7 +85,7 @@ Inside the project, `init` and `update` write what the table in the appendix lis
 | Crontab (or a launchd agent in `~/Library/LaunchAgents/de.agentic-factory.statuswatch.<project>.<id>.plist` on macOS) | The status watch (every 5 minutes, terminal Front agent) and the heartbeat of the Controller | One entry per project and directory, each marked with the project's name; `start` adds only its own and leaves the rest of the crontab alone | `crontab -e` and delete the lines marked `# agentic-factory … : <project>`; on macOS `launchctl bootout gui/$(id -u)/<label>` and delete the plist. |
 | `~/.lean-ctx/config.toml` | Only when lean-ctx is installed: `allow_paths` gets the project, its checkout on the Controller host and its worker workspaces, so the Controller may read them | Shared file. Only missing paths are added (each written as a correctly escaped TOML string, so any path works, also one with `]` or `"`); what is there, comments inside the list included, stays byte for byte. Nothing is written when all are there. The write is atomic (a temporary file and a rename; the file keeps its mode, a symlink stays one) and is computed again when the file changed meanwhile. A file the reader does not fully understand (a list that is not plain strings, the key twice, a string it cannot decode) is left alone, with a message that names the paths to add by hand. | Delete the project's paths from `allow_paths`. |
 | `<controllerDir>/.claude/settings.local.json` | Only with pi's `context-mode` package: `Read(<path>/**)` permissions for the same paths | Inside the project's own Controller directory | Delete the entries or the file. |
-| Orca | A repo entry (made by `init`), the Controller terminal and worker terminals and worktrees (`~/orca/workspaces/<project>/`), and with a bot the automation above | Named by project | `cleanup.mjs` removes finished worktrees; remove the repo entry in Orca's UI (the CLI can only hide it). |
+| Orca | A repo entry (made by `init`), the Controller terminal and worker terminals and worktrees (`~/orca/workspaces/<project>/`), and with a bot the automation above | Named by project | `cleanup.mjs --apply` removes finished worktrees (without `--apply` it only prints what it would remove); remove the repo entry in Orca's UI (the CLI can only hide it). |
 
 **Never written by `start`:** the project's `.env`, other projects' Controllers, worktrees, workers or bots, and the preview's launchd agent (you load `preview.plist.template` yourself).
 

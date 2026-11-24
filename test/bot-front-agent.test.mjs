@@ -273,6 +273,9 @@ test("a bot that Orca does not know fails start and shows in status and doctor; 
   assert.equal(r.status, 1);
   assert.match(r.stdout, /Orca has no bot named "missing-bot"/);
   assert.equal(m.creates().length, 0);
+  // The lookup comes first: an unknown bot creates no watch directory and puts no project into projects.json.
+  assert.ok(!fs.existsSync(path.join(m.home, "front-agent/.bots")), "no watch directory for a bot that does not exist");
+  assert.match(r.stdout, /Nothing was created/);
   assert.match(JSON.parse(p.cli("status", "--json").stdout).next, /"missing-bot" is not in `orca bot list`/);
   assert.match(p.cli("doctor").stdout, /MISSING Front agent bot missing-bot/);
   // The default: no bot fields, the terminal watch as before, and a CONTROLLER.md without the bot paragraph.
@@ -296,5 +299,28 @@ test("a bot that Orca does not know fails start and shows in status and doctor; 
   assert.match(handbook, /Do not send it to the bot: `bot:` only reaches bots on the same machine/);
   assert.doesNotMatch(handbook, /--to "bot:/);
   assert.match(fs.readFileSync(path.join(remote.dir, ".factory/front-agent/FRONT_BOT.md"), "utf8"), /ssh srv cat ~\/controller-epsilon\/status\.md/);
+  m.done();
+});
+
+test("status and doctor report a handbook that calls cleanup without --apply, and removable work that waited too long", () => {
+  const m = machine();
+  const p = m.project("zeta", {});
+  const ctl = path.join(m.home, "controller-zeta");
+  fs.mkdirSync(ctl, { recursive: true });
+  const cleanup = () => JSON.parse(p.cli("status", "--json").stdout).setup.cleanup;
+  assert.equal(cleanup().problem, null, "nothing installed, nothing to report");
+  // An older handbook kept by update: its call has no --apply.
+  fs.writeFileSync(path.join(ctl, "CONTROLLER.md"), "| `node cleanup.mjs --all --prune-remote [--dry] [--pushed]` | every cycle |\n");
+  assert.match(cleanup().problem, /calls cleanup without --apply.*\.factory\/new\/\.factory\/controller\/CONTROLLER\.md/);
+  assert.match(p.cli("doctor").stdout, /MISSING cleanup: the Controller's CONTROLLER\.md calls cleanup without --apply/);
+  // The current handbook, and a run without --apply that found work: reported once it waited longer than the threshold.
+  fs.writeFileSync(path.join(ctl, "CONTROLLER.md"), "| `node cleanup.mjs --all --prune-remote --apply` | every cycle |\n");
+  fs.writeFileSync(path.join(ctl, "cleanup-pending.json"), JSON.stringify({ since: new Date(Date.now() - 5 * 60_000).toISOString(), pending: 2 }));
+  assert.equal(cleanup().problem, null, "five minutes is within the default 30");
+  fs.writeFileSync(path.join(ctl, "cleanup-pending.json"), JSON.stringify({ since: new Date(Date.now() - 45 * 60_000).toISOString(), pending: 2 }));
+  assert.match(cleanup().problem, /removable work has waited 45 minutes.*exit code 3/);
+  assert.match(p.cli("doctor").stdout, /MISSING cleanup: removable work has waited/);
+  fs.rmSync(path.join(ctl, "cleanup-pending.json"));
+  assert.equal(cleanup().problem, null);
   m.done();
 });

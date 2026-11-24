@@ -62,7 +62,7 @@ The Controller runs `node capacity.mjs` before every start and follows its verdi
 
 ## Cleanup after every cycle (decided by {{HUMAN}}, {{DATE}})
 
-Release finished workers (Orca reports their dispatch succeeded, failed or stopped, their worktree holds no uncommitted or unpushed work, and the Controller does not keep them with `keep.mjs`), remove worktrees whose branch is merged or safely pushed (push a WIP branch first if anything is uncommitted), delete merged branches, keep active and paused tasks. Run `node cleanup.mjs` at the end of every cycle and report the counts in `status.md`.
+Release finished workers (Orca reports their dispatch succeeded, failed or stopped, their worktree holds no uncommitted or unpushed work, and the Controller does not keep them with `keep.mjs`), remove worktrees whose branch is merged or safely pushed (push a WIP branch first if anything is uncommitted), delete merged branches, keep active and paused tasks. Run `node cleanup.mjs --apply` at the end of every cycle (without `--apply` it only prints what it would do and exits with code 3) and report the counts in `status.md`.
 
 ## Audit and improvement workflow (decided by {{HUMAN}}, {{DATE}})
 
