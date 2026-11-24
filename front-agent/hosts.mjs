@@ -27,11 +27,12 @@ export function staleLimit(cfg) {
 // targets that reach THIS machine, and the id of the machine that said so. A marker copied to another machine (dotfiles, a cloned
 // home) carries the other machine's id and counts for nothing there. FACTORY_MACHINE_ID replaces the id (tests).
 export const markerFile = () => path.join(os.homedir(), ".config/agentic-factory/this-machine.json");
+let machineIdCache;
 export function machineId() {
   if (process.env.FACTORY_MACHINE_ID !== undefined) return process.env.FACTORY_MACHINE_ID;
-  for (const f of ["/etc/machine-id", "/var/lib/dbus/machine-id"]) try { const t = fs.readFileSync(f, "utf8").trim(); if (t) return t; } catch { /* next */ }
-  if (process.platform === "darwin") return /"IOPlatformUUID"\s*=\s*"([^"]+)"/.exec(spawnSync("ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8" }).stdout ?? "")?.[1] ?? "";
-  return "";
+  if (machineIdCache !== undefined) return machineIdCache;
+  for (const f of ["/etc/machine-id", "/var/lib/dbus/machine-id"]) try { const t = fs.readFileSync(f, "utf8").trim(); if (t) return (machineIdCache = t); } catch { /* next */ }
+  return (machineIdCache = process.platform === "darwin" ? /"IOPlatformUUID"\s*=\s*"([^"]+)"/.exec(spawnSync("ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8" }).stdout ?? "")?.[1] ?? "" : "");
 }
 export function readMarker() {
   try { const m = JSON.parse(fs.readFileSync(markerFile(), "utf8")); return { machineId: String(m.machineId ?? ""), ssh: Array.isArray(m.ssh) ? m.ssh.filter((t) => typeof t === "string" && t) : [] }; } catch { return { machineId: "", ssh: [], missing: true }; }

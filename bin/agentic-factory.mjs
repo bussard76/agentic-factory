@@ -542,9 +542,7 @@ function installStandardOn(h, c) {
     // This machine: the clone is a directory here. The one this runs in already has the standard (installStandard ran first).
     const dir = cloneDir(h, c);
     if (!fs.existsSync(path.join(dir, ".git"))) return `no clone at ${dir.replace(os.homedir(), "~")}`;
-    try { if (fs.realpathSync(path.join(dir, ".git")) === gitCommonDir()) return ""; } catch { /* a worktree's .git is a file: compare below */ }
-    const common = spawnSync("git", ["-C", dir, "rev-parse", "--git-common-dir"], { encoding: "utf8" }).stdout?.trim();
-    if (common && fs.realpathSync(path.resolve(dir, common)) === gitCommonDir()) return "";
+    if (sameRepo(dir)) return "";
     try { fs.cpSync(path.join(cwd, ".factory/standard"), path.join(dir, ".git/factory"), { recursive: true, force: true }); } catch (error) { return `copy failed: ${error.message}`; }
     const arm = spawnSync("node", [".git/factory/arm.mjs", "--all"], { cwd: dir, encoding: "utf8" });
     return arm.status === 0 ? "" : `${(arm.stderr || "arming failed").trim().split("\n").pop().slice(0, 200)}`;
@@ -704,7 +702,18 @@ function warnCleanupTrap(where = ".factory/controller/CONTROLLER.md", text) {
 // --- bundles at their destinations --------------------------------------------------------------------
 // The Controller directory, the Front agent's directory and the gate on other hosts get the bundles' files; a file the project changed
 // there is kept (bin/placement.mjs has the rule). update looks and says; start places.
-const manifestNow = () => { try { return JSON.parse(fs.readFileSync(".factory/manifest.json", "utf8")); } catch { return { files: {} }; } };
+// The manifest as the destinations are judged by it: its files, the hashes `update` replaced (previous) and, for an installation that
+// predates both the record and `previous`, the hashes the committed manifest held in its last 20 versions (what an older update wrote).
+let manifestCache;
+const manifestNow = () => {
+  if (manifestCache) return manifestCache;
+  let m; try { m = JSON.parse(fs.readFileSync(".factory/manifest.json", "utf8")); } catch { m = { files: {} }; }
+  const previous = Object.fromEntries(Object.entries(m.previous ?? {}).map(([k, v]) => [k, [...v]]));
+  for (const sha of sh("git", ["log", "-n", "20", "--format=%H", "--", ".factory/manifest.json"]).split("\n").filter(Boolean)) {
+    try { for (const [k, v] of Object.entries(JSON.parse(sh("git", ["show", `${sha}:.factory/manifest.json`])).files ?? {})) if (typeof v === "string" && v !== "user") (previous[k] ??= []).push(v); } catch { /* an unreadable version tells nothing */ }
+  }
+  return (manifestCache = { ...m, previous });
+};
 const quoteSh = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
 const bundleFiles = (bundle, only) => new Map(walk(bundle).filter((rel) => !only || only.includes(rel)).sort().map((rel) => [rel, fs.readFileSync(path.join(bundle, rel))]));
 const rsyncShell = (h) => `ssh ${sshArgsFor(h).slice(0, -1).map((a) => JSON.stringify(a)).join(" ")}`;
@@ -744,6 +753,11 @@ const placeWhere = (host, dir) => (host.kind === "local" ? dir : `${host.name}:$
 function sayKept(plan, host, dir, beside) {
   const at = placeWhere(host, dir);
   for (const k of plan.kept) {
+    // start puts the new version where update would have, unless update already did: there it may be the template's, and this file the project's own.
+    if (beside) {
+      const n = path.join(cwd, ".factory/new", plan.bundleDir, k.rel), pure = manifestNow().files?.[`${plan.bundleDir}/${k.rel}`] === hash(plan.files.get(k.rel).toString("utf8"));
+      if (pure || !fs.existsSync(n)) { fs.mkdirSync(path.dirname(n), { recursive: true }); fs.writeFileSync(n, plan.files.get(k.rel)); }
+    }
     if (k.rel !== "factory.config.json") { say(`  keep   ${at}/${k.rel} (changed there since the template installed it)${beside ? ` → new version beside it: ${at}/${k.rel}.new` : ""}; also in .factory/new/${plan.bundleDir}/${k.rel}`); continue; }
     // The Controller's own config is whole its own: tuned there (models, caps, calibration), so it is neither replaced nor merged.
     let diff = [];
@@ -1057,13 +1071,18 @@ const laptopNote = (c) => {
   if (others.length) say(`Note: ${others.join(", ")} (kind local in the config) ${others.length > 1 ? "are" : "is"} the human's own machine, not this one: its clone, standard and Front side are set up by running update and start there. Nothing is done for it from here.`);
 };
 // The one thing a person has to tell a machine: that a host with an ssh target it cannot resolve is itself.
+// True when `dir` is a clone (or worktree) of the repository this runs in: the same git common directory.
+const sameRepo = (dir) => {
+  try { const common = spawnSync("git", ["-C", dir, "rev-parse", "--git-common-dir"], { encoding: "utf8" }).stdout?.trim(); return Boolean(common) && fs.realpathSync(path.resolve(dir, common)) === gitCommonDir(); } catch { return false; }
+};
 const selfHint = (h, c) => {
-  try { if (fs.realpathSync(cloneDir(h, c)) !== fs.realpathSync(path.dirname(gitCommonDir()))) return ""; } catch { return ""; }
+  if (!sameRepo(cloneDir(h, c))) return "";
   return ` This checkout is that host's clone (${cloneDir(h, c).replace(os.homedir(), "~")}): if this machine is ${h.name}, say so once with \`agentic-factory this-machine ${h.ssh}\`, and the CLI works here without ssh.`;
 };
 function thisMachine() {
   const c = fs.existsSync("factory.config.json") ? readConfig() : null;
   const first = args[1], marker = readMarker(), target = first && !first.startsWith("--") ? first : "";
+  if (!c && target && !flag("--forget")) { say("Run this in the project: it needs its factory.config.json to check that the host is this machine. Nothing recorded."); process.exit(1); }
   if (flag("--forget")) {
     const keep = target ? marker.ssh.filter((t) => t !== target) : [];
     if (keep.length) writeFileAtomic(markerFile(), JSON.stringify({ machineId: marker.machineId, ssh: keep }, null, 2) + "\n");
@@ -1077,6 +1096,8 @@ function thisMachine() {
     return;
   }
   const hosts = (c?.hosts.workers ?? []).filter((h) => h.kind === "remote" && h.ssh === target);
+  // The target must also belong to a host whose clone is this repository: another machine that happens to be unreachable right now never qualifies.
+  if (hosts.length && !sameRepo(cloneDir(hosts[0], c))) { say(`${target} is the host ${hosts[0].name}, whose clone ${cloneDir(hosts[0], c).replace(os.homedir(), "~")} is not this repository on this machine, so this cannot be that host. Run this in its clone (hosts.workers[].projectDir or projectsDir/<project>). Nothing recorded.`); process.exit(1); }
   if (c && !hosts.length) { say(`No remote host in this project's factory.config.json has the ssh target ${target} (${c.hosts.workers.filter((h) => h.kind === "remote").map((h) => `${h.name}: ${h.ssh}`).join("; ") || "no remote host"}). Nothing recorded.`); process.exit(1); }
   if (sshUser(target) && sshUser(target) !== os.userInfo().username) { say(`${target} names the user ${sshUser(target)}, and this runs as ${os.userInfo().username}: that is not this login on this machine. Nothing recorded.`); process.exit(1); }
   // An ssh target that answers from here is either another machine or one this machine can already reach: marking it would send the work to the wrong place.
@@ -1670,7 +1691,8 @@ async function start() {
       const created = createdHandle(r.stdout);   // without a handle the Controller's name finds it
       if (created) recordHandle(c, ctl, created, ctl.kind === "local" ? sessionDir : path.posix.resolve(remotePath.replace(/^~(?=\/|$)/, remoteHome)));
       // A terminal Orca made without showing it ("surface": "background") is there but not discoverable until it is focused.
-      if (created && /"surface":\s*"background"/.test(r.stdout)) spawnSync(ORCA_BIN, ["terminal", "focus", "--terminal", created, ...(ctl.kind === "local" ? [] : ["--environment", ctl.orcaEnvironment]), "--json"], { encoding: "utf8" });
+      // `focus` is what Orca 1.4.x calls it; a newer Orca names it `switch`.
+      if (created && /"surface":\s*"background"/.test(r.stdout)) for (const sub of ["focus", "switch"]) if (/"ok":\s*true/.test(spawnSync(ORCA_BIN, ["terminal", sub, "--terminal", created, ...(ctl.kind === "local" ? [] : ["--environment", ctl.orcaEnvironment]), "--json"], { encoding: "utf8" }).stdout ?? "")) break;
       say(`Controller session: started (Orca terminal "${title}"). ${TRUST_HINT}`);
     }
     else { failed++; say(`Controller session: Orca could not create the terminal (${(r.stderr || r.stdout || "").trim().slice(0, 200)}). Start it by hand:\n  ${session}`); }

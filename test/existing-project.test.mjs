@@ -198,6 +198,59 @@ test("a file the template installed and the project did not change is replaced b
   assert.match(r.stdout, /keep\s+\S*front-agent\/demo\/FRONT_AGENT\.md .*beside it/);
   assert.match(fs.readFileSync(path.join(w.fa, "FRONT_AGENT.md"), "utf8"), /Our own note\./);
   assert.match(fs.readFileSync(path.join(w.fa, "FRONT_AGENT.md.new"), "utf8"), /A new front rule\./);
+  assert.match(fs.readFileSync(path.join(w.project, ".factory/new/.factory/front-agent/FRONT_AGENT.md"), "utf8"), /A new front rule\./, "start offers it in .factory/new too, as it says");
+  w.done();
+});
+
+test("an installation with no record, whose files an older update recorded only in the committed manifest, is not taken for changed", () => {
+  const w = world();
+  // The adoption commit holds the first render of the Controller's config; an older start installed it; an older update moved the
+  // manifest on to a render that was never installed; now the config changes and update runs.
+  const key = ".factory/controller/factory.config.json";
+  fs.mkdirSync(w.ctl, { recursive: true }); fs.copyFileSync(path.join(w.project, key), path.join(w.ctl, "factory.config.json"));
+  olderInstall(w, "factory.config.json", '{"a render nobody installed": true}\n');
+  const c = w.readConfig(); c.reviews.maxRounds = 5; w.writeConfig(c);
+  let r = w.run("update");
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.doesNotMatch(r.stdout, /keep\s+\S*controller-demo\/factory\.config\.json/, "it was installed by the template, nobody changed it");
+  r = w.run("start");
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(w.ctl, "factory.config.json"), "utf8")).reviews.maxRounds, 5, "the change reached the Controller");
+  assert.equal(fs.existsSync(path.join(w.ctl, "factory.config.json.new")), false);
+  w.done();
+});
+
+test("a host is only taken for this machine when its clone is this repository here", () => {
+  const w = world({ marker: false });
+  const c = w.readConfig(); c.hosts.workers[0].projectDir = path.join(w.base, "somewhere-else"); w.writeConfig(c);
+  const r = w.run("this-machine", {}, ALIAS);
+  assert.equal(r.status, 1); assert.match(r.stdout, /is not this repository on this machine, so this cannot be that host/);
+  assert.equal(fs.existsSync(w.markerFile), false);
+  w.done();
+});
+
+test("a remote host's Controller directory is looked at over ssh with the real probe and rsync: a changed file is kept, the new one lands beside it, the rest is replaced", { skip: spawnSync("rsync", ["--version"]).status !== 0 }, () => {
+  const w = world({ marker: false });
+  // An ssh that runs the command on this machine, real rsync through it (as untracked-standard.test.mjs does): the host is reachable, and not this machine.
+  // (The one command it does not run is start's skills-and-load-log line: a logger started through it keeps this fake's pipe open.)
+  fs.writeFileSync(path.join(w.bin, "ssh"), '#!/bin/bash\nwhile [ "$1" = "-o" ] || [ "$1" = "-F" ]; do shift 2; done\nshift\ncase "$*" in *loadlog.sh*) echo ok; exit 0;; esac\nexec bash -c "$*"\n', { mode: 0o755 });
+  fs.rmSync(path.join(w.bin, "rsync"));
+  assert.equal(w.run("update").status, 0);
+  let r = w.run("start");
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /Controller bundle: server:\S*controller-demo/);
+  assert.ok(fs.existsSync(path.join(w.ctl, ".factory-installed.json")), "the record was written over rsync");
+  fs.appendFileSync(path.join(w.ctl, "CONTROLLER.md"), "\nOur own rule.\n");
+  fs.appendFileSync(path.join(w.project, ".factory/controller/heartbeat.mjs"), "\n// a newer heartbeat\n");
+  r = w.run("update");
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /keep\s+server:\S*controller-demo\/CONTROLLER\.md \(changed there since the template installed it\)/);
+  r = w.run("start");
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /keep\s+server:\S*controller-demo\/CONTROLLER\.md .*→ new version beside it/);
+  assert.match(fs.readFileSync(path.join(w.ctl, "CONTROLLER.md"), "utf8"), /Our own rule\./);
+  assert.equal(fs.readFileSync(path.join(w.ctl, "CONTROLLER.md.new"), "utf8"), fs.readFileSync(path.join(w.project, ".factory/controller/CONTROLLER.md"), "utf8"));
+  assert.match(fs.readFileSync(path.join(w.ctl, "heartbeat.mjs"), "utf8"), /a newer heartbeat/, "a file nobody changed there is replaced");
   w.done();
 });
 
