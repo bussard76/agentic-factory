@@ -41,6 +41,10 @@ If A is not an ancestor of the head (the branch was rebased or rewritten), the s
 
 Every check of round 1 and every item under "Always checked" applies to these changes. A new `blocker` or `major` is raised only for a functional defect, a safety problem (a change that could reach a real external system, data loss, a secret, real data), or a wrong level or unannounced architectural change in these changes; anything else is a `minor` or a debt candidate. Code outside these changes was reviewed in an earlier round and is not reviewed again. The full gates still run on current `{{MAIN}}` plus the branch, and the new head gets its own `Reviewed commit`, so product code keeps its independent review before every push.
 
+## What the wave merges
+
+A review covers one commit: the one in the findings file's `Reviewed commit:` line (or, for the docs-only path, the head in the docs-only evidence). The Controller records that commit in its own journal after every verdict (`node reviewed.mjs <task> <review-branch>`), and the wave merges exactly that commit, never whatever the branch points at when the wave runs. If the branch on origin has moved past it (a push after the review, a rewritten branch), the wave stops before it merges anything and names both commits; a clean merge of `{{MAIN}}` into the branch does not count as a move, one that changes anything else does. The task then goes back to review as after any change: a fresh Tester on the current head, whose `Reviewed commit` is the one that counts from then on. A fix after a pass is no failed round. A worker therefore cannot add code after its review and have it integrated: pushing after `worker_done` costs a new review.
+
 ## Reviewer rules
 
 - **Read-only.** Do not edit, stash or reset implementation files. The only file you write is your findings file.

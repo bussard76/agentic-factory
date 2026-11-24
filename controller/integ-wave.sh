@@ -4,7 +4,9 @@
 # of several reviewed tasks has no such pair, so it would be rejected. No Docker: that is the release gate.
 # Fails fast: any setup, merge, gate or push failure ends with a non-zero exit and a line naming the step.
 # Usage (inside the integration worktree, env from wave.mjs):
-#   integ-wave.sh "<title>" "<summary>" <branch>...   branches as origin/<prefix>/<name>, each task with its review branch
+#   integ-wave.sh "<title>" "<summary>" <branch>...   branches as origin/<prefix>/<name>, each task with its review branch. wave.mjs binds each to the commit the Controller's
+#   journal records as reviewed: origin/<branch>@<sha> (a task branch: merges <sha>; stops the wave if origin has moved past it), origin/<branch>~<sha> (its review
+#   branch: may add docs/reviews/ only). A plain origin/<branch> (status-wave-<n>) is merged as it is.
 # Env: WAVE_LOG_DIR (optional), MAIN, INSTALL_CMD, VERIFY_CMD (required, non-empty), E2E_CMD (optional), GATE (absolute path to this project's gate), WAVE_PROJECT (its name), TRAILER (optional)
 # Docs-only path (docs/testing.md): with docsOnly.enabled in origin/MAIN's factory.config.json, a wave that changes
 # documentation only runs commands.formatCheck and commands.markdownCheck from that config instead of verify and e2e.
@@ -50,6 +52,49 @@ arm() {
 }
 git merge --abort 2>/dev/null; git reset -q --hard 2>/dev/null
 git fetch -q origin || { echo "FETCH-FAILED"; exit 1; }
+# The wave merges what was reviewed, not what a branch points at now. wave.mjs binds every branch to the commit the
+# Controller's journal records: `origin/<b>@<sha>` is a task branch (its tip on origin must be <sha>; a tip that is <sha> plus
+# nothing but clean merges of $MAIN counts as the same), `origin/<b>~<sha>` a review branch of that task (it may add files under
+# docs/reviews/ only, beyond its merge base with <sha>). A plain `origin/<b>` (status-wave-<n>, or a call without wave.mjs) is
+# merged as it is. All of it is checked here, after the fetch and before anything is merged: one failing branch stops the whole
+# wave (a status branch marks every task of the wave integrated, and a review branch carries its task's commit), with a line per
+# branch naming both commits. Nothing is merged or pushed then.
+only_main_merges() { # $1 tip, $2 recorded commit: the tip is the recorded commit plus clean merges of $MAIN, and nothing else
+  local t="$1" w="$2" n=0 c p1 p2 p3 out tree
+  while [ "$t" != "$w" ]; do
+    n=$((n + 1)); [ "$n" -le 200 ] || return 1
+    read -r c p1 p2 p3 <<< "$(git rev-list --parents -n 1 "$t")"
+    [ -n "$p2" ] && [ -z "$p3" ] || return 1
+    git merge-base --is-ancestor "$p2" "origin/$MAIN" || return 1
+    out=$(git merge-tree --write-tree "$p1" "$p2" 2>/dev/null) || return 1
+    tree=${out%%$'\n'*}
+    [ "$tree" = "$(git rev-parse "$t^{tree}")" ] || return 1
+    t="$p1"
+  done
+}
+stopped=""
+for b in $BR; do
+  case "$b" in *@*|*~*) ;; *) continue ;; esac
+  case "$b" in *@*) ref="${b%@*}"; want="${b##*@}"; kind=task ;; *) ref="${b%~*}"; want="${b##*~}"; kind=review ;; esac
+  if ! printf %s "$want" | grep -Eq '^[0-9a-f]{40}$'; then stopped="$stopped  $ref: '$want' is not a full commit id; wave.mjs writes it from the journal.\n"; continue; fi
+  tip=$(git rev-parse --verify -q "$ref^{commit}") || { stopped="$stopped  $ref: not found on origin after the fetch (reviewed commit $want). Nothing is merged for it.\n"; continue; }
+  git cat-file -e "$want^{commit}" 2>/dev/null || { stopped="$stopped  $ref: the reviewed commit $want is not in this clone any more (the branch was rewritten?); origin has $tip. Send the task back to review.\n"; continue; }
+  if [ "$kind" = task ]; then
+    [ "$tip" = "$want" ] && continue
+    if only_main_merges "$tip" "$want"; then echo "$ref: origin is at $tip, the reviewed commit $want plus clean merges of $MAIN only: merging the reviewed commit"; continue; fi
+    stopped="$stopped  $ref: reviewed $want, but origin has $tip ($(git rev-list --count "$want..$tip" 2>/dev/null || echo '?') commits after it, or the branch was rewritten). Nothing is merged for it. Send the task back to review (CONTROLLER.md, \"A wave merges what was reviewed\"), then start the wave again.\n"
+  else
+    base=$(git merge-base "$want" "$tip") || { stopped="$stopped  $ref: no common history with the reviewed commit $want.\n"; continue; }
+    extra=$(git diff --name-only "$base" "$tip" | grep -v '^docs/reviews/' | head -3 | tr '\n' ' ')
+    [ -z "$extra" ] || stopped="$stopped  $ref: a review branch of the task reviewed at $want, but it changes more than docs/reviews/ (${extra}). Nothing is merged. Send the task back to review.\n"
+  fi
+done
+if [ -n "$stopped" ]; then
+  echo "WAVE-STOPPED: nothing was merged or pushed. What a branch on origin points at is not what was reviewed:"
+  printf '%b' "$stopped"
+  echo "What to do: send these tasks back to review as at 'Developer done' (a Tester on the branch's current tip: mkspec test with the next round, or node docsonly.mjs for a docs-only task), record the passing verdict with node reviewed.mjs, and start the wave again, with the other tasks or after the review. A status-wave branch must list only the tasks the wave merges: make it again."
+  exit 1
+fi
 # Decided here and once, from this clone and from main: a branch merged below cannot switch the check off.
 if [ -f "$(git rev-parse --git-common-dir)/factory/standard.json" ] || git show "origin/$MAIN:factory.config.json" 2>/dev/null | grep -Eq '"footprint"[[:space:]]*:[[:space:]]*"minimal"'; then STANDARD=1; fi
 # Also decided once, from main: whether the docs-only path is on, its checks, and the classifier itself (main's copy of
@@ -74,17 +119,19 @@ if [ -n "${INSTALL_CMD:-}" ]; then bash -c "$INSTALL_CMD" > "$LOGS/wave-install.
 arm
 merged=0
 for b in $BR; do
-  if ! git merge -q --no-ff --no-commit "$b" > "$LOGS/wave-merge.log" 2>&1; then
+  # What is merged: the reviewed commit for a task branch (origin/<b>@<sha>), the branch as fetched otherwise (nothing moves after the fetch).
+  case "$b" in *@*) name="${b%@*}"; m="${b##*@}" ;; *~*) name="${b%~*}"; m="$name" ;; *) name="$b"; m="$b" ;; esac
+  if ! git merge -q --no-ff --no-commit "$m" > "$LOGS/wave-merge.log" 2>&1; then
     u=$(git diff --name-only --diff-filter=U)
-    echo "CONFLICT in $b: ${u:-$(tail -2 "$LOGS/wave-merge.log" | tr '\n' ' ')}"; git merge --abort 2>/dev/null; exit 1
+    echo "CONFLICT in $name: ${u:-$(tail -2 "$LOGS/wave-merge.log" | tr '\n' ' ')}"; git merge --abort 2>/dev/null; exit 1
   fi
-  if git diff --cached --quiet; then git merge --abort 2>/dev/null; echo "nothing from $b"; continue; fi
+  if git diff --cached --quiet; then git merge --abort 2>/dev/null; echo "nothing from $name"; continue; fi
   # The merged commits passed the commit hooks with their own ADR references; carry those references into the merge
   # message, so a task that touches a protected file (an ADR, AGENTS.md, a hook) merges without a second approval.
-  refs=$(git log --format=%B "origin/$MAIN..$b" | grep -oE 'ADR-[0-9]{4}' | sort -u | tr '\n' ' ')
-  git commit -q -m "Merge $b ($TITLE)" -m "$SUMMARY" ${refs:+-m "Refs: $refs"} ${TRAILER:+-m "$TRAILER"} > "$LOGS/wave-commit.log" 2>&1 \
-    || { strip < "$LOGS/wave-commit.log" | grep -a -iE "fail|protected|factory" | head -6; echo "COMMIT-FAILED for $b"; exit 1; }
-  echo "merged $b"; merged=$((merged + 1))
+  refs=$(git log --format=%B "origin/$MAIN..$m" | grep -oE 'ADR-[0-9]{4}' | sort -u | tr '\n' ' ')
+  git commit -q -m "Merge $name ($TITLE)" -m "$SUMMARY" -m "Merged commit: $(git rev-parse "$m")" ${refs:+-m "Refs: $refs"} ${TRAILER:+-m "$TRAILER"} > "$LOGS/wave-commit.log" 2>&1 \
+    || { strip < "$LOGS/wave-commit.log" | grep -a -iE "fail|protected|factory" | head -6; echo "COMMIT-FAILED for $name"; exit 1; }
+  echo "merged $name$([ "$m" != "$name" ] && echo " at $m")"; merged=$((merged + 1))
 done
 [ "$merged" -gt 0 ] || { echo "NOTHING-TO-MERGE"; exit 1; }
 if [ -n "${INSTALL_CMD:-}" ]; then bash -c "$INSTALL_CMD" > "$LOGS/wave-install.log" 2>&1 || { echo INSTALL-FAILED; tail -3 "$LOGS/wave-install.log"; exit 1; }; fi

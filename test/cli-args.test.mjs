@@ -13,7 +13,7 @@ import { grammar, leadingComment, parse } from "../controller/cli.mjs";
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const CLI = path.join(ROOT, "bin/agentic-factory.mjs");
 // Modules other scripts import; nobody runs them.
-const LIBRARIES = ["controller/lib.mjs", "controller/cli.mjs", "controller/controller-terminal.mjs", "controller/front-notice.mjs", "front-agent/hosts.mjs", "front-agent/cli.mjs"];
+const LIBRARIES = ["controller/lib.mjs", "controller/reviewrecord.mjs", "controller/cli.mjs", "controller/controller-terminal.mjs", "controller/front-notice.mjs", "front-agent/hosts.mjs", "front-agent/cli.mjs"];
 // Installed as single files, so they handle --help themselves. gate's arguments are the command it runs, and the
 // guardrails take a hook's subcommand, so only arm.mjs also rejects unknown arguments.
 const STANDALONE = ["controller/gate.mjs", "templates/tools/factory-guardrails.mjs", "standard/arm.mjs"];
@@ -117,6 +117,7 @@ const FOREIGN = {
   "controller/capacity.mjs": ["--json"],
   "controller/cleanup.mjs": ["--json", "--full", "-q", "--prune", "--porcelain", "--terminal", "--verify", "--worktree", "-r", "--merged", "--delete", "--dispatch"],
   "controller/docsonly.mjs": ["-C", "-q", "--verify", "--path-format", "--git-common-dir", "--json", "--ticket", "--issue", "--ticket-text", "--jq"],
+  "controller/reviewed.mjs": ["-C", "-q", "-e", "--verify", "--is-ancestor"],
   "controller/heartbeat.mjs": ["--json", "--label", "--state", "--terminal", "--worktree", "--comment", "--workspace-status", "--unread", "--limit", "--for", "--timeout-ms", "--text", "--enter", "--screen"],
   "controller/restart.mjs": ["--json", "--terminal", "--worktree", "-C", "--format"],
   "controller/names.mjs": ["--repo", "--limit", "--json", "--worktree", "--display-name", "--terminal", "--title"],
