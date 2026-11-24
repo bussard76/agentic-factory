@@ -679,7 +679,7 @@ test("the wave after a docs-only task: no review branch is needed for the push g
   assert.equal(c.run("T03", "agents/t03").status, 0);
   // The Controller's status branch of the wave: it sets Status: integrated in the ticket (CONTROLLER.md, step 2).
   r.git("checkout", "-q", "-b", "status-wave-1", "main"); r.write("docs/tasks/T03-document-api.md", r.read("docs/tasks/T03-document-api.md").replace(/^Status:.*$/m, "Status: integrated")); commit(r, "status"); r.git("checkout", "-q", "main");
-  const w = wave(r, ["agents/t03", "status-wave-1"], { gate: '#!/bin/sh\nexec "$@"\n', verify: "echo VERIFY-RAN" });
+  const w = wave(r, ["agents/t03", "status-wave-1"], { gate: '#!/bin/sh\nexec "$@"\n', verify: "echo VERIFY-RAN", env: { WAVE_TASKS: "t03" } });
   assert.equal(w.status, 0, w.stdout + w.stderr);
   assert.match(w.stdout, /GATE-PATH full: not docs-only/); assert.match(w.stdout, /verify PASS/); assert.match(w.stdout, /PUSHED main/);
   assert.equal(r.git("show", "origin/main:README.md"), "# Demo\nA line more.");

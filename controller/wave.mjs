@@ -33,6 +33,7 @@ if (bound.problems) {
   process.exit(1);
 }
 const bondedBranches = bound.args;
+envs.WAVE_TASKS = bound.tasks.join(" ");   // the tasks of this wave: the only ticket files a status-wave branch may touch
 const exportLine =Object.entries(envs).map(([k, v]) => `export ${k}=${k === "GATE" ? `"${v}"` : q(v)}`).join("; ");
 const cmd = `clear; T=$(nproc 2>/dev/null || sysctl -n hw.ncpu); while [ "$(cut -d. -f1 /proc/loadavg 2>/dev/null || echo 0)" -ge "$T" ]; do sleep 15; done; ${exportLine}; echo ${b64} | base64 -d > /tmp/${PROJECT}-integ-wave.sh; WAVE_LOG_DIR=/tmp/${PROJECT}-wave bash /tmp/${PROJECT}-integ-wave.sh ${q(title)} ${q(summary)} ${bondedBranches.join(" ")} 2>&1 | tee /tmp/${PROJECT}-wave.out; echo WAVE-END`;
 journal("wave", title, { host: host.name, note: bondedBranches.join(" ") });

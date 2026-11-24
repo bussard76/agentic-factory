@@ -5,9 +5,9 @@
 # Fails fast: any setup, merge, gate or push failure ends with a non-zero exit and a line naming the step.
 # Usage (inside the integration worktree, env from wave.mjs):
 #   integ-wave.sh "<title>" "<summary>" <branch>...   every branch bound by wave.mjs to what the Controller's journal records as reviewed:
-#   origin/<branch>@<sha> (a task branch: merges <sha>), origin/<branch>~<sha>:<rsha> (its review branch: merges <rsha>, docs/reviews/ files only),
-#   origin/status-wave-<n> (Status: lines of ticket files only). Any other argument stops the wave. The rules are in the block after the fetch.
-# Env: WAVE_LOG_DIR (optional), TASKS_DIR (the ticket directory, default docs/tasks), MAIN, INSTALL_CMD, VERIFY_CMD (required, non-empty), E2E_CMD (optional), GATE (absolute path to this project's gate), WAVE_PROJECT (its name), TRAILER (optional)
+#   origin/<branch>@<sha> (a task branch: merges <sha>), origin/<branch>~<sha>:<rsha>=<file> (its review branch: merges <rsha>, which may add that one findings file only),
+#   origin/status-wave-<n> (sets Status: integrated on tickets of this wave, one line each, nothing else). Any other argument stops the wave. The rules are in the block after the fetch.
+# Env: WAVE_LOG_DIR (optional), TASKS_DIR (the ticket directory, default docs/tasks), WAVE_TASKS (task ids of the wave, lower case, space separated), MAIN, INSTALL_CMD, VERIFY_CMD (required, non-empty), E2E_CMD (optional), GATE (absolute path to this project's gate), WAVE_PROJECT (its name), TRAILER (optional)
 # Docs-only path (docs/testing.md): with docsOnly.enabled in origin/MAIN's factory.config.json, a wave that changes
 # documentation only runs commands.formatCheck and commands.markdownCheck from that config instead of verify and e2e.
 # Every other wave runs commands.verify (and commands.e2e) through GATE on the merged candidate and pushes only on success:
@@ -56,15 +56,17 @@ git fetch -q --no-tags origin || { echo "FETCH-FAILED"; exit 1; }
 # the fetch and before anything is merged, and a ref it cannot bind stops the whole wave (nothing merged or pushed): unknown is
 # never merged. Everything is resolved once, to a commit id, from refs/remotes/origin/* (a tag of the same name is not looked at),
 # and it is that commit id that is merged. The kinds of ref a wave can merge, and the rule for each:
-#   origin/<b>@<sha>              a task branch (also an Architect branch): its tip on origin must be <sha>, the commit the
-#                                 Controller's journal records as reviewed. A tip that is <sha> plus nothing but clean merges of
-#                                 $MAIN (decided on content, below) counts as unchanged. <sha> is what is merged.
-#   origin/<b>~<sha>:<rsha>       the review branch of that task (Tester round, re-evaluation, conformance): its tip must be <rsha>,
-#                                 the commit reviewed.mjs read, and, against its merge base with <sha>, it may only ADD or MODIFY
-#                                 regular files under docs/reviews/ (no deletion, rename, mode change or other path). <rsha> is merged.
-#   origin/status-wave-<n>        no review exists for it: its content against its merge base with $MAIN may only MODIFY regular
-#                                 files <TASKS_DIR>/<name>.md (the ticket files), and only their `Status:` lines. Its tip is merged.
-#   anything else                 stops the wave.
+#   origin/<b>@<sha>               a task branch (also an Architect branch): its tip on origin must be <sha>, the commit the
+#                                  Controller's journal records as reviewed. A tip that is <sha> plus nothing but clean merges of
+#                                  $MAIN (decided on content, below) counts as unchanged. <sha> is what is merged.
+#   origin/<b>~<sha>:<rsha>=<file> the review branch of that task (Tester round, re-evaluation, conformance): its tip must be <rsha>,
+#                                  the commit reviewed.mjs read, and, against its merge base with <sha>, it may only ADD the one
+#                                  regular findings file <file> (docs/reviews/<task>-review-<n>, -review-final or
+#                                  -architecture-conformance .md), which names <sha> on its only Reviewed commit line. <rsha> is merged.
+#   origin/status-wave-<n>         no review exists for it: against its merge base with $MAIN it may only MODIFY the ticket files
+#                                  <TASKS_DIR>/<name>.md of the tasks in this wave ($WAVE_TASKS), one `Status:` line each, changed
+#                                  from an allowed value to `integrated`, and nothing else. Its tip is merged.
+#   anything else                  stops the wave.
 # Content is compared with `git diff --raw -z --no-renames`, by old and new mode and path, so a rename cannot hide a deletion.
 only_main_merges() { # $1 tip, $2 recorded commit: the tip is the recorded commit plus clean merges of $MAIN, and nothing else
   local t="$1" w="$2" n=0 c p1 p2 p3 out tree
@@ -79,28 +81,42 @@ only_main_merges() { # $1 tip, $2 recorded commit: the tip is the recorded commi
     t="$p1"
   done
 }
-# $1 base, $2 tip, $3 kind (review|status): prints what is not allowed, one path per line; nothing printed means fine.
-disallowed() {
-  local meta path om nm os ns st
+# $1 base, $2 tip, $3 the findings file this review branch may add (the exact path reviewed.mjs recorded), $4 the reviewed commit.
+# Prints what is not allowed; nothing printed means fine. The branch may add exactly that one regular file, nothing else, and the
+# file must name $4 on its only `Reviewed commit:` line. Compared with --no-renames, by old and new mode and path.
+review_extra() {
+  local meta path om nm os ns st n=0
+  while IFS= read -r -d '' meta && IFS= read -r -d '' path; do
+    read -r om nm os ns st <<< "${meta#:}"; n=$((n + 1))
+    if [ "$st" != A ] || [ "$om" != 000000 ] || [ "$nm" != 100644 ]; then echo "$st $path (mode $om>$nm)"; continue; fi
+    if [ "$path" != "$3" ]; then echo "$st $path (the only file allowed is $3)"; continue; fi
+    if [ "$(git show "$2:$path" | grep -c '^Reviewed commit:')" != 1 ] || [ "$(git show "$2:$path" | grep -Ec "^Reviewed commit:[[:space:]]*\`?$4\`?[[:space:]]*\$")" != 1 ]; then echo "$st $path (its Reviewed commit line is not $4)"; fi
+  done < <(git diff --no-renames --raw -z "$1" "$2")
+  [ "$n" = 1 ] || echo "$n changed files, expected exactly one ($3)"
+}
+# The values of `Status:` in a ticket (templates/docs/tasks/T00-template.md): draft | ready | building | review | passed | integrated | paused.
+# $1 base, $2 tip. A status branch only moves tickets of THIS wave ($WAVE_TASKS: the task ids of the branches wave.mjs was given) to
+# integrated: per ticket file exactly one `Status:` line, from an allowed value other than integrated to integrated, and nothing else
+# on the line or in the file. Parsed from the hunk of `git diff -U0`, not filtered by prefixes. Prints what is not allowed.
+status_extra() {
+  local meta path om nm os ns st d f lf k ok body
   while IFS= read -r -d '' meta && IFS= read -r -d '' path; do
     read -r om nm os ns st <<< "${meta#:}"
-    case "$3" in
-      review) case "$path" in docs/reviews/*) ;; *) echo "$st $path"; continue ;; esac
-              if [ "$st" = A ] && [ "$om" = 000000 ] && [ "$nm" = 100644 ]; then continue; fi
-              if [ "$st" = M ] && [ "$om" = 100644 ] && [ "$nm" = 100644 ]; then continue; fi
-              echo "$st $path (mode $om>$nm)" ;;
-      status) if [ "$st" = M ] && [ "$om" = 100644 ] && [ "$nm" = 100644 ] && printf %s "$path" | grep -Eq "^${TASKS_DIR%/}/[^/]+\.md$"; then
-                if git diff --no-renames -U0 "$1" "$2" -- "$path" | grep -E '^[-+]' | grep -Ev '^(\+\+\+|---) ' | grep -Ev '^[-+]Status:' | grep -q .; then echo "$st $path (more than Status: lines)"; fi
-              else echo "$st $path (mode $om>$nm)"; fi ;;
-    esac
+    d="${path%/*}"; f="${path##*/}"
+    if [ "$st" != M ] || [ "$om" != 100644 ] || [ "$nm" != 100644 ] || [ "$d" != "${TASKS_DIR%/}" ] || [ "${f%.md}" = "$f" ]; then echo "$st $path (mode $om>$nm; only ${TASKS_DIR%/}/*.md may change)"; continue; fi
+    lf=$(printf %s "$f" | tr 'A-Z' 'a-z'); ok=0
+    for k in $WAVE_TASKS; do case "$lf" in "$k".md|"$k"-*.md) ok=1 ;; esac; done
+    if [ "$ok" != 1 ]; then echo "$st $path (not a ticket of this wave: ${WAVE_TASKS:-none})"; continue; fi
+    body=$(git diff --no-renames -U0 "$1" "$2" -- "$path" | sed -n '/^@@/,$p' | grep -v '^@@')
+    if [ "$(printf '%s\n' "$body" | wc -l | tr -d ' ')" != 2 ] || ! printf '%s\n' "$body" | sed -n 1p | grep -Eq '^-Status: (draft|ready|building|review|passed|paused)$' || [ "$(printf '%s\n' "$body" | sed -n 2p)" != "+Status: integrated" ] || [ "$(git show "$2:$path" | grep -c '^Status:')" != 1 ]; then echo "$st $path (more than one Status: line changed from an allowed value to integrated)"; fi
   done < <(git diff --no-renames --raw -z "$1" "$2")
 }
-TASKS_DIR="${TASKS_DIR:-docs/tasks}"
+TASKS_DIR="${TASKS_DIR:-docs/tasks}"; WAVE_TASKS="${WAVE_TASKS:-}"
 stopped=""; MERGES=()
 for b in $BR; do
   case "$b" in
     *@*)  ref="${b%@*}"; want="${b##*@}"; kind=task ;;
-    *~*:*) ref="${b%~*}"; rest="${b##*~}"; want="${rest%%:*}"; rwant="${rest##*:}"; kind=review ;;
+    *~*:*) ref="${b%~*}"; rest="${b##*~}"; want="${rest%%:*}"; r2="${rest#*:}"; rwant="${r2%%=*}"; rfile=""; case "$r2" in *=*) rfile="${r2#*=}" ;; esac; kind=review ;;
     origin/status-wave-[0-9]*) ref="$b"; kind=status ;;
     *) stopped="$stopped  $b: not bound to a reviewed commit and not a status-wave-<n> branch; a wave merges only what a recorded review covers (wave.mjs binds the branches).\n"; continue ;;
   esac
@@ -119,12 +135,13 @@ for b in $BR; do
       if ! printf %s "$rwant" | grep -Eq '^[0-9a-f]{40}$'; then stopped="$stopped  $ref: no recorded commit of this review branch ('$rwant'): run node reviewed.mjs for it.\n"; continue; fi
       if [ "$tip" != "$rwant" ]; then stopped="$stopped  $ref: reviewed.mjs read $rwant, but origin has $tip: the review branch was pushed to after the Controller read it. Send the task back to review.\n"; continue; fi
       base=$(git merge-base "$want" "$tip") || { stopped="$stopped  $ref: no common history with the reviewed commit $want.\n"; continue; }
-      extra=$(disallowed "$base" "$tip" review | head -3 | tr '\n' ';')
-      if [ -n "$extra" ]; then stopped="$stopped  $ref: a review branch of the task reviewed at $want may add or change files under docs/reviews/ only, but it has: $extra Nothing is merged. Send the task back to review.\n"; else MERGES+=("$ref $tip"); fi ;;
+      [ -n "$rfile" ] || { stopped="$stopped  $ref: no findings file recorded for this review branch: run node reviewed.mjs for it.\n"; continue; }
+      extra=$(review_extra "$base" "$tip" "$rfile" "$want" | head -3 | tr '\n' ';')
+      if [ -n "$extra" ]; then stopped="$stopped  $ref: a review branch of the task reviewed at $want may add exactly its findings file ($rfile, naming $want), but: $extra Nothing is merged. Send the task back to review.\n"; else MERGES+=("$ref $tip"); fi ;;
     status)
       base=$(git merge-base "refs/remotes/origin/$MAIN" "$tip") || { stopped="$stopped  $ref: no common history with $MAIN.\n"; continue; }
-      extra=$(disallowed "$base" "$tip" status | head -3 | tr '\n' ';')
-      if [ -n "$extra" ]; then stopped="$stopped  $ref: a status branch may only change the Status: lines of ${TASKS_DIR%/}/<name>.md files, but it has: $extra Nothing is merged. Make the status branch again from $MAIN.\n"; else MERGES+=("$ref $tip"); fi ;;
+      extra=$(status_extra "$base" "$tip" | head -3 | tr '\n' ';')
+      if [ -n "$extra" ]; then stopped="$stopped  $ref: a status branch may only set Status: to integrated, one line per ticket file of this wave in ${TASKS_DIR%/}/ (${WAVE_TASKS:-no task}), but: $extra Nothing is merged. Make the status branch again from $MAIN.\n"; else MERGES+=("$ref $tip"); fi ;;
   esac
 done
 if [ -n "$stopped" ]; then

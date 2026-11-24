@@ -30,32 +30,45 @@ const events = (text, key) => {
   return { list: out };
 };
 
+/** Which later event may undo which earlier failed review of THE SAME commit. A failed review is final for its commit against
+ *  everything except the one event written for this: the re-evaluation (`final`) that follows the last failed Tester round
+ *  (PR #53: after the round limit the final functional re-evaluation reviews the very commit that round failed). So:
+ *    tester fail       is superseded by a LATER passing final; by nothing else (not by another Tester pass, not by docs-only
+ *                      or Architect, not by a conformance pass)
+ *    final fail        is never superseded
+ *    conformance fail  is never superseded (a new commit needs a new review)
+ *  Every pass event is judged against the failures that are still standing for its commit. */
+export const SUPERSEDES = { final: new Set(["tester"]) };   // a passing event of this path supersedes earlier failed events of these paths
+
 /** The state of a task's review, from the text of the journal, in the order the events were written.
  *  { state: "ok", head, event, covers }   the latest primary review (Tester round, re-evaluation, docs-only, Architect) passed
- *                                         and no review of any path failed on that commit; `covers` maps each review branch
- *                                         with a passing record for that commit to its event (the conformance branch too)
- *  { state: "failed", head, event }       the latest primary review failed, or a review of any path failed on the commit
+ *                                         and no failed review of that commit is left standing (see SUPERSEDES); `covers` maps
+ *                                         each review branch with a passing record for that commit to its event
+ *  { state: "failed", head, event }       the latest primary review failed, or a failed review of the commit still stands
  *  { state: "none" }                      no usable event names the task (a task reviewed before this record existed)
  *  { state: "unreadable", why }           the journal cannot be read, or a line that mentions the task cannot be parsed
- *  A failed review of a head is final for that head: a later pass of the same commit does not undo it. A conformance review
- *  never binds a head by itself, it can only fail one. `text` is the journal's text, or an Error (ENOENT: no journal).
- *  `key` is the task id in lower case, the part of the branch name after the branch prefix. */
+ *  A conformance review never binds a head by itself, it can only fail one. `text` is the journal's text, or an Error
+ *  (ENOENT: no journal). `key` is the task id in lower case, the part of the branch name after the branch prefix. */
 export function latestReview(text, key) {
   if (text instanceof Error) return text.code === "ENOENT" ? { state: "none" } : { state: "unreadable", why: text.message };
   const r = events(text, key);
   if (r.unreadable) return { state: "unreadable", why: r.unreadable };
-  const poisoned = new Set();
+  const standing = new Map();   // head -> the failed events that still stand
   let last = null;
   for (const e of r.list) {
     const conformance = e.path === "conformance";
     if (!conformance && !PRIMARY.has(e.path)) return { state: "unreadable", why: `a review event of ${key} has the path ${JSON.stringify(e.path)}` };
-    if (e.verdict === "fail") { poisoned.add(e.head); if (!conformance || last?.event.head === e.head) last = { ok: false, event: e }; }
-    else if ((e.verdict === "pass" || e.verdict === "docs-only") && !conformance) last = { ok: true, event: e };
-    else if (!(conformance && e.verdict === "pass")) return { state: "unreadable", why: `the review event of ${key} has the verdict ${JSON.stringify(e.verdict)}` };
+    if (e.verdict === "fail") { standing.set(e.head, [...(standing.get(e.head) ?? []), e]); if (!conformance || last?.event.head === e.head) last = { ok: false, event: e }; }
+    else if (e.verdict === "pass" || e.verdict === "docs-only") {
+      if (conformance) continue;
+      const undone = SUPERSEDES[e.path];
+      if (undone) standing.set(e.head, (standing.get(e.head) ?? []).filter((f) => !undone.has(f.path)));
+      last = { ok: true, event: e };
+    } else return { state: "unreadable", why: `the review event of ${key} has the verdict ${JSON.stringify(e.verdict)}` };
   }
-  if (!last) return { state: "none" };
-  const head = last.event.head;
-  if (!last.ok || poisoned.has(head)) return { state: "failed", head, event: last.event };
+  if (!last) { const any = [...standing.values()].flat().at(-1); return any ? { state: "failed", head: any.head, event: any } : { state: "none" }; }
+  const head = last.event.head, left = standing.get(head) ?? [];
+  if (!last.ok || left.length) return { state: "failed", head, event: left.at(-1) ?? last.event };
   const covers = new Map();
   for (const e of r.list) if (e.head === head && (e.verdict === "pass" || e.verdict === "docs-only") && e.branch && isSha(e.reviewSha)) covers.set(e.branch, e);
   return { state: "ok", head, event: last.event, covers };
@@ -71,14 +84,16 @@ export function lastHead(text, key) {
 // The branches a task makes besides its own: the Tester's review branches, the re-evaluation, the conformance review.
 // They carry findings files only; a wave merges them only as the commit reviewed.mjs read (integ-wave.sh).
 const PROCESS = /-(review-(\d+|final)|conformance)$/;
+const SPECREVIEW = /-specreview$/;
 
 /** What a wave branch is, from its name (`origin/` optional): "status" (status-wave-<n>, made by the Controller from main),
- *  "process" (a review branch of a task: { key }), "task" ({ key }: needs the record), or "foreign" (not under the branch prefix). */
+ *  "process" (a review branch of a task: { key }), "specreview", "task" ({ key }: needs the record), or "foreign" (not under the branch prefix). */
 export function classify(branch, prefix = "") {
   const name = branch.replace(/^origin\//, "");
   if (/^status-wave-\d+$/.test(name)) return { kind: "status", name };
   if (!name.startsWith(prefix)) return { kind: "foreign", name };
   const rest = name.slice(prefix.length);
+  if (SPECREVIEW.test(rest)) return { kind: "specreview", name, key: rest.replace(SPECREVIEW, "").toLowerCase() };
   if (PROCESS.test(rest)) return { kind: "process", name, key: rest.replace(PROCESS, "").toLowerCase() };
   return { kind: "task", name, key: rest.toLowerCase() };
 }
@@ -94,6 +109,7 @@ export function bindBranches(branches, { prefix, read }) {
   for (const p of parsed) {
     if (p.kind === "foreign") { problems.push(`${p.b}: not a branch under the prefix ${JSON.stringify(prefix)} and not status-wave-<n>: a wave merges only task branches whose review is recorded.`); continue; }
     if (p.kind === "status") { args.push(p.b); continue; }
+    if (p.kind === "specreview") { problems.push(`${p.b}: a spec review branch is not merged by a wave: its file reaches the main branch with the task branch, which merged it (mkspec dev). Leave this branch out.`); continue; }
     if (once.has(p.b)) { problems.push(`${p.b}: listed twice.`); continue; }
     once.add(p.b);
     if (!records.has(p.key)) records.set(p.key, read(p.key));
@@ -101,7 +117,7 @@ export function bindBranches(branches, { prefix, read }) {
     if (r.state === "ok") {
       if (p.kind === "task") { args.push(`${p.b}@${r.head}`); continue; }
       const cov = r.covers.get(p.name);
-      if (cov) args.push(`${p.b}~${r.head}:${cov.reviewSha}`);
+      if (cov && cov.file) args.push(`${p.b}~${r.head}:${cov.reviewSha}=${cov.file}`);
       else problems.push(`${p.b}: no passing review of ${p.key} at ${r.head} is recorded for this branch (run node reviewed.mjs ${p.key} ${p.name} after its review, or leave the branch out).`);
       continue;
     }
@@ -110,11 +126,12 @@ export function bindBranches(branches, { prefix, read }) {
     if (r.state === "failed") problems.push(`${p.b}: the review of ${p.key} says fail (head ${r.head}). Nothing is merged for it. Send the task back (rework, then a new review round); the wave takes the head of the review that passes.`);
     else if (r.state === "unreadable") problems.push(`${p.b}: the Controller's journal gives no usable review record for ${p.key} (${r.why}). Nothing is merged for it. Repair the journal line or send the task back to review.`);
     else problems.push(`${p.b}: the Controller's journal has no record of a passing review of ${p.key}, so there is no commit to merge. Nothing is merged for it.\n`
-      + `    This is what a Controller sees that forgot to record the verdict, and the one-time case of a task reviewed before the wave bound itself to a commit. Run, for the review that passed,\n`
-      + `      node reviewed.mjs <task> origin/${prefix}${p.key}-review-<n> [<its sha from worker_done>]      (-review-final after a re-evaluation; the conformance branch for a level 2/3 task)\n`
-      + `    It reads that findings file, checks that the commit it names is on origin/${prefix}${p.key}, and records it; the wave then merges exactly that commit, and stops with both commits if the branch has moved since. Or send the task back to review.\n`
+      + `    Either the verdict was not recorded: then run, with the review branch and the full SHA from the reviewer's worker_done,\n`
+      + `      node reviewed.mjs <task> origin/${prefix}${p.key}-review-<n> <review-sha>      (-review-final after a re-evaluation; the conformance branch for a level 2/3 task)\n`
+      + `    It reads that findings file at that commit, checks that the commit it names is on origin/${prefix}${p.key}, and records it; the wave then merges exactly that commit, and stops with both commits if the branch has moved since.\n`
+      + `    Or the review is older than this check (one-time): its reviewer reported no review SHA, so it cannot be recorded and is not accepted without one. Send the task back to review (the full path: a new Tester round on the current head, whose worker_done carries the SHA), then record that.\n`
       + `    No Tester review: a docs-only task is recorded by node docsonly.mjs; an Architect branch (architecture-baseline, stewardship-*) by node reviewed.mjs --architect <task>.`);
   }
   if (problems.length) return { problems };
-  return { args };
+  return { args, tasks: [...new Set(parsed.filter((p) => p.kind === "task").map((p) => p.key))] };
 }

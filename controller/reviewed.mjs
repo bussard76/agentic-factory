@@ -1,15 +1,15 @@
-// Usage: node reviewed.mjs <task> <review-branch> [<review-sha>]   or   node reviewed.mjs --architect <task>
+// Usage: node reviewed.mjs <task> <review-branch> <review-sha>   or   node reviewed.mjs --architect <task>
 // → record the commit a review covered, in the Controller's journal (the commit the wave then merges)
 // <review-branch> is the branch the reviewer pushed its findings to, as the Controller's own mkspec names it: <prefix><task>-review-<n>
 // (a Tester round), <prefix><task>-review-final (a re-evaluation) or <prefix><task>-conformance (the conformance review); with or
 // without origin/. Run it after EVERY verdict, pass or fail, as the first step of handling the reviewer's worker_done, and pass the
-// full SHA of the review branch the reviewer reported there (<review-sha>): it must be what origin has, or nothing is recorded.
+// full SHA of the review branch the reviewer reported there (<review-sha>, required): it must be what origin has, or nothing is recorded.
 // It fetches origin, resolves the review branch ONCE to a commit, reads the findings file on that commit
 // (docs/reviews/<task>-review-<n>.md, -review-final.md or -architecture-conformance.md), takes its one `Verdict:` line and its one
 // `Reviewed commit:` line, and refuses unless that commit is on the task's branch (origin/<prefix><task in lower case>), the review
 // branch was made from it, and it is not older than the head already recorded for the task. The record is a `review` event with `head`
 // and `reviewSha` (the commit it read); the wave binds the review branch to that commit. A fail is recorded too, and it is final for
-// that commit. The head is as trustworthy as the review branch was when it was read: a worker who can push that branch name before
+// that commit; only a later passing re-evaluation (-review-final) undoes a failed Tester round of the same commit (reviewrecord.mjs, SUPERSEDES). The head is as trustworthy as the review branch was when it was read: a worker who can push that branch name before
 // this runs is not stopped here (debt F54, the push gate's own limit).
 // --architect <task>: an Architect branch (<prefix>architecture-baseline or <prefix>stewardship-*, which no Tester reviews) is
 // recorded at its tip if, against its merge base with the main branch, it only adds or changes ARCHITECTURE.md, docs/debt.md and
@@ -24,7 +24,7 @@ import { isSha, lastHead } from "./reviewrecord.mjs";
 const args = process.argv.slice(2);
 const architect = args[0] === "--architect";
 const [task, reviewBranch, reviewSha] = architect ? args.slice(1) : args;
-if (!task || (!architect && !reviewBranch)) throw new Error("usage: node reviewed.mjs <task> <review-branch> [<review-sha>]   or   node reviewed.mjs --architect <task>");
+if (!task || (!architect && !reviewBranch)) throw new Error("usage: node reviewed.mjs <task> <review-branch> <review-sha>   or   node reviewed.mjs --architect <task>");
 const git = (...a) => spawnSync("git", ["-C", PROJECT_DIR, ...a], { encoding: "utf8" });
 const refuse = (text) => { console.log(`NOT RECORDED: ${text}`); process.exit(3); };
 if (!/^[A-Za-z0-9._-]{1,64}$/.test(task)) refuse(`${JSON.stringify(task)} is not a task id.`);
@@ -61,6 +61,7 @@ if (!kind) refuse(`${reviewBranch} is not a review branch of ${task}: expected $
 const [path, fileTail] = kind;
 const rbSha = resolve(rb);
 if (!rbSha) refuse(`origin/${rb} not found.`);
+if (reviewSha === undefined) refuse(`no review SHA given. The reviewer reports its review branch and full SHA in worker_done (the Tester, re-evaluation and conformance specs ask for it) and you pass that SHA, so the commit read is the one reported. A review written before this check reported none: it cannot be recorded, and it is not accepted without one. Send the task back to review (a new Tester round on the current head, the full path), then record that review with the SHA from its worker_done.`);
 if (reviewSha !== undefined && reviewSha !== rbSha) refuse(`origin/${rb} is at ${rbSha}, not at ${reviewSha} that the reviewer reported: it was pushed to after the report. Ask for the review again.`);
 if (reviewSha !== undefined && !isSha(reviewSha)) refuse(`${JSON.stringify(reviewSha)} is not a full commit id.`);
 const findings = `docs/reviews/${task}-${fileTail}.md`;
