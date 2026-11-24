@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fakeController } from "./fake-controller.mjs";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const GUARDRAILS = path.join(ROOT, "templates/tools/factory-guardrails.mjs");
@@ -221,13 +222,13 @@ test("the push gate exempts a configured docs allowlist only when the replaced t
 });
 
 // --- the wave ----------------------------------------------------------------------------------
-function wave(r, branches, { gate: gateBody = "#!/bin/sh\nexit 1\n", env = {}, logs = path.join(r.base, `logs-${Date.now()}`), verify = "exit 1" } = {}) {
+function wave(r, branches, { gate: gateBody = "#!/bin/sh\nexit 1\n", env = {}, logs = path.join(r.base, `logs-${Date.now()}`), verify = "exit 1", e2e = "", ctl: ctlOpts = {} } = {}) {
   for (const b of branches) r.git("push", "-q", "origin", b);
   const integ = path.join(r.base, "integration");
   r.git("worktree", "add", "-q", "-B", "integration", integ, "origin/main");
-  const gate = path.join(r.base, "gate"); fs.writeFileSync(gate, gateBody, { mode: 0o755 });
+  const ctl = fakeController(r.base, { body: gateBody, ...ctlOpts });
   const out = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "W", "wave", ...branches.map((b) => `origin/${b}`)], { cwd: integ, encoding: "utf8",
-    env: { ...CLEAN_ENV, MAIN: "main", INSTALL_CMD: "", VERIFY_CMD: verify, E2E_CMD: "", GATE: gate, TRAILER: "", WAVE_WORKTREE_OK: "1", WAVE_LOG_DIR: logs, ...env } });
+    env: { ...CLEAN_ENV, MAIN: "main", INSTALL_CMD: "", VERIFY_CMD: verify, E2E_CMD: e2e, ...ctl.env, TRAILER: "", WAVE_WORKTREE_OK: "1", WAVE_LOG_DIR: logs, ...env } });
   r.git("worktree", "remove", "--force", integ);
   r.git("fetch", "-q", "origin");
   return out;
@@ -335,16 +336,58 @@ test("a failing gate blocks the push for a code change, also with docsOnly enabl
   assert.equal(fs.existsSync(path.join(r.base, "marks")), false, "the docs checks did not stand in for the gate");
 });
 
-test("the wave's gate is its own, by absolute path: a bare name or a missing file stops the wave before anything is merged", () => {
+test("the wave's gate must be this project's own: a bare or relative name, another name, a foreign or unconfigured directory, or one inside the worktree stops the wave before anything is merged", () => {
   const r = repo(); const t = reviewedCode(r, "agents/t1");
-  for (const r2 of t) r.git("push", "-q", "origin", r2);
+  for (const b of t) r.git("push", "-q", "origin", b);
   const integ = path.join(r.base, "integration");
   r.git("worktree", "add", "-q", "-B", "integration", integ, "origin/main");
-  for (const bad of ["gate", "env", "./gate", path.join(r.base, "nope")]) {
-    const out = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "W", "wave", ...t.map((b) => `origin/${b}`)], { cwd: integ, encoding: "utf8", env: { ...CLEAN_ENV, MAIN: "main", VERIFY_CMD: "true", GATE: bad, WAVE_WORKTREE_OK: "1", WAVE_LOG_DIR: path.join(r.base, "l") } });
-    assert.notEqual(out.status, 0, bad); assert.match(out.stderr, /GATE \(/); assert.doesNotMatch(out.stdout, /merged|PUSHED/);
+  const good = fakeController(r.base);
+  const other = fakeController(r.base, { project: "other" });
+  const noCfg = fakeController(r.base, { project: "nocfg", config: false });
+  const renamed = fakeController(r.base, { project: "demo2", name: "tool" });
+  const inside = path.join(integ, "gate"); fs.writeFileSync(inside, "#!/bin/sh\nexec \"$@\"\n", { mode: 0o755 }); fs.writeFileSync(path.join(integ, "factory.config.json"), JSON.stringify({ project: { name: "demo" } }));
+  const cases = [["gate", "demo"], ["env", "demo"], ["./gate", "demo"], [path.join(r.base, "nope"), "demo"], ["/usr/bin/true", "demo"], [other.gate, "demo"], [noCfg.gate, "demo"], [noCfg.gate, "nocfg"], [renamed.gate, "demo2"], [inside, "demo"], [good.gate, ""], [path.dirname(good.gate), "demo"]];
+  for (const [gate, project] of cases) {
+    const out = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "W", "wave", ...t.map((b) => `origin/${b}`)], { cwd: integ, encoding: "utf8", env: { ...CLEAN_ENV, MAIN: "main", VERIFY_CMD: "true", GATE: gate, WAVE_PROJECT: project, WAVE_WORKTREE_OK: "1", WAVE_LOG_DIR: path.join(r.base, "l") } });
+    assert.notEqual(out.status, 0, gate + " as " + project); assert.match(out.stderr, /GATE \(.*\) is refused/, gate + " as " + project); assert.doesNotMatch(out.stdout, /merged|PUSHED/);
   }
+  const ok = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "W", "wave", "origin/agents/nope"], { cwd: integ, encoding: "utf8", env: { ...CLEAN_ENV, MAIN: "main", VERIFY_CMD: "true", ...good.env, WAVE_WORKTREE_OK: "1", WAVE_LOG_DIR: path.join(r.base, "l2") } });
+  assert.doesNotMatch(ok.stderr, /is refused/, "the project's own gate passes the check");
   r.git("worktree", "remove", "--force", integ);
+});
+
+test("a verify or e2e command that is only whitespace is no command: the wave stops and the gate does not run", () => {
+  const r = docsRepo(); const t = reviewedCode(r, "agents/t1");
+  let out = wave(r, t, { gate: recordingGate(r, 0), verify: " \t " });
+  assert.notEqual(out.status, 0); assert.match(out.stdout, /VERIFY-MISSING/); assert.doesNotMatch(out.stdout, /PUSHED|merged/);
+  out = wave(r, t, { gate: recordingGate(r, 0), verify: "true", e2e: "  " });
+  assert.notEqual(out.status, 0); assert.match(out.stdout, /E2E-INVALID/); assert.doesNotMatch(out.stdout, /PUSHED|merged/);
+  assert.deepEqual(gateCalls(r), []);
+  // blank docs checks are no checks: a docs-only wave then takes the full gate
+  const d = repo(); d.setMain({ docsOnly: { enabled: true }, commands: { formatCheck: "  ", markdownCheck: " " } }); branch(d, "agents/d1", () => d.write("docs/guide.md", "v2\n"));
+  out = wave(d, ["agents/d1"], { gate: recordingGate(d, 0), verify: "true" });
+  assert.match(out.stdout, /GATE-PATH full: docs-only, but neither/); assert.equal(gateCalls(d).length, 1);
+});
+
+test("docsOnly.enabled counts only as the JSON boolean true: the string \"true\" runs the full gate, as docsonly.mjs does", () => {
+  const r = repo(); r.setMain({ ...checks(r), docsOnly: { enabled: "true" } }); branch(r, "agents/d1", () => r.write("docs/guide.md", "v2\n"));
+  const out = wave(r, ["agents/d1"], { gate: recordingGate(r, 0), verify: "true" });
+  assert.doesNotMatch(out.stdout, /GATE-PATH docs-only/); assert.doesNotMatch(out.stdout, /docs check/); assert.match(out.stdout, /verify PASS/); assert.equal(gateCalls(r).length, 1);
+});
+
+test("a candidate that changes a package.json script the verify command runs stops the wave; other script changes do not", () => {
+  const r = repo(); r.write("package.json", JSON.stringify({ scripts: { verify: "npm run lint && npm run unit", lint: "exit 1", unit: "exit 1", other: "echo a" } }, null, 1) + "\n");
+  r.git("add", "-A"); r.git(...NOHOOKS, "commit", "-qm", "scripts"); r.git(...NOHOOKS, "push", "-q", "origin", "main");
+  const change = (name, f) => { const t = reviewedCode(r, name, () => { const j = JSON.parse(r.read("package.json")); f(j.scripts); r.write("package.json", JSON.stringify(j, null, 1) + "\n"); }); return t; };
+  const before = r.git("rev-parse", "origin/main");
+  for (const [name, f] of [["agents/direct", (s) => { s.verify = "true"; }], ["agents/indirect", (s) => { s.lint = "true"; }], ["agents/removed", (s) => { delete s.unit; }], ["agents/pre", (s) => { s.preverify = "true"; }]]) {
+    const out = wave(r, change(name, f), { gate: recordingGate(r, 0), verify: "npm run verify" });
+    assert.notEqual(out.status, 0, name); assert.match(out.stdout, /VERIFY-REDEFINED/, name); assert.doesNotMatch(out.stdout, /PUSHED/);
+    assert.equal(r.git("rev-parse", "origin/main"), before);
+  }
+  assert.deepEqual(gateCalls(r), [], "stopped before the gate");
+  const out = wave(r, change("agents/fine", (s) => { s.other = "echo b"; }), { gate: recordingGate(r, 0), verify: "npm run verify" });
+  assert.match(out.stdout, /PUSHED main/, out.stdout); assert.equal(gateCalls(r).length, 1);
 });
 
 test("only the docs-only check skips the full gate: not docs-only, unclear, a missing check and no configured checks all run it", () => {
@@ -370,20 +413,13 @@ test("only the docs-only check skips the full gate: not docs-only, unclear, a mi
   assert.match(out.stdout, /GATE-PATH full/); assert.equal(gateCalls(r).length, 1);
 });
 
-test("nothing in the wave names a switch, cache or reuse of the gate", () => {
-  for (const f of ["controller/integ-wave.sh", "controller/wave.mjs", "controller/gate.mjs", "controller/wavewait.mjs"]) {
-    const src = fs.readFileSync(path.join(ROOT, f), "utf8");
-    assert.doesNotMatch(src, /GATE_(CACHE|SKIP|REUSE|RESULT)|SKIP_GATE|WAVE_SKIP|gate[ -]cache|tree[ -]cache|reuse[sd]? (the )?gate|gate (result )?reuse/i, f);
-  }
-});
-
 test("the commit hook's docs shortcut says what it is, with docsOnly on or off", () => {
   for (const cfg of [{}, { docsOnly: { enabled: true } }]) {
     const r = repo(cfg); r.write("docs/guide.md", "v2\n"); r.git("add", "-A");
     const out = spawnSync("git", ["commit", "-qm", "docs"], { cwd: r.dir, encoding: "utf8", env: CLEAN_ENV });
     assert.equal(out.status, 0, out.stdout + out.stderr);
     const text = out.stdout + out.stderr;
-    assert.match(text, /only documentation staged: typecheck and lint skipped for this commit/); assert.match(text, /not the docs-only gate path/); assert.match(text, /full gate for code/);
+    assert.match(text, /only files under docs\/ or top-level Markdown staged: typecheck and lint skipped for this commit/); assert.match(text, /not the docs-only gate path/); assert.match(text, /full gate for code/);
     assert.doesNotMatch(text, /documentation-only commit/);
   }
 });

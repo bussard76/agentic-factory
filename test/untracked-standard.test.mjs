@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { fakeController } from "./fake-controller.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = path.join(ROOT, "bin/agentic-factory.mjs");
@@ -115,7 +116,7 @@ test("a wave re-arms what a clean or an install took away, before it pushes", ()
   fs.writeFileSync(path.join(task, "app.js"), "export const a = 1;\n"); h.ok(task, "add", "app.js"); h.ok(task, "commit", "-qm", "unreviewed code"); h.ok(task, "push", "-q", "origin", "HEAD:refs/heads/agents/t3");
   const integ = h.worktree("coordinator-integration");
   // An install that resets the hooks path, as husky's prepare script does: without re-arming, the review gate is silently off.
-  const env = { ...h.env, MAIN: "main", VERIFY_CMD: "true", GATE: "/usr/bin/env", WAVE_LOG_DIR: path.join(h.base, "logs"), INSTALL_CMD: "git config core.hooksPath /nonexistent" };
+  const env = { ...h.env, ...fakeController(h.base).env, MAIN: "main", VERIFY_CMD: "true", WAVE_LOG_DIR: path.join(h.base, "logs"), INSTALL_CMD: "git config core.hooksPath /nonexistent" };
   const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "Wave", "summary", "origin/agents/t3"], { cwd: integ, encoding: "utf8", env });
   assert.notEqual(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /PUSH-FAILED/); assert.match(r.stdout, /without a passing independent review/);
@@ -155,7 +156,7 @@ test("a clone without the standard refuses to run a wave", () => {
   const clone = path.join(h.base, "fresh"); h.ok(h.base, "clone", "-q", h.ok(h.project, "remote", "get-url", "origin"), clone);
   const integ = path.join(h.base, "coordinator-integration"); h.ok(clone, "fetch", "-q", "origin"); h.ok(clone, "worktree", "add", "-q", "--detach", integ, "origin/main");
   const before = h.ok(clone, "ls-remote", "origin", "main");
-  const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "Wave", "sum", "origin/agents/t6"], { cwd: integ, encoding: "utf8", env: { ...h.env, MAIN: "main", VERIFY_CMD: "true", GATE: "/usr/bin/env", WAVE_LOG_DIR: path.join(h.base, "logs") } });
+  const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "Wave", "sum", "origin/agents/t6"], { cwd: integ, encoding: "utf8", env: { ...h.env, ...fakeController(h.base).env, MAIN: "main", VERIFY_CMD: "true", WAVE_LOG_DIR: path.join(h.base, "logs") } });
   assert.notEqual(r.status, 0, r.stdout); assert.match(r.stdout, /NOT-ARMED/);
   assert.equal(h.ok(clone, "ls-remote", "origin", "main"), before);
   h.done();
@@ -178,7 +179,7 @@ test("a verify command that resets the hooks path cannot open the gate", () => {
   const task = h.worktree("t7");
   fs.writeFileSync(path.join(task, "app.js"), "export const a = 1;\n"); h.ok(task, "add", "app.js"); h.ok(task, "commit", "-qm", "unreviewed"); h.ok(task, "push", "-q", "origin", "HEAD:refs/heads/agents/t7");
   const integ = h.worktree("coordinator-integration");
-  const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "Wave", "sum", "origin/agents/t7"], { cwd: integ, encoding: "utf8", env: { ...h.env, MAIN: "main", VERIFY_CMD: "git config core.hooksPath .husky/_", GATE: "/usr/bin/env", WAVE_LOG_DIR: path.join(h.base, "logs") } });
+  const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "Wave", "sum", "origin/agents/t7"], { cwd: integ, encoding: "utf8", env: { ...h.env, ...fakeController(h.base).env, MAIN: "main", VERIFY_CMD: "git config core.hooksPath .husky/_", WAVE_LOG_DIR: path.join(h.base, "logs") } });
   assert.notEqual(r.status, 0, r.stdout); assert.match(r.stdout, /PUSH-FAILED/);
   h.done();
 });
@@ -307,7 +308,7 @@ function unreviewedWave(h, name, { prepareBranch, env = {} } = {}) {
   h.ok(task, "add", "-A"); h.ok(task, "commit", "-qm", "unreviewed"); h.ok(task, "push", "-q", "origin", `HEAD:refs/heads/agents/${name}`);
   const integ = h.worktree("coordinator-integration");
   const before = h.ok(h.project, "ls-remote", "origin", "main");
-  const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "Wave", "sum", `origin/agents/${name}`], { cwd: integ, encoding: "utf8", env: { ...h.env, MAIN: "main", VERIFY_CMD: "true", GATE: "/usr/bin/env", WAVE_LOG_DIR: path.join(h.base, "logs"), ...env } });
+  const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "Wave", "sum", `origin/agents/${name}`], { cwd: integ, encoding: "utf8", env: { ...h.env, ...fakeController(h.base).env, MAIN: "main", VERIFY_CMD: "true", WAVE_LOG_DIR: path.join(h.base, "logs"), ...env } });
   assert.notEqual(r.status, 0, r.stdout + r.stderr);
   assert.equal(h.ok(h.project, "ls-remote", "origin", "main"), before, "nothing reached main");
   return r;
@@ -353,7 +354,7 @@ test("a never-armed clone is recognised however the config is formatted", () => 
   fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace('"footprint": "minimal"', '"footprint" : "minimal"'));
   h.ok(clone, "add", "factory.config.json"); h.ok(clone, "commit", "-qm", "format"); h.ok(clone, "push", "-q", "origin", "HEAD:main");
   h.ok(clone, "worktree", "add", "-q", "--detach", path.join(h.base, "coordinator-integration"), "origin/main");
-  const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "Wave", "sum", "origin/main"], { cwd: path.join(h.base, "coordinator-integration"), encoding: "utf8", env: { ...h.env, MAIN: "main", VERIFY_CMD: "true", GATE: "/usr/bin/env", WAVE_LOG_DIR: path.join(h.base, "logs") } });
+  const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "Wave", "sum", "origin/main"], { cwd: path.join(h.base, "coordinator-integration"), encoding: "utf8", env: { ...h.env, ...fakeController(h.base).env, MAIN: "main", VERIFY_CMD: "true", WAVE_LOG_DIR: path.join(h.base, "logs") } });
   assert.notEqual(r.status, 0); assert.match(r.stdout, /NOT-ARMED/);
   h.done();
 });
@@ -366,7 +367,7 @@ test("a reviewed wave still reaches main", () => {
   fs.writeFileSync(path.join(task, "docs/reviews/t12.md"), `Verdict: pass\nReviewed commit: ${sha}\n`); h.ok(task, "add", "docs/reviews/t12.md"); h.ok(task, "commit", "-qm", "review");
   h.ok(task, "push", "-q", "origin", "HEAD:refs/heads/agents/t12");
   const integ = h.worktree("coordinator-integration");
-  const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "Wave", "sum", "origin/agents/t12"], { cwd: integ, encoding: "utf8", env: { ...h.env, MAIN: "main", VERIFY_CMD: "true", GATE: "/usr/bin/env", WAVE_LOG_DIR: path.join(h.base, "logs") } });
+  const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "Wave", "sum", "origin/agents/t12"], { cwd: integ, encoding: "utf8", env: { ...h.env, ...fakeController(h.base).env, MAIN: "main", VERIFY_CMD: "true", WAVE_LOG_DIR: path.join(h.base, "logs") } });
   assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /PUSHED main/);
   h.done();
 });

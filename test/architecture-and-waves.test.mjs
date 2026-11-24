@@ -5,6 +5,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fakeController } from "./fake-controller.mjs";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const CLI = path.join(ROOT, "bin/agentic-factory.mjs");
@@ -215,9 +216,8 @@ test("a wave without a review fails before the long gates run", () => {
   git(wt, "add", "a.txt"); git(wt, "commit", "-q", "-m", "task"); git(wt, "push", "-q", "origin", "task");
   git(wt, "switch", "-q", "main");
   fs.writeFileSync(path.join(wt, ".git/hooks/pre-push"), "#!/bin/sh\necho '[factory] no review'\nexit 1\n", { mode: 0o755 });
-  const gate = path.join(dir, "gate"), ran = path.join(dir, "gate-ran");
-  fs.writeFileSync(gate, `#!/bin/sh\ntouch "${ran}"\n"$@"\n`, { mode: 0o755 });
-  const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "t", "s", "origin/task"], { cwd: wt, encoding: "utf8", env: { ...process.env, MAIN: "main", VERIFY_CMD: "true", GATE: gate, WAVE_LOG_DIR: path.join(dir, "logs"), GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" } });
+  const ran = path.join(dir, "gate-ran"), ctl = fakeController(dir, { body: `#!/bin/sh\ntouch "${ran}"\n"$@"\n` });
+  const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "t", "s", "origin/task"], { cwd: wt, encoding: "utf8", env: { ...process.env, MAIN: "main", VERIFY_CMD: "true", ...ctl.env, WAVE_LOG_DIR: path.join(dir, "logs"), GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" } });
   assert.match(r.stdout, /PUSH-CHECK-FAILED/, r.stdout + r.stderr);
   assert.equal(fs.existsSync(ran), false, "the gates did not run");
   fs.rmSync(dir, { recursive: true, force: true });
