@@ -65,6 +65,23 @@ const ctlHost = workerHosts.find((h) => h.name === controllerHostName) ?? worker
 export const PROJECT_DIR = projectDirOn({ ...ctlHost, kind: "local", projectDir: ctl.projectDir ?? ctlHost.projectDir, projectsDir: ctl.projectsDir ?? ctlHost.projectsDir });
 export const CONTROLLER_HOME = ctl.controllerDir ?? "~/controller"; // as configured: a leading ~ is expanded by the shell of the host it is used on
 export const CONTROLLER_DIR = expand(CONTROLLER_HOME);
+// Tuning of the heartbeat's wakes, of hang detection and of restarts (hosts.controller.wake, .hung, .restart). A missing or
+// unusable value is the default; the defaults are documented in docs/orca.md.
+const positive = (v, fallback) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : fallback);
+// Text patterns (regular expressions, case-insensitive) of a confirmation question: a pointer is never typed where one is visible.
+// They look at the last 8 lines only and are anchored to how a prompt really ends or lists its options, so a sentence that merely
+// contains these words does not count: "(y/n)" or "[y/N]" at the end of a line, a menu option "1. Yes" at the start of one, and "press
+// enter" (optionally "to <something>") ending a line.
+const DIALOGS = ["\\((?:y/n|yes/no)\\)\\s*:?\\s*$", "\\[(?:y/n|yes/no)\\]\\s*:?\\s*$", "^\\W*1[.)]\\s+yes\\b", "\\bpress enter(?: to [a-z ]+)?\\s*$"];
+const patternList = (v, fallback) => (Array.isArray(v) ? v.filter((p) => typeof p === "string" && p) : fallback);
+export const WAKE = { idleMinutes: positive(ctl.wake?.idleMinutes, 30), busyPointerMinutes: positive(ctl.wake?.busyPointerMinutes, 2), dialogPatterns: patternList(ctl.wake?.dialogPatterns, DIALOGS), dialogHoldMinutes: positive(ctl.wake?.dialogHoldMinutes, 15) };
+export const HUNG = {
+  minutes: positive(ctl.hung?.minutes, 25), restartAfterMinutes: positive(ctl.hung?.restartAfterMinutes, 15), 
+  // Off unless a project sets exactly true: nothing else (false, "false", a typo of the value) turns a kill of a session on.
+  restart: ctl.hung?.restart === true, restartInvalid: ctl.hung?.restart !== undefined && typeof ctl.hung.restart !== "boolean",
+  patterns: patternList(ctl.hung?.patterns, []), patternMinutes: positive(ctl.hung?.patternMinutes, 10), resetAfterDays: positive(ctl.hung?.resetAfterDays, 7),
+};
+export const RESTART = { minGapMinutes: positive(ctl.restart?.minGapMinutes, 30), contextGapMinutes: positive(ctl.restart?.contextGapMinutes, 120), afterGateMinutes: positive(ctl.restart?.afterGateMinutes, 15), contextPercent: positive(ctl.restart?.contextPercent, 50) };
 
 // --- orca --------------------------------------------------------------------------------------
 export function hasBin(name) { return spawnSync("sh", ["-c", `command -v ${name}`], { stdio: "ignore" }).status === 0; }
@@ -179,6 +196,15 @@ export const readState = (name, fallback) => {
 };
 /** Writes through a temporary file and a rename, so a reader in another process never sees a half-written file. */
 export const writeJson = (name, value) => { const tmp = `${file(name)}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n"); fs.renameSync(tmp, file(name)); };
+/** Writes text through a temporary file and a rename (as writeJson), for files the watchers read from outside. */
+export const writeText = (name, text) => { const tmp = `${file(name)}.${process.pid}.tmp`; fs.writeFileSync(tmp, text); fs.renameSync(tmp, file(name)); };
+/** A journal line the heartbeat or restart.mjs writes: the file's age is the Controller's sign of work, so its mtime is put back. */
+export const journalQuiet = (type, task, extra = {}) => {
+  let before = null; try { before = fs.statSync(file("journal.ndjson")); } catch { /* none yet */ }
+  journal(type, task, extra);
+  // A journal that did not exist before gets the oldest time: the Controller's next line gives it a real one.
+  try { fs.utimesSync(file("journal.ndjson"), before?.atime ?? new Date(0), before?.mtime ?? new Date(0)); } catch { /* best effort */ }
+};
 export const journal = (type, task, extra = {}) => fs.appendFileSync(file("journal.ndjson"), JSON.stringify({ ts: new Date().toISOString(), type, task, ...extra }) + "\n");
 export const modelFor = (tier, agent = config.agents?.default ?? "codex") => (agent === FALLBACK.agent ? FALLBACK.models?.[tier] : MODELS[tier]) ?? MODELS.default;
 /** A setup or shell terminal in an entry. Its name contains the entry's role, but it is neither the worker nor a wave. */

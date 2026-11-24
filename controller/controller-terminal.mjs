@@ -66,3 +66,14 @@ export function locateController(terminals, { title, controllerDir, handle, dirs
 
 // The Controller terminal, or undefined.
 export const findControllerTerminal = (terminals, title, controllerDir, handle, dirs, exclude) => locateController(terminals, { title, controllerDir, handle, dirs, exclude }).terminal;
+
+// How a Controller session is made. `agentic-factory start` and the restart (controller/restart.mjs, also run by the heartbeat)
+// build it here, so a restarted Controller gets exactly the command a first start gives it, with exactly the configured controllerArgs.
+export const controllerPrompt = (dir, project) => `Read ${dir}/CONTROLLER.md and act as the Controller for the project ${project}.`;
+export const agentCommand = (agent, prompt, args) => `${agent}${args ? ` ${args}` : ""} ${JSON.stringify(prompt)}`;
+export const controllerSession = ({ dir, project, agent, args }) => `cd ${dir} && ${agentCommand(agent, controllerPrompt(dir, project), args)}`;
+// The `orca terminal create` arguments for the Controller's terminal; `where` is ["--worktree", "path:…"] (and --environment from a client).
+// keepOpen (the restart): a terminal made from a session Orca counts as a worker closes together with it unless it is asked to stay.
+export const createArgs = ({ where, title, session, keepOpen = false }) => ["terminal", "create", ...where, "--title", title, "--command", session, ...(keepOpen ? ["--keep-open"] : []), "--json"];
+/** The handle in Orca's answer to `terminal create`, or undefined. */
+export const createdHandle = (stdout) => { try { const j = JSON.parse(stdout).result; return j?.terminal?.handle ?? j?.handle; } catch { return undefined; } };

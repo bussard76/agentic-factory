@@ -28,7 +28,30 @@
     "$comment": "A remote server is an option, not a must. The controller runs on one host (the local machine or a remote one). Workers run on zero or more hosts; each has its own paths, Orca environment and capacity. With no remote hosts everything runs locally.",
     "controller": {
       "host": "local",
-      "controllerDir": "~/controller"
+      "controllerDir": "~/controller",
+      "wake": {
+        "idleMinutes": 30,
+        "busyPointerMinutes": 2,
+        "dialogPatterns": ["\\((?:y/n|yes/no)\\)\\s*:?\\s*$", "\\[(?:y/n|yes/no)\\]\\s*:?\\s*$", "^\\W*1[.)]\\s+yes\\b", "\\bpress enter(?: to [a-z ]+)?\\s*$"],
+        "dialogHoldMinutes": 15
+      },
+      "$wake": "idleMinutes: an idle project (no new inbox line, worker message or finished wave, no ready ticket, no running worker) is woken at most this often. busyPointerMinutes: a Controller that Orca reads as busy gets a one-line pointer to what is waiting after this long. dialogPatterns: regular expressions (case-insensitive, per line) matched against the last 8 lines of the Controller's screen; while one matches, nothing is typed (Enter would take the default). After dialogHoldMinutes the Front agent is told that the Controller seems to wait at a dialog, once and again only when the question changes. The values shown are the defaults.",
+      "hung": {
+        "minutes": 25,
+        "restartAfterMinutes": 15,
+        "restart": false,
+        "patterns": [],
+        "patternMinutes": 10,
+        "resetAfterDays": 7
+      },
+      "$hung": "A Controller that is busy, whose terminal keeps changing, and whose status.md and journal did not change for 'minutes' is reported to the Front agent. restart: only true lets the heartbeat restart it (once, after 'restartAfterMinutes', if its terminal shows the same frame twice and no wave, gate or push runs); the default false reports only. patterns: regular expressions that, visible for patternMinutes, also count as hung (report only); none are shipped. resetAfterDays: a restart this long ago no longer counts as 'restarted once'.",
+      "restart": {
+        "minGapMinutes": 30,
+        "contextGapMinutes": 120,
+        "afterGateMinutes": 15,
+        "contextPercent": 50
+      },
+      "$restart": "contextPercent: the Controller starts itself fresh (restart.mjs) after a wave or when idle once its context use is above this share. contextGapMinutes / minGapMinutes: restart.mjs refuses a restart sooner than this after the last (asked by the Controller / any other). afterGateMinutes: no restart this soon after a gate, wave or push."
     },
     "workers": [
       {

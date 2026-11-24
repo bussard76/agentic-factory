@@ -15,6 +15,7 @@ import { controllerHost, expand, loadConfig } from "./hosts.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const here = (name) => path.join(HERE, name);
 const readJson = (name, fallback) => { try { return JSON.parse(fs.readFileSync(here(name), "utf8")); } catch { return fallback; } };
+const HEALTH_MARK = "@@HEARTBEAT-HEALTH@@";
 const IDLE_WAIT_MS = 20_000, SUMMARY_MS = 30 * 60_000, MAX_PENDING = 20, NO_STATUS_GRACE_MS = 15 * 60_000;
 // Status text goes into an agent's input and a sidebar: no control characters, nothing that could submit early.
 const clean = (text) => text.replace(/[\x00-\x1f\x7f-\x9f]+/g, " ");
@@ -47,22 +48,25 @@ function probe() {
     const p = path.join(expand(ctlDir), "status.md");
     const mtime = fs.existsSync(p) ? fs.statSync(p).mtimeMs / 1000 : 0;
     const wt = fs.existsSync(expand(ws)) ? fs.readdirSync(expand(ws)).length : 0;
-    return { mtime, wt, text: fs.existsSync(p) ? fs.readFileSync(p, "utf8") : "" };
+    const h = path.join(expand(ctlDir), "heartbeat-health.md");
+    return { mtime, wt, text: fs.existsSync(p) ? fs.readFileSync(p, "utf8") : "", health: fs.existsSync(h) ? fs.readFileSync(h, "utf8").trim() : "" };
   }
-  const out = execFileSync("ssh", [...(host.sshConfig ? ["-F", expand(host.sshConfig)] : []), host.ssh, `stat -c %Y ${ctlDir}/status.md 2>/dev/null || echo 0; echo WT=$(ls ${ws} 2>/dev/null | wc -l); cat ${ctlDir}/status.md 2>/dev/null`], { encoding: "utf8", timeout: 60000 });
+  const out = execFileSync("ssh", [...(host.sshConfig ? ["-F", expand(host.sshConfig)] : []), host.ssh, `stat -c %Y ${ctlDir}/status.md 2>/dev/null || echo 0; echo WT=$(ls ${ws} 2>/dev/null | wc -l); cat ${ctlDir}/status.md 2>/dev/null; echo; echo ${HEALTH_MARK}; cat ${ctlDir}/heartbeat-health.md 2>/dev/null`], { encoding: "utf8", timeout: 60000 });
   const [mtime, wtLine, ...rest] = out.split("\n");
-  return { mtime: Number(mtime), wt: Number(String(wtLine).replace("WT=", "")), text: rest.join("\n") };
+  const body = rest.join("\n"), at = body.lastIndexOf(HEALTH_MARK);
+  return { mtime: Number(mtime), wt: Number(String(wtLine).replace("WT=", "")), text: at >= 0 ? body.slice(0, at) : body, health: at >= 0 ? body.slice(at + HEALTH_MARK.length).trim() : "" };
 }
 
 // A change is always new. A lasting problem is announced once, not every 5 minutes.
 function check(state) {
   const alerts = [], problems = {};
   try {
-    const { mtime, wt, text } = probe();
+    const { mtime, wt, text, health = "" } = probe();
     if (wt > WORKTREE_MAX) problems.cleanup = `CLEANUP: ${wt} worktrees on ${host.name}, nudge the Controller`;
     const ageMin = mtime ? Math.round((Date.now() / 1000 - mtime) / 60) : Infinity;
-    const now = { main: section(text, "On "), needs: section(text, "Needs "), problems: section(text, "Problems") };
-    for (const [k, label] of [["main", "NEW ON MAIN"], ["needs", "NEEDS HUMAN"], ["problems", "PROBLEMS"]]) if (state.last?.[k] !== undefined && state.last[k] !== now[k]) alerts.push(`${label}: ${now[k].replace(/\n/g, " | ").slice(0, 400)}`);
+    // heartbeat-health.md: what the heartbeat found wrong with the Controller itself (hung, restarted); the Controller cannot say it.
+    const now = { main: section(text, "On "), needs: section(text, "Needs "), problems: section(text, "Problems"), health };
+    for (const [k, label] of [["main", "NEW ON MAIN"], ["needs", "NEEDS HUMAN"], ["problems", "PROBLEMS"], ["health", "CONTROLLER HEALTH"]]) if (state.last?.[k] !== undefined && state.last[k] !== now[k]) alerts.push(`${label}: ${(now[k] || "(cleared)").replace(/\n/g, " | ").slice(0, 400)}`);
     state.firstRun ??= Date.now();
     if (!mtime && Date.now() - state.firstRun < NO_STATUS_GRACE_MS) { /* a fresh start: the Controller has not written it yet */ }
     else if (!mtime) problems.status = `NO STATUS: ${ctlDir}/status.md missing on ${host.name} (Controller not started?)`;

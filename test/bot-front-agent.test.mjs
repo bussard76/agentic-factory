@@ -67,6 +67,22 @@ test("the precheck sets a baseline, then wakes the bot only for a change, local 
   h.done();
 });
 
+test("the heartbeat's health file (a hung Controller) wakes the bot once, and again when it clears", () => {
+  const h = watchSetup();
+  h.write(h.alpha); h.write(h.beta);
+  assert.equal(h.run().status, 1, "baseline");
+  const health = path.join(h.dir, "controller-alpha", "heartbeat-health.md");
+  fs.writeFileSync(health, "- HUNG since 08:00: busy, no change for 31 minutes\n");
+  assert.equal(h.run().status, 0);
+  assert.match(h.wake(), /## alpha[\s\S]*CONTROLLER HEALTH: - HUNG since 08:00/);
+  assert.doesNotMatch(h.wake(), /## beta/);
+  assert.equal(h.run().status, 1, "reported once");
+  fs.rmSync(health);
+  assert.equal(h.run().status, 0);
+  assert.match(h.wake(), /CONTROLLER HEALTH: \(cleared\)/);
+  h.done();
+});
+
 test("a stale status and an unreachable host wake the bot once, not every 5 minutes", () => {
   const h = watchSetup();
   h.write(h.alpha); h.write(h.beta);
@@ -323,6 +339,28 @@ test("status and doctor report a handbook that calls cleanup without --apply, an
   assert.match(p.cli("doctor").stdout, /MISSING cleanup: removable work has waited/);
   fs.rmSync(path.join(ctl, "cleanup-pending.json"));
   assert.equal(cleanup().problem, null);
+  m.done();
+});
+
+test("status, doctor, update and start say when the kept handbook does not know inbox.mjs --done or restart.md", () => {
+  const m = machine();
+  const p = m.project("theta", {});
+  const ctl = path.join(m.home, "controller-theta");
+  fs.mkdirSync(ctl, { recursive: true });
+  const handbook = () => JSON.parse(p.cli("status", "--json").stdout).setup.handbook;
+  assert.equal(handbook().problem, null, "nothing installed, nothing to report");
+  fs.writeFileSync(path.join(ctl, "CONTROLLER.md"), "| `node cleanup.mjs --all --apply` | every cycle |\nRead `inbox.md` and move processed lines.\n");
+  assert.match(handbook().problem, /does not mention reading the inbox with `node inbox\.mjs` and `--done` and `restart\.md` after a restart.*\.factory\/new\/.*run start|does not mention .*inbox\.mjs.*restart\.md.*merge it, then run start/s);
+  assert.match(p.cli("doctor").stdout, /MISSING handbook: the Controller's CONTROLLER\.md does not mention/);
+  // The current one knows both.
+  fs.copyFileSync(path.join(p.dir, ".factory/controller/CONTROLLER.md"), path.join(ctl, "CONTROLLER.md"));
+  assert.deepEqual(handbook().missing, []);
+  assert.match(p.cli("doctor").stdout, /OK      handbook: it knows inbox\.mjs --done and restart\.md/);
+  // update and start warn about a locally kept older copy.
+  const kept = path.join(p.dir, ".factory/controller/CONTROLLER.md");
+  fs.writeFileSync(kept, fs.readFileSync(kept, "utf8").replace(/inbox\.mjs --done/g, "inbox.mjs").replace(/restart\.md/g, "restart notes"));
+  const u = p.cli("update");
+  assert.match(u.stdout, /WARNING: \.factory\/controller\/CONTROLLER\.md does not mention .*inbox\.mjs.*restart\.md.*\.factory\/new\//s);
   m.done();
 });
 

@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { check } from "../controller/cli.mjs";
-import { controllerPlaces, locateController } from "../controller/controller-terminal.mjs";
+import { controllerPlaces, controllerSession, createArgs, createdHandle, locateController } from "../controller/controller-terminal.mjs";
 import { heartbeatCronCheckScript, heartbeatCronScript, heartbeatLabel, heartbeatPlist, statusWatchCronScript, statusWatchLabel, statusWatchPlist } from "./heartbeat-cron.mjs";
 import { applyReadGrants } from "./read-grants.mjs";
 import { copyTreeAtomic, withLock, writeFileAtomic } from "./safe-write.mjs";
@@ -419,6 +419,10 @@ function templateVars(c) {
     UI_LANGUAGE: c.project.language === "de" ? "German" : "English", LANGUAGE_NAME: c.project.language === "de" ? "German" : "English",
     MAX_ROUNDS: String(c.reviews.maxRounds), SUITE_MAX: String(ctl.capacity?.suiteWorkersMax ?? c.capacity.suiteWorkersMax), READONLY_MAX: String(ctl.capacity?.readOnlyWorkersMax ?? c.capacity.readOnlyWorkersMax),
     UNIT_SLOTS: String(ctl.capacity?.gate?.unitSlots ?? c.capacity.gate.unitSlots), E2E_SLOTS: String(ctl.capacity?.gate?.e2eSlots ?? c.capacity.gate.e2eSlots),
+    // hosts.controller.wake, .hung and .restart: defaults as in controller/lib.mjs and docs/orca.md.
+    WAKE_IDLE_MINUTES: String(c.hosts.controller.wake?.idleMinutes ?? 30), BUSY_POINTER_MINUTES: String(c.hosts.controller.wake?.busyPointerMinutes ?? 2),
+    HUNG_MINUTES: String(c.hosts.controller.hung?.minutes ?? 25), HUNG_RESTART_MINUTES: String(c.hosts.controller.hung?.restartAfterMinutes ?? 15),
+    CONTEXT_PERCENT: String(c.hosts.controller.restart?.contextPercent ?? 50), RESTART_GAP_MINUTES: String(c.hosts.controller.restart?.contextGapMinutes ?? 120),
     MODEL_SMALL: c.agents.models.small, MODEL_DEFAULT: c.agents.models.default, MODEL_LARGE: c.agents.models.large,
     AGENT_DEFAULT: c.agents.default, AGENT_FALLBACK: c.agents.fallback.agent, FB_SMALL: c.agents.fallback.models.small, FB_DEFAULT: c.agents.fallback.models.default, FB_LARGE: c.agents.fallback.models.large, QUOTA_THRESHOLD: String(c.agents.fallback.quotaThresholdPercent),
     WAVE_PASSED: String(c.reviews.waveTriggers.passedTasks), WAVE_MINUTES: String(c.reviews.waveTriggers.waitMinutes), FAST_LANE_MAX: String(c.improvement.fastLaneMaxParallel),
@@ -671,6 +675,7 @@ function warnCleanupTrap(where = ".factory/controller/CONTROLLER.md", text) {
   const f = ".factory/controller/CONTROLLER.md";
   const calls = cleanupCallsWithoutApply(text ?? (fs.existsSync(f) ? fs.readFileSync(f, "utf8") : ""));
   if (calls.length) say(`\nWARNING: ${where} calls cleanup without --apply (\`${calls[0]}\`): ${CLEANUP_TRAP}.`);
+  if (text === undefined && fs.existsSync(f)) { const missing = handbookMissing(fs.readFileSync(f, "utf8")); if (missing.length) say(`\nWARNING: ${where} does not mention ${missing.join(" and ")}: ${HANDBOOK_NOTE}.`); }
 }
 // --- update ----------------------------------------------------------------------------------------
 async function update() {
@@ -763,6 +768,7 @@ function doctor() {
     else if (!hb.installed) info("heartbeat not scheduled yet (the Controller is not started: run start)");
     else bad("heartbeat not scheduled: nothing wakes the Controller from outside, so finished workers wait for a person (run start; if that fails it says why)");
   }
+  { const hb = handbookStatus(c); if (hb.problem) bad(`handbook: ${hb.problem}`); else if (hb.handbookInstalled) ok("handbook: it knows inbox.mjs --done and restart.md"); }
   { const cl = cleanupStatus(c); if (cl.problem) bad(`cleanup: ${cl.problem}`); else if (cl.unknown) info("cleanup: the Controller's host did not answer, so it is not known whether the handbook calls cleanup with --apply"); else if (!cl.handbookInstalled) info("cleanup: not checked, no Controller handbook is installed yet (run start)"); else ok("cleanup: the handbook calls it with --apply and no removable work waits"); }
   if (!heartbeatOn(c) && c.hosts.controller.heartbeat === false) info("heartbeat off (hosts.controller.heartbeat is false): you wake the Controller yourself");
   if (!["terminal", "orca-bot"].includes(frontKind(c))) bad(`hosts.frontAgent.kind "${frontKind(c)}" (terminal or orca-bot)`);
@@ -953,7 +959,6 @@ const controllerTerminal = (c) => {
   } catch { return null; }
 };
 const hasControllerTerminal = (c) => Boolean(controllerTerminal(c)?.terminal);
-const agentCommand = (agent, prompt, args) => `${agent}${args ? ` ${args}` : ""} ${JSON.stringify(prompt)}`;
 
 // Reads the Controller's status.md (local file or over ssh): age in minutes and the open "Needs <human>" items.
 function controllerStatus(c) {
@@ -1004,6 +1009,7 @@ function collectStatus() {
     controller: { host: ctl.host, statusAgeMin: ctl.ageMin, terminal: ctlTerminal, ...(terminalProblem ? { terminalProblem } : {}), running: ctlTerminal || (ctl.ageMin !== null && ctl.ageMin <= 25) },
     heartbeat: heartbeatStatus(c),
     cleanup: cleanupStatus(c),
+    handbook: handbookStatus(c),
   };
   // A bot Front agent: the bot and its watch automation instead of the terminal's status watch.
   if (frontKind(c) === "orca-bot") { s.setup.frontAgent = { kind: "orca-bot", ...botWatchStatus(c) }; s.setup.statusWatch = false; }   // a bot is woken by its automation (setup.frontAgent.watchAutomation), not by a status watch
@@ -1044,6 +1050,7 @@ function collectStatus() {
   const hb = s.setup.heartbeat;
   if (hb.enabled && !hb.unknown && s.phase !== "start" && (!hb.scheduled || hb.problem)) s.next = `${hb.scheduled ? `The heartbeat is scheduled but ${hb.problem}` : "The heartbeat is not scheduled"}, so nothing wakes the Controller when a worker finishes: run \`start\` (or set hosts.controller.heartbeat to false if you wake it yourself). Then: ${s.next}`;
   if (s.setup.cleanup.problem && s.phase !== "start") s.next = `Cleanup does not run: ${s.setup.cleanup.problem}. Then: ${s.next}`;
+  if (s.setup.handbook?.problem && s.phase !== "start") s.next = `The Controller's handbook is old: ${s.setup.handbook.problem}. Then: ${s.next}`;
   s.hints = [
     ...(s.setup.gate.sharedLeftover ? ["a shared gate is still in ~/.local/bin: this project does not use it (its gate is in its Controller directory); delete it once no older project on this host uses it"] : []),
     ...(!s.work.glossary ? ["the business terms are not written down yet (no GLOSSARY.md): capture them with domain-modeling while specifying"] : []),
@@ -1068,6 +1075,7 @@ function status() {
     if (st.frontAgent) say(`${st.frontAgent.botExists ? "OK     " : "MISSING"} Front agent bot ${st.frontAgent.bot ?? "(hosts.frontAgent.bot is empty)"}\n${st.frontAgent.watchAutomation ? "OK     " : "MISSING"} its watch automation`);
     if (st.heartbeat.enabled) say(st.heartbeat.unknown ? "info    heartbeat: the Controller's host did not answer" : st.heartbeat.scheduled ? `${st.heartbeat.problem ? "MISSING" : "OK     "} heartbeat (${st.heartbeat.scheduled})${st.heartbeat.problem ? `: ${st.heartbeat.problem}` : st.heartbeat.lastOkAt ? `, ran fine at ${st.heartbeat.lastOkAt}` : ""}` : st.heartbeat.installed ? "MISSING heartbeat (run start)" : "info    heartbeat not scheduled yet (run start)");
     if (st.cleanup?.problem) say(`MISSING cleanup: ${st.cleanup.problem}`);
+    if (st.handbook?.problem) say(`MISSING handbook: ${st.handbook.problem}`);
     say(`${st.controller.running ? "OK     " : "MISSING"} Controller on ${st.controller.host}${st.controller.statusAgeMin !== null ? ` (status.md ${st.controller.statusAgeMin} min old)` : ""}${st.controller.terminalProblem ? `: ${st.controller.terminalProblem}` : ""}`);
     const w = s.work;
     say(`\nDesigned features: ${w.designedFeatures.length ? w.designedFeatures.join(", ") : "none"}`);
@@ -1112,7 +1120,10 @@ function heartbeatScheduled(c, ctl, dir) {
   const label = heartbeatJob(c);
   if (ctl.kind !== "local" || !fs.existsSync(launchdPlistPath(label))) return {};
   const printed = spawnSync("launchctl", ["print", `gui/${process.getuid()}/${label}`], { encoding: "utf8" });
-  return printed.status === 0 ? { how: "launchd", lastExit: Number(/last exit code = (-?\d+)/.exec(printed.stdout ?? "")?.[1] ?? 0) } : {};
+  // The plist is written when the job is installed (not when it is unchanged), so its age tells a job installed a moment ago from one
+  // that went silent: a reinstall leaves the old heartbeat.alive behind for the first minutes.
+  let installedMin; try { installedMin = (Date.now() - fs.statSync(launchdPlistPath(label)).mtimeMs) / 60000; } catch { /* no plist time */ }
+  return printed.status === 0 ? { how: "launchd", installedMin, lastExit: Number(/last exit code = (-?\d+)/.exec(printed.stdout ?? "")?.[1] ?? 0) } : {};
 }
 // What doctor and status report. scheduled: cron, launchd, or "external" (it ran in the last minutes although neither is set up:
 // the host's own scheduler runs it). state, for a job that is scheduled: "not-yet" (just installed), "never-ran", "silent" (no
@@ -1132,7 +1143,7 @@ function heartbeatStatus(c) {
   let state = null, problem = null;
   if (scheduled && scheduled !== "external") {
     if (seen === null) [state, problem] = installed !== null && installed > HEARTBEAT_SILENT_MIN ? ["never-ran", `it has never run (it was installed ${Math.round(installed)} minutes ago; see heartbeat.log, and run start to schedule it again)`] : ["not-yet", null];
-    else if (!runs) [state, problem] = ["silent", `it has not run for ${Math.round(seen)} minutes (see heartbeat.log; run start to schedule it again)`];
+    else if (!runs) [state, problem] = by.installedMin !== undefined && by.installedMin <= HEARTBEAT_SILENT_MIN ? ["not-yet", null] : ["silent", `it has not run for ${Math.round(seen)} minutes (see heartbeat.log; run start to schedule it again)`];
   }
   // Only a copy that writes heartbeat.alive can tell "started" from "got through".
   if (!problem && started !== null && (scheduled || runs) && (ok === null ? started > 1 : ok - started > 2)) [state, problem] = ["failed", `its last run did not get through (it starts but ends in an error or without Orca: see heartbeat.log)`];
@@ -1148,6 +1159,22 @@ function heartbeatStatus(c) {
 // --dry; the old handbook's `[--dry]` is an optional flag of a call that is meant to clean up).
 const cleanupCallsWithoutApply = (text) => [...String(text).matchAll(/node cleanup\.mjs[^`\n]*/g)].map((m) => m[0].trim()).filter((s) => !/--apply\b|--help\b|(?<!\[)--dry\b/.test(s));
 const CLEANUP_TRAP = "cleanup deletes only with --apply, so this handbook cleans up nothing (every cycle exits with code 3). A CONTROLLER.md you edited stays on update and its new version lies in .factory/new/.factory/controller/CONTROLLER.md: merge it, or add --apply to the call, then run start";
+// The handbook of an installation that kept an edited CONTROLLER.md (the new one lies in .factory/new/) may predate the heartbeat's
+// inbox and restart scripts: a Controller that does not know `inbox.mjs --done` leaves every inbox line waking it, and one that does
+// not know restart.md would not read what a restart left for it.
+const HANDBOOK_NEW = [["inbox\\.mjs --done", "reading the inbox with `node inbox.mjs` and `--done`"], ["restart\\.md", "`restart.md` after a restart"]];
+const handbookMissing = (text) => HANDBOOK_NEW.filter(([re]) => !new RegExp(re).test(text)).map(([, what]) => what);
+const HANDBOOK_NOTE = "an older CONTROLLER.md you edited stays on update and its new version lies in .factory/new/.factory/controller/CONTROLLER.md: merge it, then run start. Until then every non-empty inbox keeps waking the Controller, and a Controller restarted by the heartbeat or by itself would not know what restart.md is";
+function handbookStatus(c) {
+  const ctl = controllerHost(c) ?? { kind: "local", name: "local" };
+  const dir = heartbeatDir(c).replace(/^~(?=\/|$)/, "$HOME");
+  const out = onController(ctl, `f="${dir}/CONTROLLER.md"; if [ -f "$f" ]; then echo present; grep -c 'inbox\\.mjs --done' "$f"; grep -c 'restart\\.md' "$f"; else echo absent; fi`);
+  if (out.status !== 0 && !out.stdout) return { unknown: true };
+  const [state, inbox, restart] = String(out.stdout).trim().split("\n");
+  if (state !== "present") return { handbookInstalled: false, missing: [], problem: null };
+  const missing = [Number(inbox) ? null : HANDBOOK_NEW[0][1], Number(restart) ? null : HANDBOOK_NEW[1][1]].filter(Boolean);
+  return { handbookInstalled: true, missing, problem: missing.length ? `the Controller's CONTROLLER.md does not mention ${missing.join(" and ")}: ${HANDBOOK_NOTE}` : null };
+}
 function cleanupStatus(c) {
   const ctl = controllerHost(c) ?? { kind: "local", name: "local" };
   const dir = heartbeatDir(c).replace(/^~(?=\/|$)/, "$HOME");
@@ -1371,8 +1398,7 @@ async function start() {
   if (frontKind(c) === "orca-bot") failed += armBotWatch(c, fa);
   const ctl = c.hosts.workers.find((h) => h.name === c.hosts.controller.host) ?? { kind: "local", name: "local" };
   const dir = c.hosts.controller.controllerDir ?? "~/controller";
-  const prompt = `Read ${dir}/CONTROLLER.md and act as the Controller for the project ${c.project.name}.`;
-  const session = `cd ${dir} && ${agentCommand(c.agents.default, prompt, c.agents.controllerArgs)}`;
+  const session = controllerSession({ dir, project: c.project.name, agent: c.agents.default, args: c.agents.controllerArgs });
   const title = controllerTitle(c);
   if (minimal(c)) {
     say("\nStandard:"); if (!installStandard()) failed++;
@@ -1420,6 +1446,9 @@ async function start() {
     else { failed++; say(`Gate on ${h.name}: could not copy it to ${dir} (${(cp.stderr || "").trim().slice(0, 200)}). Gates run there too, so this start failed.`); }
   }
   failed += armHeartbeat(c, ctl, dir);
+  // Running `start` is somebody looking at the project: a Controller restarted automatically after a hang may be restarted once more
+  // if it hangs again, so the heartbeat's record of that restart (and of a hang in progress) is cleared here and nowhere else.
+  try { if (ctl.kind === "local") fs.rmSync(path.join(expandHome(dir), "heartbeat.hung.json"), { force: true }); else spawnSync("ssh", [...sshArgsFor(ctl), `rm -f ${dir}/heartbeat.hung.json`], { encoding: "utf8" }); } catch { /* a later start clears it */ }
   // The Controller's own agent session, in an Orca terminal so the Front agent can read it and send it text.
   const located = controllerTerminal(c);
   const running = located?.terminal;
@@ -1440,9 +1469,9 @@ async function start() {
     if (ctl.kind === "remote" && (!ctl.orcaEnvironment || !remoteHome.startsWith("/") || (!remotePath.startsWith("/") && !/^~(?:\/|$)/.test(remotePath)))) { failed++; say(`Controller session: set hosts.workers[].orcaEnvironment to the saved Orca environment name and configure an absolute or ~/ remote project path; ensure ssh can resolve the remote home. Start it by hand:\n  ${session}`); }
     else {
     const where = ctl.kind === "local" ? ["--worktree", `path:${cwd}`] : ["--environment", ctl.orcaEnvironment, "--worktree", `path:${path.posix.resolve(remotePath.replace(/^~(?=\/|$)/, remoteHome))}`];
-    const r = spawnSync(ORCA_BIN, ["terminal", "create", ...where, "--title", title, "--command", session, "--json"], { encoding: "utf8" });
+    const r = spawnSync(ORCA_BIN, createArgs({ where, title, session }), { encoding: "utf8" });
     if (r.status === 0 && /"ok":\s*true/.test(r.stdout)) {
-      let created; try { const j = JSON.parse(r.stdout).result; created = j?.terminal?.handle ?? j?.handle; } catch { /* the title finds it */ }
+      const created = createdHandle(r.stdout);   // without a handle the Controller's name finds it
       if (created) recordHandle(c, ctl, created, ctl.kind === "local" ? cwd : path.posix.resolve(remotePath.replace(/^~(?=\/|$)/, remoteHome)));
       say(`Controller session: started (Orca terminal "${title}"). ${TRUST_HINT}`);
     }

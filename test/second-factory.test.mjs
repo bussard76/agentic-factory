@@ -148,6 +148,9 @@ test("writeFileAtomic does not touch a file that already has the content and mod
 });
 
 test("stallwatch: a worker in workers.json is watched wherever its worktree is, others are ignored with a notice, and with none of its own there is nothing to watch", () => {
+  // Nothing here depends on where the repository is checked out: the child gets a home and a working directory of its own, and the
+  // "default layout" paths below are built from that home.
+  const home = tmp("stall-home");
   const run = (workersJson, terminals) => {
     const dir = tmp("stall-layout");
     for (const f of ["stallwatch.mjs", "cli.mjs", "lib.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
@@ -155,7 +158,7 @@ test("stallwatch: a worker in workers.json is watched wherever its worktree is, 
     if (workersJson) fs.writeFileSync(path.join(dir, "workers.json"), JSON.stringify(workersJson));
     const log = path.join(dir, "reads.log"), fake = path.join(dir, "fake-orca.mjs");
     fs.writeFileSync(fake, `#!/usr/bin/env node\nimport fs from "node:fs";\nconst a = process.argv.slice(2);\nif (a[1] === "read") fs.appendFileSync(${JSON.stringify(log)}, a[a.indexOf("--terminal") + 1] + "\\n");\nconsole.log(JSON.stringify({ ok: true, result: { terminals: ${JSON.stringify(terminals)}, terminal: { tail: [] } } }));\n`, { mode: 0o755 });
-    const r = spawnSync("node", [path.join(dir, "stallwatch.mjs")], { encoding: "utf8", timeout: 3000, env: { ...process.env, FACTORY_CONFIG: path.join(dir, "factory.config.json"), ORCA_CLI_COMMAND: fake } });
+    const r = spawnSync("node", [path.join(dir, "stallwatch.mjs")], { encoding: "utf8", timeout: 6000, cwd: dir, env: { ...process.env, HOME: home, FACTORY_CONFIG: path.join(dir, "factory.config.json"), ORCA_CLI_COMMAND: fake } });
     const reads = fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n") : [];
     fs.rmSync(dir, { recursive: true, force: true });
     return { reads, out: r.stdout ?? "" };
@@ -171,9 +174,9 @@ test("stallwatch: a worker in workers.json is watched wherever its worktree is, 
   r = run({ t1: { name: "T1 · Worker Developer", host: "local", terminal: "gone" } }, [t("a", "/elsewhere/q/t1")]);
   assert.deepEqual(r.reads, []);
   // the default layout: this project's workspace directory by path
-  const home = os.homedir();
   r = run(null, [t("own", path.join(home, "orca/workspaces/p/t1")), t("foreign", path.join(home, "orca/workspaces/other/t1"))]);
   assert.deepEqual(r.reads, ["own"]);
+  fs.rmSync(home, { recursive: true, force: true });
 });
 
 test("allow_paths: any path is written as a valid TOML string, comments stay, and a file that cannot be read safely is refused", () => {
