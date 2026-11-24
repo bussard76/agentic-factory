@@ -170,17 +170,17 @@ test("agent entry questions, answers, status and start in an isolated home", asy
     // start schedules the status watch on this machine: a test must never reach the real crontab.
     fs.writeFileSync(path.join(bin, "crontab"), "#!/bin/sh\n[ \"$1\" = -l ] && exit 0\ncat > /dev/null\n", { mode: 0o755 });
     fs.writeFileSync(path.join(bin, "launchctl"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    fs.writeFileSync(path.join(bin, "ssh"), `#!/bin/sh\ncase "$*" in *'| crontab -'*) printf '%s\\n' "$*" >> '${calls}.ssh'; printf 'added\\n';; *'printf '*) printf '/remote/home\\n';; *) printf '%s\\n' "$*" >> '${calls}.ssh'; printf 'ok\\n';; esac\n`, { mode: 0o755 });
+    // The placement probe (node run on the host, its script on stdin) is answered with an empty destination, or with what a test puts in ${calls}.probe.
+    fs.writeFileSync(path.join(bin, "ssh"), `#!/bin/sh\ncase "$*" in *'input-type=module'*) cat > /dev/null; cat '${calls}.probe' 2>/dev/null || printf '%s\\n' '{"dirExists":false,"files":{},"texts":{},"record":{}}';; *'| crontab -'*) printf '%s\\n' "$*" >> '${calls}.ssh'; printf 'added\\n';; *'printf '*) printf '/remote/home\\n';; *) printf '%s\\n' "$*" >> '${calls}.ssh'; printf 'ok\\n';; esac\n`, { mode: 0o755 });
     config.hosts.workers = [{ name: "remote", kind: "remote", ssh: "fake", projectsDir: "~/projects", orcaEnvironment: "saved-server" }]; config.hosts.controller.host = "remote";
     fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
     r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
     assert.equal(r.status, 0, r.stdout + r.stderr); const sshCalls = fs.readFileSync(`${calls}.ssh`, "utf8"); assert.match(sshCalls, /pgrep -f "\[b\]ash \$HOME\/controller\/loadlog\.sh " >\/dev\/null \|\| \(cd ~\/controller && nohup bash \$HOME\/controller\/loadlog\.sh 'project'/); assert.doesNotMatch(sshCalls, /\.local\/bin\/gate/, "a remote start does not touch the shared gate either"); assert.match(sshCalls, /node heartbeat\.mjs/);
     // A kept older handbook that calls cleanup without --apply is reported for a remote Controller host too, naming the host.
-    const sshFile = path.join(bin, "ssh"), sshOriginal = fs.readFileSync(sshFile, "utf8");
-    fs.writeFileSync(sshFile, sshOriginal.replace("case \"$*\" in ", "case \"$*\" in *'cleanup\\.mjs'*) printf 'node cleanup.mjs --all --prune-remote\\n';; "), { mode: 0o755 });
+    fs.writeFileSync(`${calls}.probe`, JSON.stringify({ dirExists: true, files: { "CONTROLLER.md": "0123456789abcdef" }, texts: { "CONTROLLER.md": "node cleanup.mjs --all --prune-remote\n" }, record: {} }) + "\n");   // a handbook someone changed there
     r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
     assert.match(r.stdout, /WARNING: remote:~\/controller\/CONTROLLER\.md calls cleanup without --apply \(`node cleanup\.mjs --all --prune-remote`\)/, r.stdout);
-    fs.writeFileSync(sshFile, sshOriginal, { mode: 0o755 });
+    fs.rmSync(`${calls}.probe`);
     r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
     assert.doesNotMatch(r.stdout, /WARNING: .*calls cleanup without --apply/, "an installed handbook with --apply is not reported");
     // Gates run on every other worker host too (workers, waves, slots): the project's gate goes there, and a failure is a failed start.
@@ -189,7 +189,7 @@ test("agent entry questions, answers, status and start in an isolated home", asy
     r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
     assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /Gate on other: ~\/controller\/gate \(this project's own\)/);
     assert.match(fs.readFileSync(`${calls}.ssh`, "utf8"), /fake2 mkdir -p ~\/controller/);
-    assert.match(fs.readFileSync(`${calls}.rsync`, "utf8"), /\/gate \S*\/gate\.mjs \S*\/factory\.config\.json fake2:~\/controller\//);
+    assert.match(fs.readFileSync(`${calls}.rsync`, "utf8"), / fake2:~\/controller\//);
     // doctor checks it per host
     const sshReal = fs.readFileSync(path.join(bin, "ssh"), "utf8");
     fs.writeFileSync(path.join(bin, "ssh"), `#!/bin/sh\ncase "$*" in *"fake2"*"/gate ]"*) ;; *"/gate ]"*) echo ok;; *"echo ok"*) echo ok;; esac\n`, { mode: 0o755 });

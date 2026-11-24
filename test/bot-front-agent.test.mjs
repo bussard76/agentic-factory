@@ -376,7 +376,7 @@ test("F3/F7: update and start say plainly when the kept handbook calls cleanup w
   assert.equal(u.status, 0, u.stderr);
   assert.match(u.stdout, /WARNING: \.factory\/controller\/CONTROLLER\.md calls cleanup without --apply.*\.factory\/new\/\.factory\/controller\/CONTROLLER\.md.*run start/s);
   const s = p.cli("start");
-  assert.match(s.stdout, /WARNING: \.factory\/controller\/CONTROLLER\.md calls cleanup without --apply/, s.stdout);
+  assert.match(s.stdout, /WARNING: \S*controller-eta\/CONTROLLER\.md calls cleanup without --apply/, "start names the file it installed, in the Controller directory");
   // A rule that says "look first with --dry, then --apply" is not a call that fails to clean up.
   const ctl = path.join(m.home, "controller-eta");
   fs.writeFileSync(path.join(ctl, "CONTROLLER.md"), "Look first with `node cleanup.mjs --dry`, then run `node cleanup.mjs --all --apply`.\n");

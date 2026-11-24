@@ -170,12 +170,12 @@ function argumentProblems(rel, source) {
 
 test("every argument a script reads is named in its usage, so a valid call is never rejected", () => {
   for (const rel of WITH_CLI) assert.deepEqual(argumentProblems(rel, fs.readFileSync(path.join(ROOT, rel), "utf8")), [], rel);
-  // agentic-factory reads its arguments only through flag(), opt() and args[0]/args[1] (deviate's path).
+  // agentic-factory reads its arguments only through flag(), opt() and args[0]/args[1] (deviate's path, this-machine's ssh target).
   const cli = fs.readFileSync(CLI, "utf8");
   const usage = cli.slice(cli.indexOf("const USAGE = {"), cli.indexOf("const commandHelp"));
   for (const [, o] of cli.matchAll(/(?:flag|opt)\("(--[\w-]+)"/g)) assert.ok(o === "--yes" || usage.includes(o), `agentic-factory reads ${o} but USAGE does not name it`);
   const reads = [...cli.matchAll(/\bargs(\.[A-Za-z]+|\[[^\]]*\])|process\.argv[.[]\w*/g)].map((m) => m[0]).sort();
-  assert.deepEqual(reads, ["args.includes", "args.indexOf", "args.push", "args.slice", "args[0]", "args[1]", "args[i + 1]", "process.argv.push", "process.argv.slice"],
+  assert.deepEqual(reads, ["args.includes", "args.indexOf", "args.push", "args.slice", "args[0]", "args[1]", "args[1]", "args[i + 1]", "process.argv.push", "process.argv.slice"],
     "agentic-factory reads its arguments in a new place: name the option in USAGE and extend this list");
 });
 
