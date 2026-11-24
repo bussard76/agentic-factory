@@ -24,8 +24,11 @@ export function staleLimit(cfg) {
 }
 // Which configured host is the machine this runs on. factory.config.json is shared by every machine, so it cannot say; each machine
 // says it itself, once, with `agentic-factory this-machine <ssh target>`, in ~/.config/agentic-factory/this-machine.json: the ssh
-// targets that reach THIS machine, and the id of the machine that said so. A marker copied to another machine (dotfiles, a cloned
-// home) carries the other machine's id and counts for nothing there. FACTORY_MACHINE_ID replaces the id (tests).
+// targets that reach THIS machine, kept per machine (its id and its host name), so two machines that share a home each have their entry.
+// An entry counts only on the machine whose id AND host name it carries: a record copied to another machine (dotfiles, a copied home)
+// counts for nothing there, and a machine without an id never matches. A cloned VM that keeps both the machine id and the host name
+// cannot be told from the original: it must get a new machine id or host name, or run `this-machine --forget`.
+// FACTORY_MACHINE_ID and FACTORY_HOSTNAME replace them (tests).
 export const markerFile = () => path.join(os.homedir(), ".config/agentic-factory/this-machine.json");
 let machineIdCache;
 export function machineId() {
@@ -34,17 +37,24 @@ export function machineId() {
   for (const f of ["/etc/machine-id", "/var/lib/dbus/machine-id"]) try { const t = fs.readFileSync(f, "utf8").trim(); if (t) return (machineIdCache = t); } catch { /* next */ }
   return (machineIdCache = process.platform === "darwin" ? /"IOPlatformUUID"\s*=\s*"([^"]+)"/.exec(spawnSync("ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8" }).stdout ?? "")?.[1] ?? "" : "");
 }
+export const hostName = () => String(process.env.FACTORY_HOSTNAME ?? os.hostname()).toLowerCase();
+/** The record: { machines: [{ machineId, hostname, ssh: [target…] }] }; anything else reads as "nothing recorded". */
 export function readMarker() {
-  try { const m = JSON.parse(fs.readFileSync(markerFile(), "utf8")); return { machineId: String(m.machineId ?? ""), ssh: Array.isArray(m.ssh) ? m.ssh.filter((t) => typeof t === "string" && t) : [] }; } catch { return { machineId: "", ssh: [], missing: true }; }
+  try {
+    const m = JSON.parse(fs.readFileSync(markerFile(), "utf8"));
+    const machines = (Array.isArray(m.machines) ? m.machines : []).filter((e) => e && typeof e.machineId === "string" && typeof e.hostname === "string" && Array.isArray(e.ssh)).map((e) => ({ machineId: e.machineId, hostname: e.hostname, ssh: e.ssh.filter((t) => typeof t === "string" && t) }));
+    return machines.length ? { machines } : { machines: [], missing: true };
+  } catch { return { machines: [], missing: true }; }
 }
+/** The entry of this machine (same id and host name; never for an empty id), or undefined. */
+export const ownEntry = (m = readMarker()) => (machineId() ? m.machines.find((e) => e.machineId === machineId() && e.hostname === hostName()) : undefined);
 /** The user an ssh target `user@host` names, or "". */
 export const sshUser = (ssh) => (String(ssh ?? "").includes("@") ? String(ssh).split("@")[0] : "");
 /** True when `h` is a remote host that the marker says is this machine: its ssh target is listed, this machine is the one that wrote
  *  the marker, and the target's user (when it names one) is the user running this. No name, path or address is ever compared. */
 export function isThisMachine(h) {
   if (!h?.ssh || (h.kind ?? "remote") !== "remote") return false;
-  const m = readMarker();
-  if (m.missing || !m.ssh.includes(h.ssh) || m.machineId !== machineId()) return false;
+  if (!ownEntry()?.ssh.includes(h.ssh)) return false;
   const user = sshUser(h.ssh);
   return !user || user === os.userInfo().username;
 }

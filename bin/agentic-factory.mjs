@@ -9,9 +9,9 @@ import readline from "node:readline/promises";
 import { check } from "../controller/cli.mjs";
 import { controllerPlaces, controllerSession, createArgs, createdHandle, locateController } from "../controller/controller-terminal.mjs";
 import { heartbeatCronCheckScript, heartbeatCronScript, heartbeatLabel, heartbeatPlist, statusWatchCronScript, statusWatchLabel, statusWatchPlist } from "./heartbeat-cron.mjs";
-import { isThisMachine, machineId, markerFile, readMarker, sshUser, staleLimit } from "../front-agent/hosts.mjs";
+import { hostName, isThisMachine, machineId, markerFile, ownEntry, readMarker, sshUser, staleLimit } from "../front-agent/hosts.mjs";
 import { patchJson } from "./json-patch.mjs";
-import { RECORD, diffKeys, planPlacement, probeSource } from "./placement.mjs";
+import { RECORD, diffKeys, hash16, isEditable, planPlacement, probeSource } from "./placement.mjs";
 import { applyReadGrants } from "./read-grants.mjs";
 import { copyTreeAtomic, withLock, writeFileAtomic } from "./safe-write.mjs";
 
@@ -725,33 +725,57 @@ function probeDest(host, dir, rels, read = []) {
     : spawnSync("ssh", [...sshArgsFor(host), `bash -lc 'node --input-type=module - "$0"' ${quoteSh(dir)}`], { input: src, encoding: "utf8", timeout: 30000 });
   try { const p = JSON.parse(String(r.stdout ?? "").trim().split("\n").pop()); return p?.files ? p : null; } catch { return null; }
 }
-// Looks at a destination and, with `apply`, puts there what may be put there (the rule in bin/placement.mjs). Returns the plan, or
-// { unreachable: true }, or the plan with `error` when the copy failed.
+// Looks at a destination and, with `apply`, installs the bundle there (the rule in bin/placement.mjs): code always, as one set; the files people
+// edit only where nothing says the project changed them. Copies that are replaced without being a known template version are saved first.
+// Returns the plan, or { unreachable: true }; the plan has `error` when something failed (and then the record is not written).
+const backupDate = () => new Date().toISOString().slice(0, 10);
 function placeBundle({ host, dir, bundle, only, apply, read = [] }) {
   const files = bundleFiles(bundle, only);
+  const execs = new Set([...files.keys()].filter((rel) => fs.statSync(path.join(bundle, rel)).mode & 0o100));
   const probe = probeDest(host, dir, [...files.keys()], read);
   if (!probe) return { unreachable: true };
-  const plan = { ...planPlacement({ files, probe, manifest: manifestNow(), bundle }), texts: probe.texts, files, dirExists: probe.dirExists };
-  if (!apply) return plan;
+  const plan = { ...planPlacement({ files, execs, probe, manifest: manifestNow(), bundle }), texts: probe.texts, files, dirExists: probe.dirExists, bundleDir: bundle };
+  const date = backupDate();
+  if (!apply) { plan.backedUp = plan.backups.map((b) => ({ ...b, name: `${b.rel}.backup-${date}` })); return plan; }
+  const run = (script) => (host.kind === "local" ? spawnSync("sh", ["-c", script], { encoding: "utf8" }) : spawnSync("ssh", [...sshArgsFor(host), script], { encoding: "utf8" }));
   const stage = fs.mkdtempSync(path.join(os.tmpdir(), "af-place-"));
+  const copyOut = (from) => {
+    if (host.kind === "local") { copyTreeAtomic(from, expandHome(dir)); return ""; }
+    const r = spawnSync("rsync", ["-a", "-e", rsyncShell(host), `${from}/`, `${host.ssh}:${dir}/`], { encoding: "utf8" });
+    return r.status === 0 ? "" : (r.stderr || "rsync failed").trim().slice(0, 200);
+  };
   try {
-    const put = (rel, bytes, mode) => { const to = path.join(stage, rel); fs.mkdirSync(path.dirname(to), { recursive: true }); fs.writeFileSync(to, bytes, { mode }); };
-    for (const rel of plan.install) put(rel, files.get(rel), fs.statSync(path.join(bundle, rel)).mode & 0o777);
-    for (const k of plan.kept) put(`${k.rel}.new`, files.get(k.rel), 0o644);
-    put(RECORD, JSON.stringify({ factoryVersion: PKG.version, files: plan.record }, null, 2) + "\n", 0o644);
-    if (host.kind === "local") copyTreeAtomic(stage, expandHome(dir));
-    else {
-      const r = spawnSync("rsync", ["-a", "-e", rsyncShell(host), `${stage}/`, `${host.ssh}:${dir}/`], { encoding: "utf8" });
-      if (r.status !== 0) plan.error = (r.stderr || "").trim().slice(0, 200);
+    // 1. Save what is about to be replaced and is not a known template version (a numbered name when the day's name is taken).
+    plan.backedUp = [];
+    if (plan.backups.length) {
+      const list = plan.backups.map((b) => quoteSh(b.rel)).join(" ");
+      const r = run(`cd "${dir.replace(/^~(?=\/|$)/, "$HOME")}" && for f in ${list}; do n="$f.backup-${date}"; i=2; while [ -e "$n" ]; do n="$f.backup-${date}-$i"; i=$((i+1)); done; cp -p "$f" "$n" && printf '%s\\t%s\\n' "$f" "$n" || exit 1; done`);
+      if (r.status !== 0) { plan.error = `could not save the copies that are about to be replaced (${(r.stderr || "").trim().slice(0, 150)}); nothing was installed`; return plan; }
+      const names = Object.fromEntries(String(r.stdout).trim().split("\n").map((l) => l.split("\t")));
+      plan.backedUp = plan.backups.map((b) => ({ ...b, name: names[b.rel] ?? `${b.rel}.backup-${date}` }));
     }
+    // 2. The files, then a look at what is there now, and only then the record: it must never say "installed" for a file that is not.
+    const put = (root, rel, bytes, mode) => { const to = path.join(root, rel); fs.mkdirSync(path.dirname(to), { recursive: true }); fs.writeFileSync(to, bytes, { mode }); };
+    for (const rel of plan.install) put(stage, rel, files.get(rel), fs.statSync(path.join(bundle, rel)).mode & 0o777);
+    for (const k of plan.kept) put(stage, `${k.rel}.new`, files.get(k.rel), 0o644);
+    plan.error = copyOut(stage);
+    if (plan.error) return plan;
+    const after = probeDest(host, dir, [...files.keys()], []);
+    const stale = [...files.keys()].filter((rel) => !isEditable(bundle, rel) && (after?.files?.[rel] ?? null) !== hash16(files.get(rel)));
+    if (!after || stale.length) { plan.error = !after ? "the directory could not be read again after the copy" : `after the copy ${stale.length} script file(s) are still not the new version (${stale.slice(0, 4).join(", ")}${stale.length > 4 ? ", …" : ""})`; return plan; }
+    const last = fs.mkdtempSync(path.join(os.tmpdir(), "af-place-"));
+    try { put(last, RECORD, JSON.stringify({ factoryVersion: PKG.version, files: plan.record }, null, 2) + "\n", 0o644); plan.error = copyOut(last); } finally { fs.rmSync(last, { recursive: true, force: true }); }
   } catch (error) { plan.error = error.message; }
   finally { fs.rmSync(stage, { recursive: true, force: true }); }
   return plan;
 }
 const placeWhere = (host, dir) => (host.kind === "local" ? dir : `${host.name}:${dir}`);
-// The lines for the files that were kept. beside: the new version was written next to the kept file (start), else only offered in .factory/new (update).
+// The lines for what was kept and what was replaced with a copy saved. beside: start did it (the new version lies beside the kept file, the copies
+// exist); otherwise update says what start will do.
 function sayKept(plan, host, dir, beside) {
-  const at = placeWhere(host, dir);
+  const at = placeWhere(host, dir), here = at.replace(/^[^:]*:/, "");
+  const diffOf = (rel, oldText) => { try { return diffKeys(JSON.parse(oldText ?? "{}"), JSON.parse(plan.files.get(rel).toString("utf8"))); } catch { return []; } };
+  const keys = (diff) => diff.map((d) => `\n           ${d.key} (there ${d.here}, project ${d.bundle})`).join("");
   for (const k of plan.kept) {
     // start puts the new version where update would have, unless update already did: there it may be the template's, and this file the project's own.
     if (beside) {
@@ -760,11 +784,19 @@ function sayKept(plan, host, dir, beside) {
     }
     if (k.rel !== "factory.config.json") { say(`  keep   ${at}/${k.rel} (changed there since the template installed it)${beside ? ` → new version beside it: ${at}/${k.rel}.new` : ""}; also in .factory/new/${plan.bundleDir}/${k.rel}`); continue; }
     // The Controller's own config is whole its own: tuned there (models, caps, calibration), so it is neither replaced nor merged.
-    let diff = [];
-    try { diff = diffKeys(JSON.parse(plan.texts["factory.config.json"] ?? "{}"), JSON.parse(plan.files.get(k.rel).toString("utf8"))); } catch { /* unreadable: the files are listed without keys */ }
-    say(`  keep   ${at}/factory.config.json (its own copy was changed there, so it stays whole; nothing is merged)${diff.length ? `. It differs from the project's in: ${diff.slice(0, 12).map((d) => `${d.key} (there ${d.here}, project ${d.bundle})`).join("; ")}${diff.length > 12 ? `; and ${diff.length - 12} more` : ""}` : ""}`);
-    say(`         To use the project's copy instead: cp ${at.replace(/^[^:]*:/, "")}/factory.config.json.new ${at.replace(/^[^:]*:/, "")}/factory.config.json${host.kind === "local" ? "" : ` (on ${host.name})`}${beside ? "" : "; start writes it beside the kept file"}`);
+    const diff = diffOf(k.rel, plan.texts["factory.config.json"]);
+    say(`  keep   ${at}/factory.config.json (its own copy was changed there, so it stays whole; nothing is merged)${diff.length ? `. It differs from the project's in these ${diff.length} keys:${keys(diff)}` : ""}`);
+    say(`         To use the project's copy instead: cp ${here}/factory.config.json.new ${here}/factory.config.json${host.kind === "local" ? "" : ` (on ${host.name})`}${beside ? "" : "; start writes it beside the kept file"}`);
   }
+  const done = beside ? plan.backedUp : plan.backups.map((b) => ({ ...b, name: `${b.rel}.backup-${backupDate()}` }));
+  const docs = done.filter((b) => b.editable), code = done.filter((b) => !b.editable);
+  if (docs.length) {
+    say(`\nWARNING: ${at}: ${docs.map((b) => b.rel).join(", ")} ${beside ? (docs.length > 1 ? "were" : "was") : "will be"} replaced by the new version, because nothing says whether the project changed ${docs.length > 1 ? "them" : "it"}: ${docs.length > 1 ? "they match" : "it matches"} no version the template installed before and there is no record of what it installed here. The copy ${beside ? "is" : "will be"} saved beside it (${docs.map((b) => b.name).join(", ")}). If ${docs.length > 1 ? "they were" : "it was"} edited, carry the changes over from the copy; if not, this is simply up to date and the copy can go.`);
+    for (const b of docs.filter((b) => b.rel === "factory.config.json")) { const diff = diffOf(b.rel, plan.texts["factory.config.json"]); if (diff.length) say(`         ${b.rel} differed from the project's in these ${diff.length} keys:${keys(diff)}`); }
+  }
+  // start verified the copy before it got here: say that the installation is one version.
+  if (beside) say(`  ${at}: all ${[...plan.files.keys()].filter((rel) => !isEditable(plan.bundleDir, rel)).length} script/code files are the new version (factory ${PKG.version}), checked after the copy${plan.kept.length ? `; kept as the project's own: ${plan.kept.map((k) => k.rel).join(", ")}` : ""}`);
+  if (code.length) say(`\nNOTE: ${at}: ${code.length} script/code file(s) ${beside ? "were" : "will be"} replaced by the new version (code is always installed as one set; no installation runs two versions) and ${code.length > 1 ? "were" : "was"} not a version the template installed before. The copies ${beside ? "are" : "will be"} saved beside them:\n${code.map((b) => `  ${b.rel} → ${b.name}`).join("\n")}`);
 }
 const destinations = (c) => {
   const host = controllerHost(c) ?? { kind: "local", name: "local" }, dir = c.hosts.controller.controllerDir ?? "~/controller";
@@ -910,11 +942,18 @@ function doctor() {
   }
   { const hb = handbookStatus(c); if (hb.problem) bad(`handbook: ${hb.problem}`); else if (hb.handbookInstalled) ok("handbook: it knows inbox.mjs --done and restart.md"); }
   { const cl = cleanupStatus(c); if (cl.problem) bad(`cleanup: ${cl.problem}`); else if (cl.unknown) info("cleanup: the Controller's host did not answer, so it is not known whether the handbook calls cleanup with --apply"); else if (!cl.handbookInstalled) info("cleanup: not checked, no Controller handbook is installed yet (run start)"); else ok("cleanup: the handbook calls it with --apply and no removable work waits"); }
-  // The Controller's own config may be tuned there (start keeps it whole): say how it differs from the project's.
+  // The installation must be one version: every script of the bundle is in the Controller directory (and the Front agent's) as the bundle has it,
+  // and the Controller's own config, which start keeps whole when it was tuned there, is listed key by key.
   try {
-    const where = controllerHost(c), dirC = c.hosts.controller.controllerDir ?? "~/controller";
-    const p = where && fs.existsSync(".factory/controller/factory.config.json") ? placeBundle({ host: where, dir: dirC, bundle: ".factory/controller", only: ["factory.config.json"], apply: false, read: ["factory.config.json"] }) : null;
-    if (p?.kept?.length) { const diff = diffKeys(JSON.parse(p.texts["factory.config.json"]), JSON.parse(p.files.get("factory.config.json").toString("utf8"))); info(`the Controller's factory.config.json (${placeWhere(where, dirC)}) was changed there and differs from the project's in: ${diff.slice(0, 8).map((d) => d.key).join(", ")}${diff.length > 8 ? ` and ${diff.length - 8} more` : ""}. start keeps it whole; \`cp factory.config.json.new factory.config.json\` there takes the project's`); }
+    for (const d of destinations(c)) {
+      if (!fs.existsSync(`${d.bundle}/${d.bundle.endsWith("controller") ? "CONTROLLER.md" : "FRONT_AGENT.md"}`)) continue;
+      const p = placeBundle({ ...d, apply: false, read: ["factory.config.json"] });
+      if (p.unreachable || !p.dirExists) continue;
+      const code = p.stale;
+      if (code.length) bad(`${d.label} (${placeWhere(d.host, d.dir)}): ${code.length} script/code file(s) are not the version of this project's bundle (${code.slice(0, 5).join(", ")}${code.length > 5 ? ", …" : ""}): the installation mixes versions. Run \`agentic-factory start\``);
+      else ok(`${d.label}: every script/code file is the bundle's (one version)`);
+      if (p.kept.some((k) => k.rel === "factory.config.json")) { const diff = diffKeys(JSON.parse(p.texts["factory.config.json"]), JSON.parse(p.files.get("factory.config.json").toString("utf8"))); info(`the Controller's factory.config.json (${placeWhere(d.host, d.dir)}) was changed there and differs from the project's in ${diff.length} keys: ${diff.map((x) => x.key).join(", ")}. start keeps it whole; \`cp factory.config.json.new factory.config.json\` there takes the project's`); }
+    }
   } catch { /* nothing to compare */ }
   if (!heartbeatOn(c) && c.hosts.controller.heartbeat === false) info("heartbeat off (hosts.controller.heartbeat is false): you wake the Controller yourself");
   { const s = staleLimit(c); if (s.note) info(`stale limit: ${s.note}`); }
@@ -1081,20 +1120,22 @@ const selfHint = (h, c) => {
 };
 function thisMachine() {
   const c = fs.existsSync("factory.config.json") ? readConfig() : null;
-  const first = args[1], marker = readMarker(), target = first && !first.startsWith("--") ? first : "";
+  const [, ...rest] = args, marker = readMarker(), target = rest.find((a) => !a.startsWith("--")) ?? "";
+  const save = (machines) => (machines.length ? writeFileAtomic(markerFile(), JSON.stringify({ machines }, null, 2) + "\n") : fs.rmSync(markerFile(), { force: true }));
+  const isOwn = (e) => e.machineId === machineId() && e.hostname === hostName();
   if (!c && target && !flag("--forget")) { say("Run this in the project: it needs its factory.config.json to check that the host is this machine. Nothing recorded."); process.exit(1); }
   if (flag("--forget")) {
-    const keep = target ? marker.ssh.filter((t) => t !== target) : [];
-    if (keep.length) writeFileAtomic(markerFile(), JSON.stringify({ machineId: marker.machineId, ssh: keep }, null, 2) + "\n");
-    else fs.rmSync(markerFile(), { force: true });
+    // This machine's entry only (a home shared by several machines holds one entry each): one target, or all of them.
+    save(marker.machines.map((e) => (isOwn(e) ? { ...e, ssh: target ? e.ssh.filter((t) => t !== target) : [] } : e)).filter((e) => e.ssh.length));
     say(target ? `${target} is no longer recorded as this machine.` : "Nothing is recorded as this machine any more."); return;
   }
   if (!target) {
-    const valid = !marker.missing && marker.machineId === machineId();
-    say(marker.missing ? "No host is recorded as this machine." : `Recorded as this machine (${markerFile().replace(os.homedir(), "~")}${valid ? "" : "; written on another machine, so it counts for nothing here"}): ${marker.ssh.join(", ") || "nothing"}`);
+    const own = ownEntry(marker);
+    say(marker.missing ? "No host is recorded as this machine." : `Recorded in ${markerFile().replace(os.homedir(), "~")}: ${marker.machines.map((e) => `${e.hostname} (${e.ssh.join(", ")})${isOwn(e) ? " ← this machine" : ""}`).join("; ")}${own ? "" : ". None of it counts for this machine (another machine, another host name, or no machine id here)"}`);
     if (c) for (const h of c.hosts.workers.filter((h) => h.kind === "remote")) say(`  ${h.name} (${h.ssh}): ${isThisMachine(h) ? "this machine, handled locally" : "another machine, reached over ssh"}`);
     return;
   }
+  if (!machineId()) { say("This machine has no machine id (/etc/machine-id, IOPlatformUUID), so a record could not be told from another machine's: nothing recorded."); process.exit(1); }
   const hosts = (c?.hosts.workers ?? []).filter((h) => h.kind === "remote" && h.ssh === target);
   // The target must also belong to a host whose clone is this repository: another machine that happens to be unreachable right now never qualifies.
   if (hosts.length && !sameRepo(cloneDir(hosts[0], c))) { say(`${target} is the host ${hosts[0].name}, whose clone ${cloneDir(hosts[0], c).replace(os.homedir(), "~")} is not this repository on this machine, so this cannot be that host. Run this in its clone (hosts.workers[].projectDir or projectsDir/<project>). Nothing recorded.`); process.exit(1); }
@@ -1102,9 +1143,9 @@ function thisMachine() {
   if (sshUser(target) && sshUser(target) !== os.userInfo().username) { say(`${target} names the user ${sshUser(target)}, and this runs as ${os.userInfo().username}: that is not this login on this machine. Nothing recorded.`); process.exit(1); }
   // An ssh target that answers from here is either another machine or one this machine can already reach: marking it would send the work to the wrong place.
   const r = spawnSync("ssh", [...(hosts[0]?.sshConfig ? ["-F", expandHome(hosts[0].sshConfig)] : []), "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", target, "echo ok"], { encoding: "utf8" });
-  if (r.stdout?.trim() === "ok") { say(`${target} answers over ssh from here, so the CLI reaches it that way already (or it is another machine). Nothing recorded; only a target that does not resolve here but is this machine needs this.`); process.exit(1); }
-  writeFileAtomic(markerFile(), JSON.stringify({ machineId: machineId(), ssh: [...new Set([...(marker.machineId === machineId() ? marker.ssh : []), target])] }, null, 2) + "\n");
-  say(`Recorded: ${target} is this machine (${markerFile().replace(os.homedir(), "~")}, machine id ${machineId() ? "of this machine" : "unavailable here: the record is not tied to this machine"}). update, doctor, start and status now do locally what they would do over ssh.`);
+  if (r.stdout?.trim() === "ok") { say(`${target} answers over ssh from here, so the CLI reaches it that way already (or it is another machine). Nothing recorded; only a target that does not resolve here but is this machine needs this.`); return; }
+  save([...marker.machines.filter((e) => !isOwn(e)), { machineId: machineId(), hostname: hostName(), ssh: [...new Set([...(ownEntry(marker)?.ssh ?? []), target])] }]);
+  say(`Recorded: ${target} is this machine (${hostName()}, ${markerFile().replace(os.homedir(), "~")}). update, doctor, start and status now do locally what they would do over ssh. If this machine is cloned, the clone must get its own machine id or host name, or run \`agentic-factory this-machine --forget\`.`);
 }
 const controllerTitle = (c) => `${c.project.name} · Controller`;
 // The Controller's identity: the handle from the receipt of the `terminal create` that start itself performed, recorded at that

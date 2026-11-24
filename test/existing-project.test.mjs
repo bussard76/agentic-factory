@@ -33,7 +33,7 @@ function world({ minimal = false, marker = true } = {}) {
   fake("launchctl", "exit 0");
   const orcaCalls = log("orca"), orca = path.join(bin, "orca-fake");
   fake("orca-fake", `printf '%s\\n' "$*" >> '${orcaCalls}'\ncase "$1 $2" in\n"terminal create") printf '%s\\n' '{"ok":true,"result":{"terminal":{"handle":"term-1","surface":"background"}}}';;\n"terminal list") printf '%s\\n' '{"result":{"terminals":[]}}';;\n*) printf '%s\\n' '{"ok":true}';;\nesac`);
-  const env = { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, FACTORY_SCHEDULER: "cron", FACTORY_MACHINE_ID: "machine-A", GIT_CONFIG_NOSYSTEM: "1" };
+  const env = { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, FACTORY_SCHEDULER: "cron", FACTORY_MACHINE_ID: "machine-A", FACTORY_HOSTNAME: "host-A", GIT_CONFIG_NOSYSTEM: "1" };
   for (const k of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]) delete env[k];
   const live = { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: orca };   // with the fake Orca
   const git = (cwd, ...a) => { const r = spawnSync("git", a, { cwd, encoding: "utf8", env }); assert.equal(r.status, 0, `git ${a.join(" ")}: ${r.stdout}${r.stderr}`); return r.stdout.trim(); };
@@ -70,14 +70,24 @@ test("this-machine records an ssh target that does not resolve here, and refuses
   assert.equal(r.status, 1); assert.match(r.stdout, /No remote host in this project's factory\.config\.json has the ssh target/);
   fs.writeFileSync(path.join(w.bin, "ssh"), "#!/bin/sh\necho ok\n", { mode: 0o755 });
   r = w.run("this-machine", {}, ALIAS);
-  assert.equal(r.status, 1); assert.match(r.stdout, /answers over ssh from here/); assert.equal(fs.existsSync(w.markerFile), false, "a target that answers is another machine or already reachable: nothing is recorded");
+  assert.equal(r.status, 0); assert.match(r.stdout, /answers over ssh from here/); assert.equal(fs.existsSync(w.markerFile), false, "a target that answers is another machine or already reachable: nothing is recorded (and that is no failure)");
   fs.writeFileSync(path.join(w.bin, "ssh"), "#!/bin/sh\necho 'Could not resolve hostname' >&2\nexit 255\n", { mode: 0o755 });
+  // A machine without an id cannot tell its record from another's: nothing is recorded, and an old record never matches there.
+  r = w.run("this-machine", { FACTORY_MACHINE_ID: "" }, ALIAS);
+  assert.equal(r.status, 1); assert.match(r.stdout, /no machine id/); assert.equal(fs.existsSync(w.markerFile), false);
   r = w.run("this-machine", {}, ALIAS);
-  assert.equal(r.status, 0, r.stdout + r.stderr); assert.deepEqual(JSON.parse(fs.readFileSync(w.markerFile, "utf8")), { machineId: "machine-A", ssh: [ALIAS] });
+  assert.equal(r.status, 0, r.stdout + r.stderr); assert.deepEqual(JSON.parse(fs.readFileSync(w.markerFile, "utf8")), { machines: [{ machineId: "machine-A", hostname: "host-a", ssh: [ALIAS] }] });
   assert.match(w.run("this-machine").stdout, /server \(.*\): this machine, handled locally/);
-  // A record that came with a copied home (another machine's id) counts for nothing.
-  assert.match(w.run("this-machine", { FACTORY_MACHINE_ID: "machine-B" }).stdout, /counts for nothing here/);
-  assert.match(w.run("this-machine", { FACTORY_MACHINE_ID: "machine-B" }).stdout, /server .*: another machine, reached over ssh/);
+  assert.match(w.run("this-machine", { FACTORY_MACHINE_ID: "" }).stdout, /server .*: another machine, reached over ssh/, "an empty id never matches");
+  // A record that came with a copied home (another machine's id), or with a clone that kept the id but not the host name, counts for nothing.
+  assert.match(w.run("this-machine", { FACTORY_MACHINE_ID: "machine-B" }).stdout, /None of it counts for this machine/);
+  assert.match(w.run("this-machine", { FACTORY_HOSTNAME: "host-clone" }).stdout, /server .*: another machine, reached over ssh/);
+  // A home shared by two machines holds one entry each; --forget takes the one target of this machine, whatever the order of the words.
+  r = w.run("this-machine", { FACTORY_MACHINE_ID: "machine-B", FACTORY_HOSTNAME: "host-b" }, ALIAS); assert.equal(r.status, 0, r.stdout);
+  assert.equal(JSON.parse(fs.readFileSync(w.markerFile, "utf8")).machines.length, 2);
+  assert.match(w.run("this-machine").stdout, /server \(.*\): this machine, handled locally/, "the second machine did not overwrite the first one's entry");
+  r = w.run("this-machine", { FACTORY_MACHINE_ID: "machine-B", FACTORY_HOSTNAME: "host-b" }, "--forget", ALIAS); assert.equal(r.status, 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(w.markerFile, "utf8")).machines.map((e) => e.hostname), ["host-a"], "only the entry of the machine that said it");
   r = w.run("this-machine", {}, ALIAS, "--forget"); assert.equal(r.status, 0); assert.equal(fs.existsSync(w.markerFile), false);
   w.done();
 });
@@ -121,7 +131,7 @@ test("the Front agent scripts read the Controller on this machine directly: no s
 test("a remote host that is not this machine is reported as before: update exits 1, doctor misses ssh, start fails its copy", () => {
   for (const marker of [false, "copied"]) {
     const w = world({ minimal: true, marker: false });
-    if (marker === "copied") { fs.mkdirSync(path.dirname(w.markerFile), { recursive: true }); fs.writeFileSync(w.markerFile, JSON.stringify({ machineId: "machine-B", ssh: [ALIAS] })); }
+    if (marker === "copied") { fs.mkdirSync(path.dirname(w.markerFile), { recursive: true }); fs.writeFileSync(w.markerFile, JSON.stringify({ machines: [{ machineId: "machine-B", hostname: "host-a", ssh: [ALIAS] }] })); }
     let r = w.run("update");
     assert.equal(r.status, 1, r.stdout);
     assert.match(r.stdout, /server: no clone at .*, or the host cannot be reached\. Its clone keeps the older standard until this works\./);
@@ -151,32 +161,46 @@ test("a handbook changed only in the Controller directory is kept by update and 
   // The state of the real case: an older factory rendered and installed the files; the project edited CONTROLLER.md in the Controller directory.
   const oldHandbook = "# Controller\nrun `node cleanup.mjs --all --prune-remote` every cycle\n";
   const install = olderInstall(w, "CONTROLLER.md", oldHandbook), installScript = olderInstall(w, "heartbeat.mjs", "// the older heartbeat\n");
-  install(`${oldHandbook}Our own rule: never touch the billing module.\n`); installScript();
+  install(`${oldHandbook}Our own rule: never touch the billing module.\n`); installScript("// the project's own heartbeat\n");
   fs.rmSync(path.join(w.ctl, ".factory-installed.json"), { force: true });
   let r = w.run("update");
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.match(r.stdout, /keep\s+\S*controller-demo\/CONTROLLER\.md \(changed there since the template installed it\)/);
-  assert.match(r.stdout, /WARNING: \S*controller-demo\/CONTROLLER\.md calls cleanup without --apply/, "the warning is about the file in use");
-  assert.match(r.stdout, /WARNING: \S*controller-demo\/CONTROLLER\.md does not mention .*inbox\.mjs/);
-  assert.match(fs.readFileSync(path.join(w.project, ".factory/new/.factory/controller/CONTROLLER.md"), "utf8"), /Controller/, "the new version is offered in .factory/new");
-  assert.match(r.stdout, /[1-9]\d* kept/);
-  assert.equal(fs.existsSync(path.join(w.project, ".factory/new/.factory/controller/heartbeat.mjs")), false, "a script nobody changed there is not offered");
+  // No record of what was installed: nobody can say whether the project edited the handbook, so it is not kept silently (and not replaced silently either).
+  assert.match(r.stdout, /WARNING: \S*controller-demo: CONTROLLER\.md will be replaced by the new version, because nothing says whether the project changed it/);
+  assert.match(r.stdout, /CONTROLLER\.md\.backup-\d{4}-\d\d-\d\d/);
+  assert.match(r.stdout, /NOTE: \S*controller-demo: 1 script\/code file\(s\) will be replaced.*heartbeat\.mjs → heartbeat\.mjs\.backup-/s);
   assert.match(fs.readFileSync(path.join(w.ctl, "CONTROLLER.md"), "utf8"), /billing module/, "update changes nothing in the Controller directory");
   r = w.run("start");
   assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /WARNING: \S*controller-demo: CONTROLLER\.md was replaced by the new version/);
+  assert.match(r.stdout, /all \d+ script\/code files are the new version/);
+  assert.doesNotMatch(r.stdout, /keep\s+\S*controller-demo/, "nothing is kept when no baseline exists");
+  const backups = fs.readdirSync(w.ctl).filter((f) => /^CONTROLLER\.md\.backup-/.test(f));
+  assert.equal(backups.length, 1); assert.match(fs.readFileSync(path.join(w.ctl, backups[0]), "utf8"), /billing module/, "the project's text is not lost");
+  assert.equal(fs.readFileSync(path.join(w.ctl, "CONTROLLER.md"), "utf8"), fs.readFileSync(path.join(w.project, ".factory/controller/CONTROLLER.md"), "utf8"));
+  assert.equal(fs.readFileSync(path.join(w.ctl, "heartbeat.mjs"), "utf8"), fs.readFileSync(path.join(w.project, ".factory/controller/heartbeat.mjs"), "utf8"), "the older script is replaced");
+  assert.match(fs.readFileSync(path.join(w.ctl, ".factory-installed.json"), "utf8"), /CONTROLLER\.md/, "from now on there is a baseline");
+  // With a baseline, a change by the project is known for what it is: kept, the new version beside it, the warnings fire for the file in use.
+  const own = fs.readFileSync(path.join(w.ctl, "CONTROLLER.md"), "utf8").replace(/inbox\.mjs --done/g, "inbox.mjs").replace(/restart\.md/g, "restart notes") + "\nOur own rule.\n";
+  fs.writeFileSync(path.join(w.ctl, "CONTROLLER.md"), own);
+  r = w.run("update");
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /keep\s+\S*controller-demo\/CONTROLLER\.md \(changed there since the template installed it\)/);
+  assert.match(r.stdout, /WARNING: \S*controller-demo\/CONTROLLER\.md does not mention .*inbox\.mjs/, "the warning is about the file in use");
+  assert.match(fs.readFileSync(path.join(w.project, ".factory/new/.factory/controller/CONTROLLER.md"), "utf8"), /Controller/, "the new version is offered in .factory/new");
+  assert.match(r.stdout, /[1-9]\d* kept/);
+  r = w.run("start");
+  assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /keep\s+\S*controller-demo\/CONTROLLER\.md .*→ new version beside it: \S*CONTROLLER\.md\.new/);
-  assert.match(r.stdout, /WARNING: \S*controller-demo\/CONTROLLER\.md calls cleanup without --apply/);
-  assert.match(fs.readFileSync(path.join(w.ctl, "CONTROLLER.md"), "utf8"), /billing module/, "the project's handbook is still there");
+  assert.equal(fs.readFileSync(path.join(w.ctl, "CONTROLLER.md"), "utf8"), own, "the project's handbook is still there");
   assert.equal(fs.readFileSync(path.join(w.ctl, "CONTROLLER.md.new"), "utf8"), fs.readFileSync(path.join(w.project, ".factory/controller/CONTROLLER.md"), "utf8"));
-  assert.equal(fs.readFileSync(path.join(w.ctl, "heartbeat.mjs"), "utf8"), fs.readFileSync(path.join(w.project, ".factory/controller/heartbeat.mjs"), "utf8"), "the older script nobody changed is replaced");
-  // status and doctor read the file in use: they fail on it too.
   r = w.run("doctor");
-  assert.equal(r.status, 1); assert.match(r.stdout, /MISSING cleanup: the Controller's CONTROLLER\.md calls cleanup without --apply/); assert.match(r.stdout, /MISSING handbook: the Controller's CONTROLLER\.md does not mention/);
+  assert.equal(r.status, 1); assert.match(r.stdout, /MISSING handbook: the Controller's CONTROLLER\.md does not mention/);
+  assert.match(r.stdout, /OK\s+Controller directory: every script\/code file is the bundle's/, "the scripts are one version even though the handbook is the project's");
   // The human merges: after taking the new version, the next start says nothing.
   fs.copyFileSync(path.join(w.ctl, "CONTROLLER.md.new"), path.join(w.ctl, "CONTROLLER.md")); fs.rmSync(path.join(w.ctl, "CONTROLLER.md.new"));
   r = w.run("start");
   assert.doesNotMatch(r.stdout, /keep\s+\S*controller-demo/); assert.doesNotMatch(r.stdout, /WARNING: .*CONTROLLER\.md/);
-  assert.equal(fs.existsSync(path.join(w.ctl, "CONTROLLER.md.new")), false);
   w.done();
 });
 
@@ -242,6 +266,8 @@ test("a remote host's Controller directory is looked at over ssh with the real p
   assert.ok(fs.existsSync(path.join(w.ctl, ".factory-installed.json")), "the record was written over rsync");
   fs.appendFileSync(path.join(w.ctl, "CONTROLLER.md"), "\nOur own rule.\n");
   fs.appendFileSync(path.join(w.project, ".factory/controller/heartbeat.mjs"), "\n// a newer heartbeat\n");
+  fs.appendFileSync(path.join(w.ctl, "lib.mjs"), "\n// ours, on the server\n");
+  fs.appendFileSync(path.join(w.ctl, "lib.mjs"), "\n// ours, on the server\n");
   r = w.run("update");
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /keep\s+server:\S*controller-demo\/CONTROLLER\.md \(changed there since the template installed it\)/);
@@ -251,6 +277,8 @@ test("a remote host's Controller directory is looked at over ssh with the real p
   assert.match(fs.readFileSync(path.join(w.ctl, "CONTROLLER.md"), "utf8"), /Our own rule\./);
   assert.equal(fs.readFileSync(path.join(w.ctl, "CONTROLLER.md.new"), "utf8"), fs.readFileSync(path.join(w.project, ".factory/controller/CONTROLLER.md"), "utf8"));
   assert.match(fs.readFileSync(path.join(w.ctl, "heartbeat.mjs"), "utf8"), /a newer heartbeat/, "a file nobody changed there is replaced");
+  assert.equal(fs.readFileSync(path.join(w.ctl, "lib.mjs"), "utf8"), fs.readFileSync(path.join(w.project, ".factory/controller/lib.mjs"), "utf8"), "code is replaced on a remote host too");
+  assert.ok(fs.readdirSync(w.ctl).some((n) => /^lib\.mjs\.backup-/.test(n) && /ours, on the server/.test(fs.readFileSync(path.join(w.ctl, n), "utf8"))), "and the project's copy is saved there");
   w.done();
 });
 
@@ -277,10 +305,12 @@ test("a Controller config tuned in the Controller directory survives start: kept
   assert.match(r.stdout, /keep\s+\S*factory\.config\.json \(its own copy was changed there, so it stays whole; nothing is merged\)/);
   for (const key of ["agents.models.default", "reviews.maxRounds", "hosts.workers"]) assert.match(r.stdout, new RegExp(key.replace(/\./g, "\\.")), `${key} is listed`);
   assert.match(r.stdout, /agents\.models\.default \(there "tuned-model", project "/);
+  for (const key of ["hosts.workers[server].capacity.suiteWorkersMax (there 10", "hosts.workers[server].capacity.calibration (there {\"foreignOnlyFloor\":8}"]) assert.ok(r.stdout.includes(key), `${key}: every differing key is named, an array of named hosts by the host's name`);
+  assert.match(r.stdout, /differs from the project's in these \d+ keys:/);
   assert.match(r.stdout, /cp \S*factory\.config\.json\.new \S*factory\.config\.json/, "it says how to take the project's copy");
   assert.equal(JSON.parse(fs.readFileSync(`${own}.new`, "utf8")).reviews.maxRounds, 3);
   assert.equal(w.run("start").status, 0, "a kept config is not a failure");
-  assert.match(w.run("doctor").stdout, /info\s+the Controller's factory\.config\.json .* differs from the project's in: .*agents\.models\.default/);
+  assert.match(w.run("doctor").stdout, /info\s+the Controller's factory\.config\.json .* differs from the project's in \d+ keys: .*agents\.models\.default/);
   w.done();
 });
 
@@ -320,5 +350,74 @@ test("doctor says which factory is installed, and when the config records anothe
   assert.match(r.stdout, new RegExp(`OK\\s+factory ${version.replace(/\./g, "\\.")} installed`));
   assert.match(r.stdout, new RegExp(`info\\s+factory\\.config\\.json records factory 0\\.1\\.11 .*this is ${version.replace(/\./g, "\\.")}`));
   assert.doesNotMatch(r.stdout, /OK\s+factory\.config\.json \(project demo, factory 0\.1\.11\)/);
+  w.done();
+});
+
+const codeFiles = (dir) => { const out = []; const walk = (d, rel = "") => { for (const e of fs.readdirSync(path.join(dir, d), { withFileTypes: true })) { const r = path.join(rel, e.name); if (e.isDirectory()) walk(path.join(d, e.name), r); else out.push(r); } }; walk("."); return out.filter((r) => !/^[^/]+\.md$/.test(r) && r !== "factory.config.json"); };
+const same = (a, b) => fs.readFileSync(a).equals(fs.readFileSync(b));
+
+test("an untouched installation by an older version, whose baseline nobody can establish, is upgraded as one set: every script is new, nothing is kept, everything replaced is listed and saved", () => {
+  const w = world();
+  assert.equal(w.run("update").status, 0);
+  // What a v0.1.13-style installation looks like to this CLI: every file of both directories is an older version, no record, no matching manifest hash.
+  for (const [dir, bundle] of [[w.ctl, ".factory/controller"], [w.fa, ".factory/front-agent"]]) for (const rel of fs.readdirSync(path.join(w.project, bundle), { recursive: true }).filter((r) => fs.statSync(path.join(w.project, bundle, r)).isFile())) {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), `// an older version of ${rel}\n${fs.readFileSync(path.join(w.project, bundle, rel), "utf8")}`, { mode: 0o644 });
+  }
+  let r = w.run("update");
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.doesNotMatch(r.stdout, /keep\s+\S*(controller-demo|front-agent)/, "nothing is kept");
+  r = w.run("start");
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.doesNotMatch(r.stdout, /keep\s+\S*(controller-demo|front-agent)/, "nothing is kept");
+  assert.match(r.stdout, /WARNING: \S*controller-demo: CONTROLLER\.md, factory\.config\.json were replaced by the new version/, "the handbook and the config are named, with their copies");
+  assert.match(r.stdout, /NOTE: \S*controller-demo: \d+ script\/code file\(s\) were replaced by the new version[\s\S]*lib\.mjs → lib\.mjs\.backup-\d{4}-\d\d-\d\d/, "every replaced script is listed");
+  for (const [dir, bundle] of [[w.ctl, ".factory/controller"], [w.fa, ".factory/front-agent"]]) {
+    for (const rel of codeFiles(path.join(w.project, bundle))) assert.ok(same(path.join(dir, rel), path.join(w.project, bundle, rel)), `${rel} is the new version`);
+    assert.ok(fs.readdirSync(dir).some((f) => /^lib\.mjs\.backup-|^hosts\.mjs\.backup-/.test(f)), "the old copies are saved beside");
+    assert.equal(fs.readdirSync(dir).filter((f) => f.endsWith(".new")).length, 0, "no .new: nothing was kept");
+  }
+  assert.match(fs.readFileSync(path.join(w.ctl, "lib.mjs.backup-" + new Date().toISOString().slice(0, 10)), "utf8"), /^\/\/ an older version of lib\.mjs/);
+  assert.ok(fs.statSync(path.join(w.ctl, "gate")).mode & 0o100, "the gate is executable");
+  assert.equal(w.run("doctor").stdout.match(/MISSING .*version/g), null);
+  assert.match(w.run("doctor").stdout, /OK\s+Controller directory: every script\/code file is the bundle's \(one version\)/);
+  w.done();
+});
+
+test("a script the project changed after a start is code: replaced with the rest, the project's copy saved, so no two versions run side by side; a stale gate cannot stay", () => {
+  const w = world();
+  assert.equal(w.run("update").status, 0);
+  assert.equal(w.run("start").status, 0);
+  fs.appendFileSync(path.join(w.ctl, "lib.mjs"), "\n// the project's own change\n");
+  fs.appendFileSync(path.join(w.ctl, "gate.mjs"), "\n// the project's own gate change\n");
+  fs.appendFileSync(path.join(w.project, ".factory/controller/front-notice.mjs"), "\nexport const newerThing = 1;\n");   // the new version needs more of the whole set
+  let r = w.run("doctor");
+  assert.equal(r.status, 1); assert.match(r.stdout, /MISSING Controller directory \(\S*controller-demo\): 3 script\/code file\(s\) are not the version of this project's bundle \(.*gate\.mjs/);
+  r = w.run("start");
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  for (const f of ["lib.mjs", "gate.mjs", "front-notice.mjs"]) assert.ok(same(path.join(w.ctl, f), path.join(w.project, ".factory/controller", f)), `${f} is the new version`);
+  const day = new Date().toISOString().slice(0, 10);
+  assert.match(fs.readFileSync(path.join(w.ctl, `lib.mjs.backup-${day}`), "utf8"), /the project's own change/, "nothing the project wrote is lost");
+  assert.match(fs.readFileSync(path.join(w.ctl, `gate.mjs.backup-${day}`), "utf8"), /own gate change/);
+  assert.match(r.stdout, /lib\.mjs → lib\.mjs\.backup-/); assert.match(r.stdout, /gate\.mjs → gate\.mjs\.backup-/);
+  assert.equal(fs.existsSync(path.join(w.ctl, "front-notice.mjs.backup-" + day)), false, "a file the template installed itself is no one's change");
+  assert.equal(w.run("doctor").status, 0);
+  // A second change on the same day does not overwrite the first backup.
+  fs.appendFileSync(path.join(w.ctl, "lib.mjs"), "\n// a second change\n");
+  assert.equal(w.run("start").status, 0);
+  assert.match(fs.readFileSync(path.join(w.ctl, `lib.mjs.backup-${day}-2`), "utf8"), /a second change/); assert.match(fs.readFileSync(path.join(w.ctl, `lib.mjs.backup-${day}`), "utf8"), /the project's own change/);
+  w.done();
+});
+
+test("start restores a lost executable bit, and doctor says the installation is not one version while it is lost", () => {
+  const w = world();
+  assert.equal(w.run("update").status, 0);
+  assert.equal(w.run("start").status, 0);
+  fs.chmodSync(path.join(w.ctl, "gate"), 0o644);
+  const r = w.run("doctor");
+  assert.equal(r.status, 1); assert.match(r.stdout, /not the version of this project's bundle \(gate\)/);
+  assert.equal(w.run("start").status, 0);
+  assert.ok(fs.statSync(path.join(w.ctl, "gate")).mode & 0o100, "executable again");
+  assert.equal(w.run("doctor").status, 0);
   w.done();
 });

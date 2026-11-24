@@ -1,27 +1,36 @@
 // What `update` and `start` do with the files the template puts outside the project's own tree (the Controller directory, the Front
-// agent's directory, the gate on another worker host): a file the project changed there is never replaced silently.
+// agent's directory, the gate on another worker host).
 //
-// The rule, for each file of a bundle (.factory/controller/*, .factory/front-agent/*) and the file already at its destination:
-//   absent                                  → install it
-//   identical to the bundle's file          → nothing to do
-//   what the template installed before      → replace it (nobody changed it)
-//   anything else                           → the project changed it: keep it, put the bundle's file beside it as <name>.new, say so
-// "What the template installed before" is, in this order of trust, the destination's own record (.factory-installed.json, written by
-// `start` after each copy: the hash of every file it placed) and the manifest (.factory/manifest.json: the hash of each file at the last
-// `update`, and `previous`, the hashes `update` replaced). The record is exact; the manifest covers a destination that has no record yet.
+// Code is never kept. Every script, the gate and everything else that runs is installed as one set of the new version, so no installation
+// ever runs two versions at once. A copy that differs from what is installed and is not a file the template installed before is saved
+// beside the new one first (<name>.backup-<date>) and listed; nothing a project wrote is lost.
+//
+// The files people are meant to edit follow a keep rule (EDITABLE: the handbooks, and the Controller's factory.config.json):
+//   absent                                    → install it
+//   identical to the new file                 → nothing to do
+//   a version the template installed before   → replace it (nobody changed it)
+//   a baseline exists (the destination's record, written by `start`) and the file differs from it
+//                                             → the project changed it: keep it, the new version lies beside it as <name>.new
+//   no baseline (no record, and no known version matches)
+//                                             → not kept silently: install the new version, save the old as <name>.backup-<date>, say so
+// "A version the template installed before" is the destination's record (.factory-installed.json) and the manifest (.factory/manifest.json:
+// `files`, `previous`, and its committed versions).
 import { createHash } from "node:crypto";
 
 export const RECORD = ".factory-installed.json";
 export const hash16 = (bytes) => createHash("sha256").update(bytes).digest("hex").slice(0, 16);
 
-/** The script that looks at a destination (run by node, here or over ssh): the hash of each file in `rels`, the record, and the text of
+/** Files people edit: the top-level handbooks of a bundle, and the Controller's own config. Everything else is code. */
+export const isEditable = (bundle, rel) => /^[^/]+\.md$/.test(rel) || (bundle === ".factory/controller" && rel === "factory.config.json");
+
+/** The script that looks at a destination (run by node, here or over ssh): the hash and the executable bit of each file in `rels`, the record, and the text of
  *  the files in `read`. A directory that is not there yields no files and no record. Prints one line of JSON. */
 export const probeSource = (rels, read = []) => `
 import fs from "node:fs"; import os from "node:os"; import path from "node:path"; import { createHash } from "node:crypto";
 const dir = (process.argv[2] ?? "").replace(/^~(?=\\/|$)/, os.homedir());
 const h = (b) => createHash("sha256").update(b).digest("hex").slice(0, 16);
-const out = { dirExists: fs.existsSync(dir), files: {}, texts: {}, record: {} };
-for (const r of ${JSON.stringify(rels)}) { try { out.files[r] = h(fs.readFileSync(path.join(dir, r))); } catch { out.files[r] = null; } }
+const out = { dirExists: fs.existsSync(dir), files: {}, execs: {}, texts: {}, record: {} };
+for (const r of ${JSON.stringify(rels)}) { try { out.files[r] = h(fs.readFileSync(path.join(dir, r))); out.execs[r] = (fs.statSync(path.join(dir, r)).mode & 0o100) !== 0; } catch { out.files[r] = null; } }
 for (const r of ${JSON.stringify(read)}) { try { out.texts[r] = fs.readFileSync(path.join(dir, r), "utf8"); } catch { /* absent */ } }
 try { out.record = JSON.parse(fs.readFileSync(path.join(dir, ${JSON.stringify(RECORD)}), "utf8")).files ?? {}; } catch { /* no record yet */ }
 console.log(JSON.stringify(out));
@@ -31,32 +40,47 @@ console.log(JSON.stringify(out));
 export const manifestHashes = (manifest, key) => [manifest?.files?.[key], ...(manifest?.previous?.[key] ?? [])].filter((h) => typeof h === "string" && h !== "user");
 
 /**
- * files: Map rel → Buffer (the bundle's files); probe: what the destination holds (probeSource's answer); manifest and bundle name the
- * manifest's hashes. Returns { install: [rel], same: [rel], kept: [{ rel, found, bundle }], record: { rel: hash } } where `record` is what
- * the destination's record should say once the install is done.
+ * files: Map rel → Buffer (the bundle's files); execs: Set of the rels that are executable in the bundle; probe: what the destination holds
+ * (probeSource's answer); manifest and bundle name the manifest's hashes.
+ * Returns { install, same, kept: [{ rel, found, bundle }], backups: [{ rel, editable }], stale, record } where
+ *   install  every rel that is written (new, older, changed code, a wrong mode, an unexplained handbook)
+ *   backups  the installed ones whose present copy is saved first (not a known template version)
+ *   stale    the code rels that are not the bundle's now (what doctor reports; empty after a good start)
+ *   record   what the destination's record should say once the install is done.
  */
-export function planPlacement({ files, probe, manifest, bundle }) {
-  const out = { install: [], same: [], kept: [], record: { ...probe.record } };
+export function planPlacement({ files, execs = new Set(), probe, manifest, bundle }) {
+  const out = { install: [], same: [], kept: [], backups: [], stale: [], record: { ...probe.record } };
   for (const [rel, bytes] of files) {
-    const want = hash16(bytes), found = probe.files[rel] ?? null;
-    const known = new Set([probe.record[rel], ...manifestHashes(manifest, `${bundle}/${rel}`)].filter(Boolean));
-    if (found === null) { out.install.push(rel); out.record[rel] = want; }
-    else if (found === want) { out.same.push(rel); out.record[rel] = want; }
-    else if (known.has(found)) { out.install.push(rel); out.record[rel] = want; }
-    else out.kept.push({ rel, found, bundle: want });
+    const want = hash16(bytes), found = probe.files[rel] ?? null, editable = isEditable(bundle, rel);
+    const record = probe.record[rel];
+    const known = new Set([record, ...manifestHashes(manifest, `${bundle}/${rel}`)].filter(Boolean));
+    const take = () => { out.install.push(rel); out.record[rel] = want; };
+    if (found === null) { take(); if (!editable) out.stale.push(rel); }
+    else if (found === want) {
+      // Same bytes: only the executable bit can still be wrong (it is what `doctor` and the shell look at).
+      if (execs.has(rel) && probe.execs?.[rel] === false) { take(); out.stale.push(rel); } else { out.same.push(rel); out.record[rel] = want; }
+    } else if (known.has(found)) { take(); if (!editable) out.stale.push(rel); }
+    else if (editable && record !== undefined) out.kept.push({ rel, found, bundle: want });
+    else { take(); out.backups.push({ rel, editable }); if (!editable) out.stale.push(rel); }
   }
   return out;
 }
 
-/** The leaf paths (`a.b.c`; an array is one leaf) in which two parsed configs differ, with a short form of each side. */
+/** The leaf paths (`a.b.c`; an array of objects is walked by each element's `name`, else by index) in which two parsed configs differ,
+ *  with a short form of each side. */
 export function diffKeys(a, b, prefix = "") {
   const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
   const short = (v) => { const t = v === undefined ? "(absent)" : JSON.stringify(v); return t.length > 60 ? `${t.slice(0, 57)}...` : t; };
   const out = [];
-  for (const k of new Set([...Object.keys(a ?? {}), ...Object.keys(b ?? {})])) {
-    const p = prefix ? `${prefix}.${k}` : k;
-    if (isObject(a?.[k]) && isObject(b?.[k])) out.push(...diffKeys(a[k], b[k], p));
-    else if (JSON.stringify(a?.[k]) !== JSON.stringify(b?.[k])) out.push({ key: p, here: short(a?.[k]), bundle: short(b?.[k]) });
-  }
+  const walk = (x, y, p) => {
+    if (isObject(x) && isObject(y)) { for (const k of new Set([...Object.keys(x), ...Object.keys(y)])) walk(x[k], y[k], p ? `${p}.${k}` : k); return; }
+    // Arrays of named objects (hosts.workers) are walked by name, so the key that differs is named, not the whole array.
+    if (Array.isArray(x) && Array.isArray(y) && [...x, ...y].length && [...x, ...y].every((v) => isObject(v) && typeof v.name === "string")) {
+      for (const n of new Set([...x, ...y].map((v) => v.name))) walk(x.find((v) => v.name === n), y.find((v) => v.name === n), `${p}[${n}]`);
+      return;
+    }
+    if (JSON.stringify(x) !== JSON.stringify(y)) out.push({ key: p, here: short(x), bundle: short(y) });
+  };
+  walk(a ?? {}, b ?? {}, prefix);
   return out;
 }

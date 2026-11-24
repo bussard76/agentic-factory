@@ -166,21 +166,23 @@ test("agent entry questions, answers, status and start in an isolated home", asy
     writeOrca(`π - ~/${ctlFolder}-other`, "/another/checkout"); assert.equal(JSON.parse(withOrca().stdout).setup.controller.terminal, false, "another folder's pi title");
     const calls = path.join(base, "calls");
     fs.writeFileSync(fakeOrca, `#!/bin/sh\nif [ "$1" = terminal ] && [ "$2" = create ]; then printf '%s\\n' "$@" > '${calls}.orca'; printf '%s\\n' '{"ok":true}'; else printf '%s\\n' '{"result":{"terminals":[]}}'; fi\n`, { mode: 0o755 });
-    fs.writeFileSync(path.join(bin, "rsync"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}.rsync'\ncase "$*" in *bad:*) echo 'rsync: boom' >&2; exit 23;; esac\nexit 0\n`, { mode: 0o755 });
+    // The fake rsync really copies into a fake remote home, and the fake ssh runs the placement probe there: the placement checks what arrived.
+    const rhome = path.join(base, "rhome"); fs.mkdirSync(rhome);
+    fs.writeFileSync(path.join(bin, "rsync"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}.rsync'\ncase "$*" in *bad:*) echo 'rsync: boom' >&2; exit 23;; esac\nsrc=$(printf '%s\\n' "$@" | tail -n 2 | head -n 1); dst=$(printf '%s\\n' "$@" | tail -n 1); d=\${dst#*:}; case "$d" in "~/"*) d='${rhome}'/\${d#\\~/};; esac\nmkdir -p "$d" && cp -R "$src". "$d"\n`, { mode: 0o755 });
     // start schedules the status watch on this machine: a test must never reach the real crontab.
     fs.writeFileSync(path.join(bin, "crontab"), "#!/bin/sh\n[ \"$1\" = -l ] && exit 0\ncat > /dev/null\n", { mode: 0o755 });
     fs.writeFileSync(path.join(bin, "launchctl"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    // The placement probe (node run on the host, its script on stdin) is answered with an empty destination, or with what a test puts in ${calls}.probe.
-    fs.writeFileSync(path.join(bin, "ssh"), `#!/bin/sh\ncase "$*" in *'input-type=module'*) cat > /dev/null; cat '${calls}.probe' 2>/dev/null || printf '%s\\n' '{"dirExists":false,"files":{},"texts":{},"record":{}}';; *'| crontab -'*) printf '%s\\n' "$*" >> '${calls}.ssh'; printf 'added\\n';; *'printf '*) printf '/remote/home\\n';; *) printf '%s\\n' "$*" >> '${calls}.ssh'; printf 'ok\\n';; esac\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "ssh"), `#!/bin/sh\ncase "$*" in *'input-type=module'*) dir=$(printf '%s' "$*" | sed "s/.*' '//; s/'\\$//"); HOME='${rhome}' exec node --input-type=module - "$dir";; *'| crontab -'*) printf '%s\\n' "$*" >> '${calls}.ssh'; printf 'added\\n';; *'printf '*) printf '/remote/home\\n';; *) printf '%s\\n' "$*" >> '${calls}.ssh'; printf 'ok\\n';; esac\n`, { mode: 0o755 });
     config.hosts.workers = [{ name: "remote", kind: "remote", ssh: "fake", projectsDir: "~/projects", orcaEnvironment: "saved-server" }]; config.hosts.controller.host = "remote";
     fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
     r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
     assert.equal(r.status, 0, r.stdout + r.stderr); const sshCalls = fs.readFileSync(`${calls}.ssh`, "utf8"); assert.match(sshCalls, /pgrep -f "\[b\]ash \$HOME\/controller\/loadlog\.sh " >\/dev\/null \|\| \(cd ~\/controller && nohup bash \$HOME\/controller\/loadlog\.sh 'project'/); assert.doesNotMatch(sshCalls, /\.local\/bin\/gate/, "a remote start does not touch the shared gate either"); assert.match(sshCalls, /node heartbeat\.mjs/);
     // A kept older handbook that calls cleanup without --apply is reported for a remote Controller host too, naming the host.
-    fs.writeFileSync(`${calls}.probe`, JSON.stringify({ dirExists: true, files: { "CONTROLLER.md": "0123456789abcdef" }, texts: { "CONTROLLER.md": "node cleanup.mjs --all --prune-remote\n" }, record: {} }) + "\n");   // a handbook someone changed there
+    const bundled = fs.readFileSync(path.join(project, ".factory/controller/CONTROLLER.md"), "utf8");
+    fs.writeFileSync(path.join(rhome, "controller/CONTROLLER.md"), "node cleanup.mjs --all --prune-remote\n");   // a handbook someone changed there (the first start recorded what it installed)
     r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
     assert.match(r.stdout, /WARNING: remote:~\/controller\/CONTROLLER\.md calls cleanup without --apply \(`node cleanup\.mjs --all --prune-remote`\)/, r.stdout);
-    fs.rmSync(`${calls}.probe`);
+    fs.writeFileSync(path.join(rhome, "controller/CONTROLLER.md"), bundled);
     r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
     assert.doesNotMatch(r.stdout, /WARNING: .*calls cleanup without --apply/, "an installed handbook with --apply is not reported");
     // Gates run on every other worker host too (workers, waves, slots): the project's gate goes there, and a failure is a failed start.
