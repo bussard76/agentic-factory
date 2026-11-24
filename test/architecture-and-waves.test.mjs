@@ -121,7 +121,7 @@ else if (a[1] === "read") console.log(JSON.stringify({ ok: true, result: { tail:
 else if (a[0] === "worktree" && a[1] === "list") console.log(JSON.stringify({ ok: true, result: { worktrees: [] } }));
 else console.log(JSON.stringify({ ok: true, result: {} }));`);
   fs.chmodSync(fake, 0o755);
-  const cleanup = (...args) => spawnSync("node", [path.join(ctl, "cleanup.mjs"), ...args], { cwd: project, encoding: "utf8", env: { ...process.env, ORCA_CLI_COMMAND: fake, FACTORY_CONFIG: path.join(ctl, "factory.config.json") } });
+  const cleanup = (...args) => spawnSync("node", [path.join(ctl, "cleanup.mjs"), ...args], { cwd: project, encoding: "utf8", env: Object.fromEntries(Object.entries({ ...process.env, ORCA_CLI_COMMAND: fake, FACTORY_CONFIG: path.join(ctl, "factory.config.json") }).filter(([k]) => !k.startsWith("ORCA_") || k === "ORCA_CLI_COMMAND")) });
   const closed = () => fs.readFileSync(log, "utf8").split("\n").filter((l) => l.startsWith("terminal close")).map((l) => l.split(" ")[3]);
   const dry = cleanup("--dry");
   assert.equal(dry.status, 3, dry.stdout + dry.stderr);

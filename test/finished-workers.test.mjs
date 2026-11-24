@@ -64,6 +64,7 @@ else if (a[0] === "worktree" && a[1] === "list") out({ worktrees: [] });
 else out({});`);
   fs.chmodSync(fake, 0o755);
   const env = { ...process.env, ORCA_CLI_COMMAND: fake, FACTORY_CONFIG: path.join(ctl, "factory.config.json") };
+  for (const k of Object.keys(env)) if (k.startsWith("ORCA_") && k !== "ORCA_CLI_COMMAND") delete env[k];   // never the developer's Orca
   const run = (script, ...args) => spawnSync("node", [path.join(ctl, script), ...args], { cwd: ctl, encoding: "utf8", env });
   const calls = () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n") : []);
   const patch = (fn) => { const s = JSON.parse(fs.readFileSync(state, "utf8")); fn(s); fs.writeFileSync(state, JSON.stringify(s)); };

@@ -60,7 +60,7 @@ const hostTerms = new Map(hosts.map((h) => [h.name, terminalsOf(h)]));
 for (const host of hosts) {
   const WS = workspacesOn(host), PD = projectDirOn(host);
   const g = (...a) => onHost(host, `git -C ${q(PD)} ${a.map(q).join(" ")}`).trim();
-  if (!dry) g("fetch", "-q", "--prune", "origin");
+  if (!dry || preview) g("fetch", "-q", "--prune", "origin");   // the inventory run of --apply sees the refs the real run will act on
   const terms = hostTerms.get(host.name);
   if (terms === null) { console.log(`[${host.name}] cannot list terminals; removing nothing here`); continue; }
   const wsTail = WS.split("/").filter(Boolean).slice(-2).join("/");
@@ -92,7 +92,7 @@ for (const host of hosts) {
     if (wt?.dirty) { hold("finished with uncommitted or untracked changes; not released"); continue; }
     if (wt && !wt.merged && !wt.pushed) { hold("finished with commits that are not on origin; not released"); continue; }
     if (d.state === "gone") { hold(`finished? Orca no longer knows dispatch ${w.dispatch}; remove its record by hand once nothing runs there`); continue; }
-    if (!w.dispatch) { forget.push(k); continue; }   // a record without a dispatch has nothing to release
+    if (!w.dispatch) { forget.push(k); if (dry) console.log(`[${host.name}] would forget the record of "${name}" (no dispatch to release)`); continue; }   // a record without a dispatch has nothing to release
     if (++releases > RELEASES_MAX || Date.now() > DEADLINE) { hold("finished; released in a later cycle (at most 10 per run, within the run's time limit)"); continue; }
     // Fresh facts right before the release: state, who owns the terminal now, whether Orca keeps it open, setup terminals.
     const shown = orcaCall(["orchestration", "worker-show", "--dispatch", w.dispatch, "--full"], host);
@@ -171,7 +171,8 @@ for (const host of hosts) {
     // The wave's own status branch (CONTROLLER.md: `status-wave-<n>`) has no branch prefix. It is merged by its wave, so it goes
     // like the others once it is merged into origin/<main>, but only while no wave runs: a branch just made from origin/<main>
     // is merged too, and its wave has not written to it yet. When the wave state is unknown, it stays.
-    const prunable = (b) => b !== `origin/${MAIN}` && (b.startsWith(`origin/${BRANCH_PREFIX}`) || (/^origin\/status-wave-\d+$/.test(b) && waveFinished()));
+    let waveDone;   // asked at most once per run: it may read a terminal
+    const prunable = (b) => b !== `origin/${MAIN}` && (b.startsWith(`origin/${BRANCH_PREFIX}`) || (/^origin\/status-wave-\d+$/.test(b) && (waveDone ??= waveFinished())));
     for (const b of g("branch", "-r", "--merged", `origin/${MAIN}`).split("\n").map((s) => s.trim()).filter(prunable)) {
       if (dry) console.log(`[${host.name}] would delete the merged branch ${b}`);
       else g("push", "-q", "origin", "--delete", b.slice("origin/".length));
