@@ -343,7 +343,7 @@ test("status and doctor report a handbook that calls cleanup without --apply, an
   m.done();
 });
 
-test("status, doctor, update and start say when the kept handbook does not know inbox.mjs --done or restart.md", () => {
+test("status, doctor, update and start say when the kept handbook does not know inbox.mjs --done, restart.md or cycle.mjs end", () => {
   const m = machine();
   const p = m.project("theta", {});
   const ctl = path.join(m.home, "controller-theta");
@@ -353,10 +353,15 @@ test("status, doctor, update and start say when the kept handbook does not know 
   fs.writeFileSync(path.join(ctl, "CONTROLLER.md"), "| `node cleanup.mjs --all --apply` | every cycle |\nRead `inbox.md` and move processed lines.\n");
   assert.match(handbook().problem, /does not mention reading the inbox with `node inbox\.mjs` and `--done` and `restart\.md` after a restart.*\.factory\/new\/.*run start|does not mention .*inbox\.mjs.*restart\.md.*merge it, then run start/s);
   assert.match(p.cli("doctor").stdout, /MISSING handbook: the Controller's CONTROLLER\.md does not mention/);
-  // The current one knows both.
+  // A handbook that knows the inbox and restart files but not cycle.mjs: the idle Controller is reached only by the slower pointer, and doctor says so.
+  fs.writeFileSync(path.join(ctl, "CONTROLLER.md"), fs.readFileSync(path.join(p.dir, ".factory/controller/CONTROLLER.md"), "utf8").replace(/cycle\.mjs end/g, "cycle end"));
+  assert.match(handbook().problem, /does not mention ending a cycle with `node cycle\.mjs end`.*slower pointer/s);
+  assert.deepEqual(handbook().missing.length, 1);
+  assert.match(p.cli("doctor").stdout, /MISSING handbook: the Controller's CONTROLLER\.md does not mention ending a cycle/);
+  // The current one knows all three.
   fs.copyFileSync(path.join(p.dir, ".factory/controller/CONTROLLER.md"), path.join(ctl, "CONTROLLER.md"));
   assert.deepEqual(handbook().missing, []);
-  assert.match(p.cli("doctor").stdout, /OK      handbook: it knows inbox\.mjs --done and restart\.md/);
+  assert.match(p.cli("doctor").stdout, /OK      handbook: it knows inbox\.mjs --done, restart\.md and cycle\.mjs end/);
   // update and start warn about a locally kept older copy.
   const kept = path.join(p.dir, ".factory/controller/CONTROLLER.md");
   fs.writeFileSync(kept, fs.readFileSync(kept, "utf8").replace(/inbox\.mjs --done/g, "inbox.mjs").replace(/restart\.md/g, "restart notes"));

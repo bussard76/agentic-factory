@@ -2,7 +2,9 @@
 // (docs/learnings.md). `agentic-factory start` runs it from cron or launchd every minute. A worker message, a finished wave
 // and a new inbox line wake it at once; the full work check runs at each tenth minute; an idle project is woken at most every
 // hosts.controller.wake.idleMinutes. It marks progress in Orca's sidebar without a model.
-// It sends text into the Controller's terminal. A Controller that is busy without any sign of work (status.md and the journal
+// It sends text into the Controller's terminal. Whether the Controller is idle is Orca's answer, or the Controller's own word: the
+// marker `cycle.mjs end` writes when it ends a cycle (see trustedWaiting below). A Controller that Orca reads as busy gets a pointer
+// for every reason that would wake an idle one, again after wake.repeatMinutes if it was not answered. A Controller that is busy without any sign of work (status.md and the journal
 // unchanged) for hosts.controller.hung.minutes is reported to the Front agent. Only where a project set hosts.controller.hung.restart
 // to true, and after a second confirmation, it is restarted once through restart.mjs (the same session `start` makes); a second
 // hang is escalated and never restarted automatically. Each Controller directory has its own
@@ -29,7 +31,8 @@ const POINTER = "Heartbeat: inbox.md has a new instruction. Read it after your c
 // Typed once when a hang is first reported: a Controller that sits at its prompt (Orca may misread it as busy) runs a cycle and writes
 // status.md, which ends the hang; one that really hangs does not.
 const POINTER_HUNG = "Heartbeat: you have shown no sign of work for a while. Run step 1 of \"The loop\" in CONTROLLER.md after your current step, and write status.md.";
-const POINTER_MAIL = "Heartbeat: something new is waiting (inbox.md, worker mail or a finished wave). Run step 1 of \"The loop\" in CONTROLLER.md after your current step.";
+const POINTER_WORK = "Heartbeat: ready tickets or running workers are waiting. Run the next cycle of \"The loop\" in CONTROLLER.md after your current step.";
+const POINTER_MAIL ="Heartbeat: something new is waiting (inbox.md, worker mail or a finished wave). Run step 1 of \"The loop\" in CONTROLLER.md after your current step.";
 const title = `${PROJECT} · Controller`;
 
 const LOCK = file("heartbeat.lock.d");
@@ -99,7 +102,11 @@ for (const host of HOSTS) {
 // dispatch state (lib.mjs workerStatus). Orca is asked at most once per run, and for the sidebar at most every 10 minutes:
 // the counts are cached in heartbeat.workers.json. `fresh` (the full check) always asks.
 const COUNT_CACHE_MS = 10 * 60_000;
-const fullCheck = new Date().getMinutes() % 10 === 0;
+// FACTORY_MINUTE (0-59) replaces the wall clock's minute, but only inside the test support environment (test/support/safe-env.mjs sets
+// AF_TEST_SAFE_BIN): a stray FACTORY_MINUTE in a cron or launchd environment is ignored, so no test depends on the minute it runs in
+// and production always reads the clock.
+const minuteNow = process.env.AF_TEST_SAFE_BIN && /^\d{1,2}$/.test(process.env.FACTORY_MINUTE ?? "") ? Number(process.env.FACTORY_MINUTE) : new Date().getMinutes();
+const fullCheck = minuteNow % 10 === 0;
 let counted;
 const workerCounts = (records, fresh = fullCheck) => {
   if (counted) return counted;
@@ -235,7 +242,10 @@ for (const m of messages) {
   announce(m.id, `worker done: ${known[m.from].name}: ${String(m.subject ?? "").slice(0, 120)}`, known[m.from]);
 }
 if (wave.state === "finished" && !announced.has(wave.handle)) announce(wave.handle, `wave finished: ${wave.result}`);
-const fresh = events.filter((id) => !seen.has(id));
+// Mail the Controller has handled (cycle.mjs start records what it printed and read in step 1) is no reason: the Controller cannot
+// consume Orca mail itself, so without this a message it had read stayed "new" until the next wake succeeded.
+const handledMail = new Set(readJson("mail.handled.json", []));
+const fresh = events.filter((id) => !seen.has(id) && !handledMail.has(id));
 const remember = () => fs.writeFileSync(file("heartbeat.seen.json"), JSON.stringify([...seen, ...fresh].slice(-500)));
 if (!seenExisted) { remember(); log("baseline of worker messages recorded"); process.exit(0); } // Old messages wake nobody.
 
@@ -308,6 +318,16 @@ const hungText = (n) => {
             : `it is restarted at ${hhmm(n.since + HUNG.restartAfterMinutes * 60_000)} unless it recovers, if its terminal then shows the same frame twice`;
   return `HUNG since ${hhmm(n.since)}: ${n.why}${n.pointerAt ? "" : " (the pointer line was not typed)"}; ${what}`;
 };
+// A Controller that marked itself waiting, was woken the allowed number of times for a state and did not start a cycle (it ignores
+// wakes: a screen that eats typed lines, a usage-limit screen). It is reported once to the Front agent (below, where the cap is hit) and
+// stays a line in heartbeat-health.md until it reacts: a new marker (it ended another cycle) or a status.md written after the marker.
+const unansweredLine = () => {
+  const u = readJson("heartbeat.unanswered.json", {});
+  if (!u.markerAt) return null;
+  const at = Number(readJson("controller.waiting.json", {}).at);
+  if (at !== u.markerAt || mtime("status.md") > at + 2000) { fs.rmSync(file("heartbeat.unanswered.json"), { force: true }); return null; }
+  return `UNANSWERED since ${hhmm(u.since)}: the Controller marked itself waiting at ${hhmm(at)}, was woken ${u.n} times for ${u.what} and did not start a cycle; a new reason is still typed, the same one is not repeated: it needs a person`;
+};
 // Returns true when it restarted the Controller: the terminal this run holds is then the old one.
 const hangCheck = () => {
   if (!fs.existsSync(file("status.md"))) return false;   // it has not started its first cycle
@@ -376,6 +396,8 @@ const hangCheck = () => {
   if (notStarted && !restarted) lines.push(`RESTARTED at ${hhmm(restartAt)}, but the Controller has not written status.md since: it has not started a cycle`);
   const dlgState = readJson("heartbeat.dialog.json", {});
   if (dlgState.reportedShape) lines.push(`WAITING AT A CONFIRMATION DIALOG since ${hhmm(dlgState.since)}: nothing is typed into it, it needs a person`);
+  const unanswered = unansweredLine();
+  if (unanswered) lines.push(unanswered);
   if (twoControllers && !restarted) lines.push(`TWO CONTROLLERS: the old terminal ${twoControllers} could not be closed after the restart: close it by hand`);
   if (!lines.length && next.restartedAt && now - next.restartedAt < 60 * 60_000) lines.push(`RESTARTED automatically at ${hhmm(next.restartedAt)} after a hang`);
   writeHealth(lines);
@@ -394,7 +416,35 @@ if (wave.state === "finished") reasons.unshift("wave finished");
 if (!reasons.length && needsHuman().length) process.exit(0);
 const lastWake = fs.existsSync(file("heartbeat.last")) ? fs.statSync(file("heartbeat.last")).mtimeMs : 0;
 // Idle (nothing new, nothing ready, no worker running) is woken at most every wake.idleMinutes; a source that cannot be read is no event.
-if (Date.now() - lastWake < WAKE.idleMinutes * 60_000 && reasons.every((r) => ERROR_REASONS.has(r))) process.exit(0);
+const capped = Date.now() - lastWake < WAKE.idleMinutes * 60_000 && reasons.every((r) => ERROR_REASONS.has(r));
+
+// The Controller's own word: cycle.mjs end wrote controller.waiting.json when it finished its cycle and sat down at its prompt, and
+// cycle.mjs start removes it when the next one begins. The claim is what the files say; it is believed (trustedWaiting, below) only while
+// nothing contradicts it. A marker is contradicted by status.md written after it (the Controller works and forgot to clear it: only
+// the Controller writes status.md, and every cycle does; the journal is no sign, since a wave's gate and wavewait.mjs write it while the
+// Controller sits idle), by a restart after it, and by a terminal record newer than it (`start` made a new Controller: the marker is the
+// old session's). No marker (a handbook from before, a Controller that never ends a cycle) means main's behaviour exactly: Orca decides,
+// and a busy reading gets the pointer once per state.
+const claim = (() => {
+  const m = readJson("controller.waiting.json", {}), at = Number(m.at);
+  if (!Number.isFinite(at) || at <= 0 || at > Date.now() + 60_000) return {};
+  if (Math.max(mtimeOf("status.md"), readJson("heartbeat.restarted.json", {}).at ?? 0) > at + 2000) return { present: true, why: "the Controller wrote status.md after it marked itself waiting" };
+  if (mtimeOf("controller-terminal.txt") > at + 2000) return { present: true, why: "the marker is older than this Controller's terminal record (a new session)" };
+  return { at, present: true };
+})();
+const markerWake = readJson("heartbeat.markerwake.json", {}), markerSeen = readJson("heartbeat.markerseen.json", {});
+const MAX_REPEATS = 3;
+// What is waiting, as tokens: an unanswered wake is held back only for tokens it already carried, a new one is never held back by the
+// repeat timer of an older one. A signal the wake spent (a message, a wave) is no token any more and so is no "new reason" either.
+const sha1 = (text) => createHash("sha1").update(text).digest("hex");
+const workKinds = () => reasons.filter((r) => !ERROR_REASONS.has(r) && r !== "unanswered wake" && !/^(inbox|\d+ worker message|wave finished)$/.test(r)).map((r) => r.replace(/^\d+ /, ""));
+const tokens = () => [...(inboxWaiting ? [`inbox:${sha1(readText("inbox.md"))}`] : []), ...fresh.map((id) => `msg:${id}`), ...(wave.state === "finished" ? [`wave:${wave.handle}`] : []), ...workKinds().map((k) => `work:${k}`)];
+// A marker this run has not looked at yet is a Controller that has just ended a cycle: ready tickets are looked at once, so one it left
+// unstarted does not wait for the tenth minute. A wake typed because of the marker and not answered (the marker is still the same) is
+// a reason by itself after wake.repeatMinutes, at most MAX_REPEATS times.
+const newMarker = Boolean(claim.at) && markerSeen.markerAt !== claim.at;
+const unansweredDue = Boolean(claim.at) && markerWake.markerAt === claim.at && markerWake.real === true && (markerWake.n ?? 1) <= MAX_REPEATS && Date.now() - markerWake.at >= WAKE.repeatMinutes * 60_000;
+if (capped && !newMarker && !unansweredDue) process.exit(0);
 
 // A Controller that has not written its first status.md has not started its first cycle: it may still sit at its agent CLI's
 // first-start dialog (trust this folder), and a line typed there is Enter on a default. A restarted one has the old status.md, so
@@ -403,18 +453,79 @@ if (!fs.existsSync(file("status.md"))) { log(`no status.md yet, so the Controlle
 const restartedAt = readJson("heartbeat.restarted.json", {}).at ?? 0;
 if (restartedAt && mtimeOf("status.md") <= restartedAt) { log(`the Controller was restarted at ${hhmm(restartedAt)} and has not written status.md since: nothing typed (${reasons.join(", ") || "idle check"})`); process.exit(0); }
 
-const { idle, why: busyWhy } = probeIdle();
+// Believed only while the terminal itself agrees. THIS IS THE ONE THING between a stale marker and a line typed into a Controller that
+// works: Orca's own answer is not asked. The terminal must have printed nothing within wake.quietSeconds (Orca's `terminal list` says
+// when it last printed; a thinking agent's spinner and a running command's output are what keeps it fresh), and Orca must give a usable
+// time at all: a missing, null or non-numeric `lastOutputAt` is NOT quiet, it is unknown, and unknown is busy. The screen must be
+// readable and show no confirmation question. The marker only ever turns "busy" into "idle", never the other way round.
+const trustedWaiting = () => {
+  if (!claim.at) return { ok: false, why: claim.why };
+  const printed = terminal.lastOutputAt;
+  if (typeof printed !== "number" || !Number.isFinite(printed) || printed <= 0 || printed > Date.now() + 60_000) return { ok: false, why: "Orca gives no usable lastOutputAt for its terminal" };
+  const quiet = Math.round((Date.now() - printed) / 1000);
+  if (quiet < WAKE.quietSeconds) return { ok: false, why: `its terminal printed ${quiet} s ago` };
+  const screen = readScreen();
+  if (screen === null) return { ok: false, why: "its screen cannot be read" };
+  if (dialogVisible(screen)) return { ok: false, dialog: true, why: "a confirmation question is visible" };
+  return { ok: true, at: claim.at, quiet };
+};
+const waiting = trustedWaiting();
+// Recorded only when the look has been answered by a wake that was sent (or found nothing to send): a failed ticket read or a failed
+// send leaves the marker unseen, and the next beat looks again.
+let seenRecord = null;
+const recordSeen = () => { if (seenRecord) fs.writeFileSync(file("heartbeat.markerseen.json"), JSON.stringify(seenRecord)); };
+if (waiting.ok) {
+  if (newMarker) {
+    // Once per marker, and only when nothing else is a reason: ready tickets the Controller left unstarted when it ended its cycle.
+    // Woken when the set is not the one it was last woken for, or after wake.repeatMinutes (a Controller at capacity that ends every cycle
+    // with the same tickets is not woken every minute).
+    if (!fullCheck && !reasons.length) {
+      let ready = null;
+      try { ready = readyTickets().map((t) => (t && typeof t === "object" ? t.id ?? t.number ?? JSON.stringify(t) : t)).map(String).sort(); } catch { ready = null; }
+      if (ready === null) log("ready tickets could not be read: looked at again at the next beat");
+      else if (ready.length && (JSON.stringify(ready) !== JSON.stringify(markerSeen.ready) || Date.now() - (markerSeen.wokeAt ?? 0) >= WAKE.repeatMinutes * 60_000)) { reasons.push(`${ready.length} ready`); seenRecord = { markerAt: claim.at, ready, wokeAt: Date.now() }; }
+      else { seenRecord = { markerAt: claim.at, ready, wokeAt: markerSeen.wokeAt }; recordSeen(); seenRecord = null; }
+    } else seenRecord = { markerAt: claim.at, ready: markerSeen.ready, wokeAt: markerSeen.wokeAt };
+  }
+  if (unansweredDue && !reasons.length) reasons.push("unanswered wake");
+}
+if (capped && !reasons.length) process.exit(0);
+const { idle, why: busyWhy } = waiting.ok ? { idle: true, why: "" } : waiting.dialog ? { idle: false, why: "a confirmation question is visible" } : probeIdle();
 const busySince = noteBusy(idle);
+if (idle && waiting.ok) {
+  // A wake typed into a Controller that said it was waiting is held back while it carries nothing the earlier one did not: for
+  // wake.repeatMinutes, and for good once MAX_REPEATS repeats are used up, when the Front agent is told once. A NEW reason (a new inbox
+  // line, a new message, a new wave, tickets that were not waiting) is never held back by the timer of an older one.
+  const now = tokens(), same = markerWake.markerAt === waiting.at, added = same ? now.filter((t) => !(markerWake.sig ?? []).includes(t)) : now;
+  if (same && !added.length && (Date.now() - markerWake.at < WAKE.repeatMinutes * 60_000 || (markerWake.n ?? 1) > MAX_REPEATS)) {
+    const spent = (markerWake.n ?? 1) > MAX_REPEATS;
+    log(`the Controller marked itself waiting at ${hhmm(waiting.at)}; woken at ${hhmm(markerWake.at)} and has not started a cycle: not typed again${spent ? ` (${MAX_REPEATS} repeats are used up)` : ` before ${WAKE.repeatMinutes} minutes`} (${reasons.join(", ") || "idle check"})`);
+    if (spent && readJson("heartbeat.unanswered.json", {}).markerAt !== waiting.at) {
+      const what = oneLine((markerWake.sig ?? []).map((t) => t.replace(/:.*$/, "")).filter((t, i, a) => a.indexOf(t) === i).join(", ") || "idle check", 80);
+      const state = { markerAt: waiting.at, since: Date.now(), n: markerWake.n ?? 1, what };
+      fs.writeFileSync(file("heartbeat.unanswered.json"), JSON.stringify(state));
+      writeHealth([unansweredLine()].filter(Boolean));
+      log(`told the Front agent (UNANSWERED): ${tellFront("UNANSWERED", unansweredLine() ?? "the Controller does not react to wake lines", { type: "question" }).join(", ")}`);
+    }
+    process.exit(0);
+  }
+}
 if (!idle) {
-  log(`busy, not woken (${reasons.join(", ") || "idle check"}; Orca: ${busyWhy})`);
+  log(`busy, not woken (${reasons.join(", ") || "idle check"}; ${waiting.dialog || waiting.why ? `marker not used: ${waiting.why}; ` : ""}Orca: ${busyWhy})`);
   // A long cycle must not starve what is waiting, and Orca may read an idle session as busy. After a short continuous busy period the
-  // running session gets a one-line pointer, once per state of what is waiting (inbox lines, worker mail, a finished wave).
-  const finished = wave.state === "finished";
-  if ((inboxWaiting || fresh.length || finished) && Date.now() - busySince >= WAKE.busyPointerMinutes * 60_000) {
-    const key = JSON.stringify([inboxWaiting ? createHash("sha1").update(readText("inbox.md")).digest("hex") : null, fresh, finished ? wave.handle : null]);
+  // running session gets a one-line pointer, once per state of what is waiting (inbox lines, worker mail, a finished wave): exactly as
+  // before, for a Controller whose handbook does not know the marker. A Controller that has a marker file (its handbook is new, and the
+  // marker is not believed just now) gets the pointer for every reason that would wake an idle one too (ready tickets, running workers at
+  // the tenth minute), and an unanswered one again after wake.repeatMinutes, at most MAX_REPEATS times per state.
+  const finished = wave.state === "finished", extended = Boolean(claim.present);
+  const work = extended ? workKinds() : [];
+  if ((inboxWaiting || fresh.length || finished || work.length) && Date.now() - busySince >= WAKE.busyPointerMinutes * 60_000) {
+    const inboxHash = inboxWaiting ? sha1(readText("inbox.md")) : null;
+    const key = JSON.stringify(extended ? [inboxHash, fresh, finished ? wave.handle : null, work] : [inboxHash, fresh, finished ? wave.handle : null]);
+    const typed = readJson("heartbeat.pointer.count", {}), sameKey = readText("heartbeat.pointer") === key;
     // While the last lines of the screen look like a confirmation question nothing is typed, however long it lasts (Enter would take
     // its default). After wake.dialogHoldMinutes the Front agent is told instead, once, and again only when the question changes.
-    const pending = readText("heartbeat.pointer") !== key, screenNow = pending ? readScreen() : null;
+    const pending = !sameKey || (extended && Date.now() - mtime("heartbeat.pointer") >= WAKE.repeatMinutes * 60_000 && (typed.key === key ? typed.n ?? 1 : 1) <= MAX_REPEATS), screenNow = pending ? readScreen() : null;
     const onDialog = pending && dialogVisible(screenNow);
     const dlg = readJson("heartbeat.dialog.json", {}), now = Date.now();
     if (!onDialog) fs.rmSync(file("heartbeat.dialog.json"), { force: true });
@@ -430,10 +541,11 @@ if (!idle) {
       fs.writeFileSync(file("heartbeat.dialog.json"), JSON.stringify(state));
     }
     if (!onDialog && pending) {
-      const inboxOnly = inboxWaiting && !fresh.length && !finished;
-      orca("terminal", "send", "--terminal", terminal.handle, "--text", inboxOnly ? POINTER : POINTER_MAIL, "--enter");
-      fs.writeFileSync(file("heartbeat.pointer"), key);
-      log(inboxOnly ? "pointed the busy Controller to the inbox" : "pointed the busy Controller to new mail or a finished wave");
+      const inboxOnly = inboxWaiting && !fresh.length && !finished && !work.length, workOnly = !inboxWaiting && !fresh.length && !finished;
+      orca("terminal", "send", "--terminal", terminal.handle, "--text", inboxOnly ? POINTER : workOnly ? POINTER_WORK : POINTER_MAIL, "--enter");
+      fs.writeFileSync(file("heartbeat.pointer.count"), JSON.stringify({ key, n: sameKey && typed.key === key ? (typed.n ?? 1) + 1 : 1 }));
+      fs.writeFileSync(file("heartbeat.pointer"), key);   // its age is the time of this pointer
+      log(inboxOnly ? "pointed the busy Controller to the inbox" : workOnly ? `pointed the busy Controller to ${work.join(", ")}` : "pointed the busy Controller to new mail or a finished wave");
     }
   }
   process.exit(0);
@@ -441,9 +553,15 @@ if (!idle) {
 
 // A count tells the Controller there is mail; what it says it reads itself, in step 1 of the loop.
 const text = fresh.length ? `Heartbeat: ${fresh.length} new worker message${fresh.length > 1 ? "s" : ""}. Run the next cycle of "The loop" in CONTROLLER.md now (step 1 reads the mail), then stop and wait for the next heartbeat.` : MESSAGE;
+const tokensNow = waiting.ok ? tokens() : [];
 orca("terminal", "send", "--terminal", terminal.handle, "--text", text, "--enter");
 fs.writeFileSync(file("heartbeat.last"), "");
+if (waiting.ok) {
+  const same = markerWake.markerAt === waiting.at, added = same ? tokensNow.filter((t) => !(markerWake.sig ?? []).includes(t)) : tokensNow;
+  fs.writeFileSync(file("heartbeat.markerwake.json"), JSON.stringify({ markerAt: waiting.at, at: Date.now(), n: same && !added.length ? (markerWake.n ?? 1) + 1 : 1, sig: [...new Set([...(same ? markerWake.sig ?? [] : []), ...tokensNow])], real: reasons.length > 0 }));
+  recordSeen();
+}
 remember();
 if (newlySettled.length) fs.writeFileSync(file("heartbeat.settled.json"), JSON.stringify([...readJson("heartbeat.settled.json", []), ...newlySettled].slice(-500)));
 if (wave.state === "finished") fs.writeFileSync(file("heartbeat.wave"), wave.handle);
-log(`woke ${terminal.handle} (${reasons.join(", ") || "idle check"})`);
+log(`woke ${terminal.handle} (${reasons.join(", ") || "idle check"}${waiting.ok ? `; it marked itself waiting at ${hhmm(waiting.at)}, its terminal had been quiet for ${waiting.quiet} s` : ""})`);

@@ -141,7 +141,7 @@ Open points are in [`debt.md`](debt.md), and past reviews of this repository in 
 - **Tested against fakes:** the test suite replaces Orca, ssh, `launchctl`, `crontab` and `gh` with fakes that record their calls. That is how the heartbeat, the wake rules, cleanup, capacity, the bot watch and the second-factory rules are tested.
 - **Never run against a real Orca:** the automatic restart of a hung Controller (off by default). That closing the Controller's terminal leaves its workers alone is unproven. [Orca](docs/orca.md#heartbeat) lists what a restart kills and what is unproven.
 - **Opt-in:** the documentation-only path applied in the last real run, for two tickets. What it saves is the Tester round, not the gate. The formatter on staged files was tested with a stand-in, not with `prettier` itself. Both are off until you turn them on.
-- **Unproven:** why Orca reads a Claude Code Controller as busy while its `wait.mjs` background shell runs. In the last run the Controller had to be woken by hand once, after 12 minutes. The heartbeat therefore does not guess from the screen. See "Busy or idle?" in [Orca](docs/orca.md#heartbeat).
+- **Unproven:** why Orca reads a Claude Code Controller as busy while its `wait.mjs` background shell runs. In the last real run the Controller had to be woken by hand once, after 12 minutes (ready tickets were no reason for the pointer). The Controller now tells the heartbeat itself when it has ended a cycle (`cycle.mjs end`), and the pointer covers every reason and is repeated; both work against a fake Orca in the tests, but **no real run has confirmed that yet**, so treat this limit as open until one has. See "Busy or idle?" in [Orca](docs/orca.md#heartbeat).
 
 ## Documentation
 

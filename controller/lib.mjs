@@ -87,7 +87,10 @@ const positive = (v, fallback) => (Number.isFinite(Number(v)) && Number(v) > 0 ?
 // enter" (optionally "to <something>") ending a line.
 const DIALOGS = ["\\((?:y/n|yes/no)\\)\\s*:?\\s*$", "\\[(?:y/n|yes/no)\\]\\s*:?\\s*$", "^\\W*1[.)]\\s+yes\\b", "\\bpress enter(?: to [a-z ]+)?\\s*$"];
 const patternList = (v, fallback) => (Array.isArray(v) ? v.filter((p) => typeof p === "string" && p) : fallback);
-export const WAKE = { idleMinutes: positive(ctl.wake?.idleMinutes, 30), busyPointerMinutes: positive(ctl.wake?.busyPointerMinutes, 2), dialogPatterns: patternList(ctl.wake?.dialogPatterns, DIALOGS), dialogHoldMinutes: positive(ctl.wake?.dialogHoldMinutes, 15) };
+export const WAKE = { idleMinutes: positive(ctl.wake?.idleMinutes, 30), busyPointerMinutes: positive(ctl.wake?.busyPointerMinutes, 2), dialogPatterns: patternList(ctl.wake?.dialogPatterns, DIALOGS), dialogHoldMinutes: positive(ctl.wake?.dialogHoldMinutes, 15),
+  // repeatMinutes: how long an unanswered pointer or marker wake is left before it is typed again. quietSeconds: how long the terminal
+  // must have printed nothing for the Controller's own "waiting" marker (cycle.mjs) to be believed.
+  repeatMinutes: positive(ctl.wake?.repeatMinutes, 10), quietSeconds: positive(ctl.wake?.quietSeconds, 20) };
 export const HUNG = {
   minutes: positive(ctl.hung?.minutes, 25), restartAfterMinutes: positive(ctl.hung?.restartAfterMinutes, 15), 
   // Off unless a project sets exactly true: nothing else (false, "false", a typo of the value) turns a kill of a session on.
