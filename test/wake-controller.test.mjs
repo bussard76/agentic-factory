@@ -3,6 +3,7 @@
 // the heartbeat does not depend on wait.mjs. Fakes only: no real crontab, launchctl or Orca is ever reached, and HOME is a
 // throwaway directory.
 import "./support/safe-env.mjs";
+import { tempDir, expectBackground, stopBackground } from "./support/cleanup.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -48,7 +49,7 @@ test("the Controller is what start made, or what carries its name: never an unna
 });
 
 function beatSetup(terminals, extra = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-wake-"));
+  const dir = tempDir("af-wake-");
   const ctl = path.join(dir, "ctl"), project = path.join(dir, "p");
   fs.mkdirSync(path.join(ctl, "steering"), { recursive: true }); fs.mkdirSync(path.join(project, "docs/tasks"), { recursive: true });
   for (const f of ["heartbeat.mjs", "cli.mjs", "controller-terminal.mjs", "front-notice.mjs", "inbox.mjs", "restart.mjs", "lib.mjs", "steering/tasks.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
@@ -257,7 +258,7 @@ test("the launchd job for the heartbeat runs every minute, finds node and orca, 
 
 test("the cron line carries node's directory (#22), an older line is brought up to date, one written by hand stays", async () => {
   const { heartbeatCronScript } = await import(path.join(ROOT, "bin/heartbeat-cron.mjs"));
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-cron-")), tab = path.join(dir, "tab");
+  const dir = tempDir("af-cron-"), tab = path.join(dir, "tab");
   fs.writeFileSync(path.join(dir, "crontab"), `#!/bin/sh\nif [ "$1" = "-l" ]; then cat "${tab}"; else cat > "${tab}.new" && mv "${tab}.new" "${tab}"; fi\n`, { mode: 0o755 });
   const run = (d, nodeDir) => spawnSync("sh", ["-c", heartbeatCronScript(d, "p", nodeDir)], { encoding: "utf8", env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, HOME: "/home/x" } }).stdout.trim();
   fs.writeFileSync(tab, "0 3 * * * other job\n* * * * * cd \"/home/x/c\" && PATH=\"$HOME/.local/bin:/usr/bin:/bin\" node heartbeat.mjs >> heartbeat.log 2>&1\n");
@@ -276,11 +277,12 @@ test("the cron line carries node's directory (#22), an older line is brought up 
 });
 
 function startSetup() {
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-wk-")));
+  const base = fs.realpathSync(tempDir("af-wk-"));
   const home = path.join(base, "home"), project = path.join(base, "project"), bin = path.join(base, "bin"), tab = path.join(base, "tab"), flags = path.join(base, "flags");
   for (const d of [home, project, bin, flags]) fs.mkdirSync(d);
   fs.writeFileSync(tab, "");
   // crontab refuses writes (like macOS without permission) when flags/cron-refused exists, and is absent with flags/cron-missing.
+  expectBackground(base);   // start launches a detached load logger from here
   fs.writeFileSync(path.join(bin, "crontab"), `#!/bin/sh\nif [ -e ${flags}/cron-missing ]; then echo "sh: crontab: not found" >&2; exit 127; fi\nif [ "$1" = "-l" ]; then cat ${tab}; elif [ -e ${flags}/cron-refused ]; then echo "crontab: tmp/x: Operation not permitted" >&2; exit 1; else cat > ${tab}.new && mv ${tab}.new ${tab}; fi\n`, { mode: 0o755 });
   const launchLog = path.join(base, "launchctl.log");
   fs.writeFileSync(path.join(bin, "launchctl"), `#!/bin/sh\necho "$@" >> ${launchLog}\ncase "$1" in print) [ -e ${flags}/loaded ] || exit 1; [ -e ${flags}/last-exit ] && echo "        last exit code = $(cat ${flags}/last-exit)"; exit 0;; bootout) rm -f ${flags}/loaded; exit 0;; esac\n[ -e ${flags}/launchctl-refused ] && { echo refused >&2; exit 1; }\n[ "$1" = bootstrap ] && touch ${flags}/loaded\nexit 0\n`, { mode: 0o755 });
@@ -297,7 +299,7 @@ else out({ terminals: [], repos: [] });\n`, { mode: 0o755 });
   const env = { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, GIT_CONFIG_NOSYSTEM: "1", FACTORY_SCHEDULER: "launchd" };
   delete env.ORCA_TERMINAL_HANDLE; delete env.ORCA_CLI_COMMAND; delete env.ORCA_ENVIRONMENT;
   const git = (...a) => { const r = spawnSync("git", a, { cwd: project, encoding: "utf8", env }); assert.equal(r.status, 0, r.stderr); };
-  const cli = (args, over = {}) => { const r = spawnSync("node", [CLI, ...args], { cwd: project, encoding: "utf8", env: { ...env, ...over } }); spawnSync("pkill", ["-f", path.join(home, "controller", "loadlog.sh")]); return r; };
+  const cli = (args, over = {}) => { const r = spawnSync("node", [CLI, ...args], { cwd: project, encoding: "utf8", env: { ...env, ...over } }); stopBackground(path.join(home, "controller")); return r; };
   git("init", "-q", "-b", "main"); git("config", "user.name", "T"); git("config", "user.email", "t@example.invalid");
   fs.writeFileSync(path.join(project, "README.md"), "x\n"); git("add", "."); git("commit", "-qm", "initial");
   fs.writeFileSync(path.join(base, "a.json"), JSON.stringify({ "project.name": "demo", "project.humanName": "H", "agents.default": "claude", "skills.installNow": "no", "rules.confirm": "yes" }));
@@ -534,7 +536,7 @@ test("the Front agent's own session, a person's session and another checkout: ne
   assert.match(st.terminalProblem, /no Controller is recorded or named; 1 other agent session runs in this project's checkout and is never taken for it: run `start`/);
   assert.match(h.cli(["status"]).stdout, /MISSING Controller on local.*run `start`/);
   // The same, found from another checkout than the configured one: start made it there and recorded where.
-  const other = fs.mkdtempSync(path.join(os.tmpdir(), "af-other-"));
+  const other = tempDir("af-other-");
   h.terminals([agent("term_ctl", "Reading CONTROLLER.md", { worktreePath: other })]);
   fs.writeFileSync(path.join(h.ctlDir, "controller-terminal.txt"), `term_ctl\n${other}\n`);
   assert.equal(JSON.parse(h.cli(["status", "--json"]).stdout).setup.controller.terminal, true, "status uses the same places as the heartbeat");

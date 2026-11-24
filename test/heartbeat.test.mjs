@@ -1,5 +1,6 @@
 // controller/heartbeat.mjs against a fake Orca: who gets woken, when, and that a signal is only spent on a successful wake.
 import "./support/safe-env.mjs";
+import { tempDir } from "./support/cleanup.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -10,7 +11,7 @@ import path from "node:path";
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 
 function setup({ state = {} } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-heartbeat-"));
+  const dir = tempDir("af-heartbeat-");
   const ctl = path.join(dir, "ctl"), project = path.join(dir, "p");
   fs.mkdirSync(path.join(ctl, "steering"), { recursive: true });
   fs.mkdirSync(path.join(project, "docs/tasks"), { recursive: true });
@@ -453,7 +454,7 @@ test("no Controller terminal: nothing is woken and it says so", () => {
 
 test("the cron script adds one line, keeps the rest of the crontab, and keeps an existing heartbeat", async () => {
   const { heartbeatCronScript } = await import(path.join(ROOT, "bin/heartbeat-cron.mjs"));
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-heartbeat-cron-"));
+  const dir = tempDir("af-heartbeat-cron-");
   const tab = path.join(dir, "tab");
   fs.writeFileSync(tab, "0 3 * * * other job\n");
   const fake = path.join(dir, "crontab");

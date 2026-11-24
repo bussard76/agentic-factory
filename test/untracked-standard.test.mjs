@@ -1,6 +1,7 @@
 // The factory's standard stays out of a project's history: only real git, real hooks and real worktrees here.
 import "./support/safe-env.mjs";
 import { bind } from "./support/bind.mjs";
+import { tempDir, expectBackground, stopBackground } from "./support/cleanup.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -15,7 +16,7 @@ const CLI = path.join(ROOT, "bin/agentic-factory.mjs");
 const isLink = (p) => { try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; } };
 
 function adopted({ before, tracked = false } = {}) {
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-std-")));
+  const base = fs.realpathSync(tempDir("af-std-")); expectBackground(base);   // start launches a detached load logger from here
   const home = path.join(base, "home"), project = path.join(base, "project");
   fs.mkdirSync(home); fs.mkdirSync(project);
   const env = { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1", GIT_CONFIG_NOSYSTEM: "1" };
@@ -254,7 +255,7 @@ test("status, doctor, start and deviate tell the truth about a broken clone", ()
   fs.chmodSync(path.join(h.project, ".git/info"), 0o555);
   const r = h.cli(h.project, "start");
   fs.chmodSync(path.join(h.project, ".git/info"), 0o755);
-  spawnSync("pkill", ["-f", path.join(h.home, "controller", "loadlog.sh")]);
+  stopBackground(path.join(h.home, "controller"));
   assert.notEqual(r.status, 0, r.stdout); assert.match(r.stdout, /arming failed/);
   assert.ok(fs.existsSync(path.join(hooks, "pre-commit")), "the hooks went in first");
   const clone = path.join(h.base, "fresh"); h.ok(h.base, "clone", "-q", h.ok(h.project, "remote", "get-url", "origin"), clone);
@@ -289,7 +290,7 @@ test("update reaches a remote host's clone, and says so when it cannot", { skip:
 
 test("husky and an already tracked project are refused without a change", () => {
   const h = adopted();
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-husky-")));
+  const base = fs.realpathSync(tempDir("af-husky-"));
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: base }); fs.mkdirSync(path.join(base, ".husky"));
   const env = { ...process.env, HOME: base, FACTORY_SKIP_ORCA: "1" };
   let r = spawnSync("node", [CLI, "init", "--untracked-standard", "--yes"], { cwd: base, encoding: "utf8", env });
@@ -389,7 +390,7 @@ test("a hook made unexecutable or removed counts as not armed, and arming restor
 });
 
 test("a global hooks path is refused at init and never replaced by an absolute one", () => {
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-global-")));
+  const base = fs.realpathSync(tempDir("af-global-"));
   fs.writeFileSync(path.join(base, ".gitconfig"), "[core]\n\thooksPath = /somewhere/else\n");
   const project = path.join(base, "p"); fs.mkdirSync(project);
   const env = { ...process.env, HOME: base, FACTORY_SKIP_ORCA: "1", GIT_CONFIG_NOSYSTEM: "1" };
@@ -437,7 +438,7 @@ test("a project with a husky prepare script is refused, and a link cannot enter 
   const c = h.git(h.project, "commit", "-m", "link");
   assert.notEqual(c.status, 0); assert.match(c.stderr, /link into this clone's standard/);
   h.ok(h.project, "reset", "-q");
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-prep-")));
+  const base = fs.realpathSync(tempDir("af-prep-"));
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: base });
   fs.writeFileSync(path.join(base, "package.json"), JSON.stringify({ scripts: { prepare: "husky" } }));
   const r = spawnSync("node", [CLI, "init", "--untracked-standard", "--yes"], { cwd: base, encoding: "utf8", env: { ...process.env, HOME: base, FACTORY_SKIP_ORCA: "1" } });
@@ -466,7 +467,7 @@ for (const tracked of [false, true]) test(`a branch that renames the main branch
 });
 
 test("an untracked file where the standard goes is refused, and deviate stages one that appeared later", () => {
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-untracked-")));
+  const base = fs.realpathSync(tempDir("af-untracked-"));
   const env = { ...process.env, HOME: base, FACTORY_SKIP_ORCA: "1", GIT_CONFIG_NOSYSTEM: "1" };
   const project = path.join(base, "p"); fs.mkdirSync(path.join(project, "docs"), { recursive: true });
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: project, env });
@@ -492,7 +493,7 @@ test("a tracked file of the project's is a deviation from the start", () => {
 });
 
 test("hooks through a linked directory are refused, an empty hooks path is removed, a separate git dir gets its links", () => {
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-linked-")));
+  const base = fs.realpathSync(tempDir("af-linked-"));
   const env = { ...process.env, HOME: base, FACTORY_SKIP_ORCA: "1", GIT_CONFIG_NOSYSTEM: "1" };
   const project = path.join(base, "p"); fs.mkdirSync(path.join(project, "scripts/hooks"), { recursive: true });
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: project, env });
@@ -581,7 +582,7 @@ test("init accepts a tracked .claude/skills link, and refuses a file named docs 
   } });
   assert.equal(fs.readFileSync(path.join(h.project, ".claude/skills/tdd/SKILL.md"), "utf8"), "ours\n");
   h.done();
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-docs-")));
+  const base = fs.realpathSync(tempDir("af-docs-"));
   const env = { ...process.env, HOME: base, FACTORY_SKIP_ORCA: "1", GIT_CONFIG_NOSYSTEM: "1" };
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: base, env });
   fs.writeFileSync(path.join(base, "docs"), "a file\n");
@@ -609,7 +610,7 @@ test("a moved hook is reported, a link appearing later is refused by arm, a proj
 });
 
 test("keeping own hooks entirely is refused for now, without touching anything", () => {
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-own-")));
+  const base = fs.realpathSync(tempDir("af-own-"));
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: base });
   const r = spawnSync("node", [CLI, "init", "--untracked-standard", "--keep-own-hooks", "--yes"], { cwd: base, encoding: "utf8", env: { ...process.env, HOME: base, FACTORY_SKIP_ORCA: "1" } });
   assert.notEqual(r.status, 0); assert.match(r.stdout + r.stderr, /--keep-own-hooks/);

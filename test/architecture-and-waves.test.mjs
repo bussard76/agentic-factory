@@ -1,6 +1,7 @@
 // The architecture mode as a human's choice, the gate's shell form, and closing finished wave terminals.
 import "./support/safe-env.mjs";
 import { bind } from "./support/bind.mjs";
+import { tempDir } from "./support/cleanup.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -13,7 +14,7 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
 const CLI = path.join(ROOT, "bin/agentic-factory.mjs");
 
 function initProject(mode) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-arch-"));
+  const dir = tempDir("af-arch-");
   const home = path.join(dir, "home"), project = path.join(dir, "p");
   fs.mkdirSync(home); fs.mkdirSync(project);
   const env = { ...process.env, HOME: home, FACTORY_SKIP_ORCA: "1", GIT_CONFIG_GLOBAL: path.join(home, ".gitconfig") };
@@ -82,7 +83,7 @@ test("a release is one runnable command, and a tester's gate runs through bash",
 });
 
 test("gate explains the shell form when it cannot start a command", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-gate-"));
+  const dir = tempDir("af-gate-");
   for (const f of ["gate.mjs", "lib.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
   fs.writeFileSync(path.join(dir, "factory.config.json"), JSON.stringify({ project: { name: "p" }, agents: {}, commands: {}, capacity: { gate: {} }, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local" }] } }));
   const r = spawnSync("node", [path.join(dir, "gate.mjs"), "/no/such/program"], { encoding: "utf8", env: { ...process.env, HOME: dir } });
@@ -91,7 +92,7 @@ test("gate explains the shell form when it cannot start a command", () => {
 });
 
 test("cleanup closes this project's finished wave terminals, keeps a running one, the newest, and every other project's", () => {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-waves-")));
+  const dir = fs.realpathSync(tempDir("af-waves-"));
   const ctl = path.join(dir, "ctl"), project = path.join(dir, "p");
   fs.mkdirSync(ctl); fs.mkdirSync(project);
   for (const f of ["cleanup.mjs", "cli.mjs", "lib.mjs", "journal.mjs", "names.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
@@ -144,7 +145,7 @@ else console.log(JSON.stringify({ ok: true, result: {} }));`);
 });
 
 test("start.mjs passes creation flags only for a new worktree, and specs name the Controller directory", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-start-"));
+  const dir = tempDir("af-start-");
   const ctl = path.join(dir, "ctl");
   fs.mkdirSync(ctl);
   for (const f of ["start.mjs", "cli.mjs", "lib.mjs", "journal.mjs", "names.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
@@ -177,7 +178,7 @@ console.log(JSON.stringify({ ok: true, result: a[1] === "worker-start" ? { dispa
 });
 
 test("start.mjs pins a Pi worker of a role in agents.piRoleModels, and only that one", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-pimodel-"));
+  const dir = tempDir("af-pimodel-");
   const ctl = path.join(dir, "ctl");
   fs.mkdirSync(ctl);
   for (const f of ["start.mjs", "cli.mjs", "lib.mjs", "journal.mjs", "names.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
@@ -205,7 +206,7 @@ console.log(JSON.stringify({ ok: true, result: a[1] === "worker-start" ? { dispa
 });
 
 test("a wave without a review fails before the long gates run", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-precheck-"));
+  const dir = tempDir("af-precheck-");
   const git = (cwd, ...a) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...a], { cwd, encoding: "utf8" });
   const origin = path.join(dir, "o.git"), wt = path.join(dir, "coordinator-integration");
   git(dir, "init", "-q", "--bare", origin);

@@ -1,5 +1,6 @@
 // scripts/skills-check.mjs against a fake upstream on disk: it reports, applies only on request, and never executes upstream content.
 import "./support/safe-env.mjs";
+import { tempDir } from "./support/cleanup.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -13,7 +14,7 @@ const git = (cwd, ...a) => execFileSync("git", ["-c", "user.name=t", "-c", "user
 const write = (file, text) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
 
 function setup() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-skills-"));
+  const dir = tempDir("af-skills-");
   const up = path.join(dir, "up"), repo = path.join(dir, "repo");
   fs.mkdirSync(up); fs.mkdirSync(repo);
   git(up, "init", "-q", "-b", "main");

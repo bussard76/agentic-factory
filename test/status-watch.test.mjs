@@ -1,5 +1,6 @@
 // The status watch runs on a schedule, outside any session, so it works with whichever agent is in front. Fake Orca, real files.
 import "./support/safe-env.mjs";
+import { tempDir, expectBackground, stopBackground } from "./support/cleanup.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -12,7 +13,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = path.join(ROOT, "bin/agentic-factory.mjs");
 
 function setup({ terminals, idle = true, recordedHandle = null }) {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-watch-")));
+  const dir = fs.realpathSync(tempDir("af-watch-"));
   const watch = path.join(dir, "front"), ctl = path.join(dir, "controller"), project = path.join(dir, "project");
   for (const d of [watch, ctl, project]) fs.mkdirSync(d);
   for (const f of ["statuswatch.mjs", "hosts.mjs", "cli.mjs"]) fs.copyFileSync(path.join(ROOT, "front-agent", f), path.join(watch, f));
@@ -158,7 +159,7 @@ test("a lasting problem is announced once, and again after it went away", () => 
 
 test("the schedule keeps the rest of the crontab and can be repeated", async () => {
   const { statusWatchCronScript } = await import(path.join(ROOT, "bin/heartbeat-cron.mjs"));
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-sched-"));
+  const dir = tempDir("af-sched-");
   const tab = path.join(dir, "tab");
   fs.writeFileSync(tab, "0 1 * * * something-else\n");
   fs.writeFileSync(path.join(dir, "crontab"), `#!/bin/sh\nif [ "$1" = "-l" ]; then cat ${tab}; else cat > ${tab}.new && mv ${tab}.new ${tab}; fi\n`, { mode: 0o755 });
@@ -182,7 +183,7 @@ test("the schedule keeps the rest of the crontab and can be repeated", async () 
 });
 
 test("start schedules the watch and runs it once; status shows whether it runs, and a project that opted out is left alone", async () => {
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-sw-")));
+  const base = fs.realpathSync(tempDir("af-sw-")); expectBackground(base);   // start launches a detached load logger from here
   const home = path.join(base, "home"), project = path.join(base, "project"), bin = path.join(base, "bin"), tab = path.join(base, "tab");
   for (const d of [home, project, bin]) fs.mkdirSync(d);
   fs.writeFileSync(tab, "");
@@ -207,7 +208,7 @@ test("start schedules the watch and runs it once; status shows whether it runs, 
   assert.equal(before.setup.statusWatch, false);
   assert.equal(before.setup.statusWatch, false);
   const r = cli("start");
-  spawnSync("pkill", ["-f", path.join(home, "controller", "loadlog.sh")]);
+  stopBackground(path.join(home, "controller"));
   assert.match(r.stdout, /Status watch: scheduled/, r.stdout + r.stderr);
   assert.match(fs.readFileSync(tab, "utf8"), /statuswatch\.mjs/);
   const dir = path.join(home, "front-agent/demo");
@@ -224,13 +225,13 @@ test("start schedules the watch and runs it once; status shows whether it runs, 
   // A machine without a working cron still works, is told, and is not held in a phase.
   fs.writeFileSync(tab, ""); fs.writeFileSync(path.join(bin, "crontab"), `#!/bin/sh\nif [ "$1" = "-l" ]; then exit 0; fi\nexit 1\n`, { mode: 0o755 });
   const failed = cli("start");
-  spawnSync("pkill", ["-f", path.join(home, "controller", "loadlog.sh")]);
+  stopBackground(path.join(home, "controller"));
   assert.match(failed.stdout, /Status watch: could not schedule.*statusWatch/);
   assert.equal(JSON.parse(cli("status", "--json").stdout).phase, before.phase, "the watch never decides the phase");
   // macOS: launchd, replaced each time, with the running node.
   fs.rmSync(path.join(dir, "statuswatch.alive"), { force: true });
   const launchd = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SCHEDULER: "launchd" } });
-  spawnSync("pkill", ["-f", path.join(home, "controller", "loadlog.sh")]);
+  stopBackground(path.join(home, "controller"));
   assert.match(launchd.stdout, /Status watch: scheduled/);
   const calls = fs.readFileSync(launchLog, "utf8").trim().split("\n");
   assert.match(calls[0], /^bootout gui\/\d+\/de\.agentic-factory\.statuswatch\.demo\.[0-9a-f]{6}$/);
@@ -244,12 +245,12 @@ test("start schedules the watch and runs it once; status shows whether it runs, 
   assert.ok(plist.includes(`<string>${dir}</string>`));
   fs.writeFileSync(path.join(bin, "launchctl"), `#!/bin/sh\necho refused >&2\nexit 1\n`, { mode: 0o755 });
   const refused = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SCHEDULER: "launchd" } });
-  spawnSync("pkill", ["-f", path.join(home, "controller", "loadlog.sh")]);
+  stopBackground(path.join(home, "controller"));
   assert.match(refused.stdout, /could not schedule it \(refused\)/);
   // A folder that cannot be written is reported the same way, and opting out removes the job.
   fs.rmSync(plistFile); fs.chmodSync(agents, 0o555);
   const unwritable = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SCHEDULER: "launchd" } });
-  spawnSync("pkill", ["-f", path.join(home, "controller", "loadlog.sh")]);
+  stopBackground(path.join(home, "controller"));
   fs.chmodSync(agents, 0o755);
   assert.match(unwritable.stdout, /could not schedule it \(.*EACCES/); assert.doesNotMatch(unwritable.stderr, /\n\s+at /);
   const { statusWatchLabel } = await import(path.join(ROOT, "bin/heartbeat-cron.mjs"));
@@ -258,7 +259,7 @@ test("start schedules the watch and runs it once; status shows whether it runs, 
   fs.writeFileSync(plistFile, plist);
   const optedOut = JSON.parse(fs.readFileSync(configFile, "utf8")); optedOut.hosts.frontAgent.statusWatch = false; fs.writeFileSync(configFile, JSON.stringify(optedOut, null, 2));
   cli("update"); const off = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SCHEDULER: "launchd" } });
-  spawnSync("pkill", ["-f", path.join(home, "controller", "loadlog.sh")]);
+  stopBackground(path.join(home, "controller"));
   assert.equal(fs.existsSync(plistFile), false, off.stdout);
   config.hosts.frontAgent.statusWatch = false; fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
   assert.doesNotMatch(JSON.parse(cli("status", "--json").stdout).next, /status watch/);

@@ -16,10 +16,9 @@
 // (steering/issues.mjs claim) and the live text.
 import "./cli.mjs";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { BRANCH_PREFIX, MAIN, PROJECT_DIR, file, journal } from "./lib.mjs";
+import { BRANCH_PREFIX, MAIN, PROJECT_DIR, file, journal, scratchDir } from "./lib.mjs";
 
 const args = process.argv.slice(2);
 const refAt = args.indexOf("--ref");
@@ -42,7 +41,7 @@ const installed = common && path.join(common, "factory/hooks/factory-guardrails.
 let check = installed && fs.existsSync(installed) ? installed : "";
 if (!check) {
   const fromMain = git("show", `origin/${MAIN}:tools/factory-guardrails.mjs`);
-  if (fromMain.status === 0) { check = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "docs-only-")), "factory-guardrails.mjs"); fs.writeFileSync(check, fromMain.stdout); }
+  if (fromMain.status === 0) { check = path.join(scratchDir("docs-only-"), "factory-guardrails.mjs"); fs.writeFileSync(check, fromMain.stdout); }
 }
 if (!check) stop(4, `no docs-only check on origin/${MAIN} (tools/factory-guardrails.mjs) or in this clone's standard: review as usual.`);
 // The ticket's own process files count only for the branch the Controller's flow made for this ticket; the check itself
@@ -65,7 +64,7 @@ if (cfg.steering?.mode === "github-issues") {
   if (issue) {
     const body = spawnSync("gh", ["issue", "view", issue, "--json", "body", "--jq", ".body"], { cwd: PROJECT_DIR, encoding: "utf8" });
     if (body.status === 0) {
-      const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "docs-only-")), "issue.txt");
+      const file = path.join(scratchDir("docs-only-"), "issue.txt");
       fs.writeFileSync(file, body.stdout);
       ticketArgs.push("--issue", issue, "--ticket-text", file);
     }
