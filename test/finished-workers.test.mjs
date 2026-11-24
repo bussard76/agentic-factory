@@ -300,7 +300,7 @@ test("heartbeat: a finished worker is not active, wakes the Controller once when
     terminals: [{ handle: "term_c", title: "p · Controller" }, { handle: "term_a", title: "A · Worker Developer" }],
   });
   // Every run is the full check at a tenth minute.
-  const env = { ...h.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=data:text/javascript,Date.prototype.getMinutes=()=>0`.trim() };
+  const env = { ...h.env, FACTORY_MINUTE: "0" };
   const beat = () => { const r = spawnSync("node", [path.join(h.ctl, "heartbeat.mjs")], { cwd: h.ctl, encoding: "utf8", env }); assert.equal(r.status, 0, r.stderr); return r.stdout; };
   const notice = () => fs.readFileSync(path.join(h.ctl, "heartbeat.notice"), "utf8");
   assert.match(beat(), /baseline/);

@@ -8,6 +8,9 @@ import path from "node:path";
 import { tempDir } from "./cleanup.mjs";
 
 for (const k of Object.keys(process.env)) if (k.startsWith("ORCA_")) delete process.env[k];
+// The heartbeat runs its full check (ready tickets, running workers) at each tenth minute of the wall clock. A test must not depend on
+// the minute it happens to run in: every heartbeat a test starts sees minute 5 (no full check) unless the test sets FACTORY_MINUTE=0.
+process.env.FACTORY_MINUTE = "5";
 if (!process.env.AF_TEST_SAFE_BIN) {
   const dir = tempDir("af-no-orca-");
   for (const name of ["orca", "orca-ide"]) fs.writeFileSync(path.join(dir, name), `#!/bin/sh\necho '{"ok":false,"error":{"code":"no_orca_in_tests"}}'\nexit 1\n`, { mode: 0o755 });

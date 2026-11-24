@@ -406,8 +406,8 @@ test("restart.mjs keeps the last ten copies of the state only", () => {
 
 test("every key this PR adds is in factory.config.example.json with its default, and the defaults are the ones the code uses", async () => {
   const example = JSON.parse(fs.readFileSync(path.join(ROOT, "factory.config.example.json"), "utf8")).hosts.controller;
-  assert.deepEqual({ wake: { idleMinutes: example.wake.idleMinutes, busyPointerMinutes: example.wake.busyPointerMinutes, dialogHoldMinutes: example.wake.dialogHoldMinutes }, hung: example.hung, restart: example.restart },
-    { wake: { idleMinutes: 30, busyPointerMinutes: 2, dialogHoldMinutes: 15 }, hung: { minutes: 25, restartAfterMinutes: 15, restart: false, patterns: [], patternMinutes: 10, resetAfterDays: 7 }, restart: { minGapMinutes: 30, contextGapMinutes: 120, afterGateMinutes: 15, contextPercent: 50 } });
+  assert.deepEqual({ wake: { idleMinutes: example.wake.idleMinutes, busyPointerMinutes: example.wake.busyPointerMinutes, dialogHoldMinutes: example.wake.dialogHoldMinutes, repeatMinutes: example.wake.repeatMinutes, quietSeconds: example.wake.quietSeconds }, hung: example.hung, restart: example.restart },
+    { wake: { idleMinutes: 30, busyPointerMinutes: 2, dialogHoldMinutes: 15, repeatMinutes: 10, quietSeconds: 20 }, hung: { minutes: 25, restartAfterMinutes: 15, restart: false, patterns: [], patternMinutes: 10, resetAfterDays: 7 }, restart: { minGapMinutes: 30, contextGapMinutes: 120, afterGateMinutes: 15, contextPercent: 50 } });
   assert.ok(Array.isArray(example.wake.dialogPatterns) && example.wake.dialogPatterns.length > 0);
   // The same defaults in the code, with no key set.
   const h = setup();
@@ -415,6 +415,7 @@ test("every key this PR adds is in factory.config.example.json with its default,
   fs.writeFileSync(probe, `import { WAKE, HUNG, RESTART } from "./lib.mjs"; console.log(JSON.stringify({ WAKE, HUNG, RESTART }));`);
   const got = JSON.parse(h.run("probe.mjs").stdout);
   assert.deepEqual([got.WAKE.idleMinutes, got.WAKE.busyPointerMinutes, got.WAKE.dialogHoldMinutes, got.HUNG.minutes, got.HUNG.restartAfterMinutes, got.HUNG.restart, got.HUNG.patternMinutes, got.HUNG.resetAfterDays, got.RESTART.minGapMinutes, got.RESTART.contextGapMinutes, got.RESTART.afterGateMinutes, got.RESTART.contextPercent], [30, 2, 15, 25, 15, false, 10, 7, 30, 120, 15, 50]);
+  assert.deepEqual([got.WAKE.repeatMinutes, got.WAKE.quietSeconds], [example.wake.repeatMinutes, example.wake.quietSeconds]);
   assert.deepEqual(got.WAKE.dialogPatterns, example.wake.dialogPatterns);
   h.done();
 });
