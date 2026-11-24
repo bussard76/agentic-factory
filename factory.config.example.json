@@ -179,7 +179,7 @@
   },
   "docsOnly": {
     "enabled": false,
-    "$enabled": "true: a change that touches documentation only (tools/factory-guardrails.mjs docs-only, fail closed) gets no Tester and no full gate; its wave runs commands.formatCheck and commands.markdownCheck (with neither configured, the full gates). Read from the main branch's factory.config.json. false: every change takes the full path.",
+    "$enabled": "true: a change that touches documentation only (tools/factory-guardrails.mjs docs-only, fail closed) gets no Tester (the ticket's own spec review and report, new files, do not count against it); a wave with nothing but documentation runs commands.formatCheck and commands.markdownCheck instead of the full gates (with neither configured, or with the task's process files or a status branch in the wave, the full gates). Read from the main branch's factory.config.json, so it takes a reviewed change to get it there (agentic-factory init asks once; later it is a ticket: docs/testing.md). false: every change takes the full path.",
     "paths": [
       "docs/**",
       "*.md"
