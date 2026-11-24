@@ -92,10 +92,10 @@ test("the callers use the project's own gate by an absolute path from its own co
   for (const f of ["controller/wave.mjs", "controller/integ-wave.sh", "controller/templates/mkspec.mjs", "controller/CONTROLLER.md", "controller/runscript.mjs"]) assert.doesNotMatch(src(f), /\.local\/bin\/gate/, `${f} does not name the shared gate`);
   assert.match(src("controller/wave.mjs"), /GATE: `\$\{CONTROLLER_HOME\.replace/);
   assert.match(src("controller/templates/mkspec.mjs"), /\{\{CONTROLLER_DIR\}\}\/gate bash -c/);
-  // the wave script never guesses a gate on the PATH or in ~/.local/bin: without GATE it uses the gate next to it, or stops
+  // the wave script never guesses a gate on the PATH or in ~/.local/bin: without GATE it stops
   const dir = tmp("wave-gate"); fs.copyFileSync(path.join(ROOT, "controller/integ-wave.sh"), path.join(dir, "integ-wave.sh"));
   const r = spawnSync("bash", [path.join(dir, "integ-wave.sh"), "t", "s", "origin/x"], { encoding: "utf8", env: { PATH: process.env.PATH, HOME: dir } });
-  assert.notEqual(r.status, 0); assert.match(r.stderr, /is not a command on this host/);
+  assert.notEqual(r.status, 0); assert.match(r.stderr, /is refused: not an absolute path/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

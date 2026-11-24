@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { fakeController } from "./fake-controller.mjs";
 import { createHash } from "node:crypto";
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const createHashHex = (s) => createHash("sha256").update(s).digest("hex").slice(0, 6);   // mirrors the CLI's bare-remote key
@@ -274,7 +275,7 @@ test("a wave of two reviewed tasks is accepted, one without its review branch is
 // The wave environment exactly as controller/wave.mjs builds it from the generated config.
 function waveEnv() {
   const cfg = JSON.parse(fs.readFileSync(path.join(tmp, "factory.config.json"), "utf8"));
-  return { ...process.env, MAIN: cfg.project.mainBranch, INSTALL_CMD: cfg.commands.install ?? "", VERIFY_CMD: cfg.commands.verify ?? "", E2E_CMD: cfg.commands.e2e ?? "", GATE: path.join(ROOT, "controller/gate"), TRAILER: "", HOME: home, FACTORY_PROJECT: "smoke", WAVE_WORKTREE_OK: "1" };
+  return { ...process.env, MAIN: cfg.project.mainBranch, INSTALL_CMD: cfg.commands.install ?? "", VERIFY_CMD: cfg.commands.verify ?? "", E2E_CMD: cfg.commands.e2e ?? "", ...fakeController(tmp + "-ctl", { project: "smoke" }).env, TRAILER: "", HOME: home, FACTORY_PROJECT: "smoke", WAVE_WORKTREE_OK: "1" };
 }
 function runWave(title, branches) {
   const integ = path.join(tmp, "..", path.basename(tmp) + "-integration");
