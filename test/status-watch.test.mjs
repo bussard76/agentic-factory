@@ -11,8 +11,6 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = path.join(ROOT, "bin/agentic-factory.mjs");
 
-// No ORCA_* variable of the machine running the tests reaches a script under test (only what a test sets itself does).
-const cleanEnv = (extra = {}) => { const env = { ...process.env, ...extra }; for (const k of Object.keys(env)) if (/^ORCA_/.test(k) && !(k in extra)) delete env[k]; return env; };
 function setup({ terminals, idle = true, recordedHandle = null }) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "af-watch-")));
   const watch = path.join(dir, "front"), ctl = path.join(dir, "controller"), project = path.join(dir, "project");
@@ -32,7 +30,7 @@ if (s.broken) { console.error("orca: not available"); process.exit(1); }
 if (a[1] === "wait" && !s.idle) process.exit(1);
 console.log(JSON.stringify({ ok: true, result: { terminals: s.terminals, wait: { satisfied: s.idle } } }));`, { mode: 0o755 });
   const status = (needs, age = 0) => { const f = path.join(ctl, "status.md"); fs.writeFileSync(f, `## On main\nabc\n\n## Needs H\n${needs}\n\n## Problems\n`); const t = new Date(Date.now() - age * 60_000); fs.utimesSync(f, t, t); };
-  const run = () => { const r = spawnSync("node", [path.join(watch, "statuswatch.mjs")], { encoding: "utf8", env: cleanEnv({ ORCA_CLI_COMMAND: fake }) }); assert.equal(r.status, 0, r.stderr); };
+  const run = () => { const r = spawnSync("node", [path.join(watch, "statuswatch.mjs")], { encoding: "utf8", env: { ...process.env, ORCA_CLI_COMMAND: fake } }); assert.equal(r.status, 0, r.stderr); };
   const calls = (sub) => (fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((a) => a[1] === sub) : []);
   return { dir, watch, project, write, status, run, calls, terminals, done: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }

@@ -675,6 +675,7 @@ function warnCleanupTrap(where = ".factory/controller/CONTROLLER.md", text) {
   const f = ".factory/controller/CONTROLLER.md";
   const calls = cleanupCallsWithoutApply(text ?? (fs.existsSync(f) ? fs.readFileSync(f, "utf8") : ""));
   if (calls.length) say(`\nWARNING: ${where} calls cleanup without --apply (\`${calls[0]}\`): ${CLEANUP_TRAP}.`);
+  if (text === undefined && fs.existsSync(f)) { const missing = handbookMissing(fs.readFileSync(f, "utf8")); if (missing.length) say(`\nWARNING: ${where} does not mention ${missing.join(" and ")}: ${HANDBOOK_NOTE}.`); }
 }
 // --- update ----------------------------------------------------------------------------------------
 async function update() {
@@ -767,6 +768,7 @@ function doctor() {
     else if (!hb.installed) info("heartbeat not scheduled yet (the Controller is not started: run start)");
     else bad("heartbeat not scheduled: nothing wakes the Controller from outside, so finished workers wait for a person (run start; if that fails it says why)");
   }
+  { const hb = handbookStatus(c); if (hb.problem) bad(`handbook: ${hb.problem}`); else if (hb.handbookInstalled) ok("handbook: it knows inbox.mjs --done and restart.md"); }
   { const cl = cleanupStatus(c); if (cl.problem) bad(`cleanup: ${cl.problem}`); else if (cl.unknown) info("cleanup: the Controller's host did not answer, so it is not known whether the handbook calls cleanup with --apply"); else if (!cl.handbookInstalled) info("cleanup: not checked, no Controller handbook is installed yet (run start)"); else ok("cleanup: the handbook calls it with --apply and no removable work waits"); }
   if (!heartbeatOn(c) && c.hosts.controller.heartbeat === false) info("heartbeat off (hosts.controller.heartbeat is false): you wake the Controller yourself");
   if (!["terminal", "orca-bot"].includes(frontKind(c))) bad(`hosts.frontAgent.kind "${frontKind(c)}" (terminal or orca-bot)`);
@@ -1007,6 +1009,7 @@ function collectStatus() {
     controller: { host: ctl.host, statusAgeMin: ctl.ageMin, terminal: ctlTerminal, ...(terminalProblem ? { terminalProblem } : {}), running: ctlTerminal || (ctl.ageMin !== null && ctl.ageMin <= 25) },
     heartbeat: heartbeatStatus(c),
     cleanup: cleanupStatus(c),
+    handbook: handbookStatus(c),
   };
   // A bot Front agent: the bot and its watch automation instead of the terminal's status watch.
   if (frontKind(c) === "orca-bot") { s.setup.frontAgent = { kind: "orca-bot", ...botWatchStatus(c) }; s.setup.statusWatch = false; }   // a bot is woken by its automation (setup.frontAgent.watchAutomation), not by a status watch
@@ -1047,6 +1050,7 @@ function collectStatus() {
   const hb = s.setup.heartbeat;
   if (hb.enabled && !hb.unknown && s.phase !== "start" && (!hb.scheduled || hb.problem)) s.next = `${hb.scheduled ? `The heartbeat is scheduled but ${hb.problem}` : "The heartbeat is not scheduled"}, so nothing wakes the Controller when a worker finishes: run \`start\` (or set hosts.controller.heartbeat to false if you wake it yourself). Then: ${s.next}`;
   if (s.setup.cleanup.problem && s.phase !== "start") s.next = `Cleanup does not run: ${s.setup.cleanup.problem}. Then: ${s.next}`;
+  if (s.setup.handbook?.problem && s.phase !== "start") s.next = `The Controller's handbook is old: ${s.setup.handbook.problem}. Then: ${s.next}`;
   s.hints = [
     ...(s.setup.gate.sharedLeftover ? ["a shared gate is still in ~/.local/bin: this project does not use it (its gate is in its Controller directory); delete it once no older project on this host uses it"] : []),
     ...(!s.work.glossary ? ["the business terms are not written down yet (no GLOSSARY.md): capture them with domain-modeling while specifying"] : []),
@@ -1071,6 +1075,7 @@ function status() {
     if (st.frontAgent) say(`${st.frontAgent.botExists ? "OK     " : "MISSING"} Front agent bot ${st.frontAgent.bot ?? "(hosts.frontAgent.bot is empty)"}\n${st.frontAgent.watchAutomation ? "OK     " : "MISSING"} its watch automation`);
     if (st.heartbeat.enabled) say(st.heartbeat.unknown ? "info    heartbeat: the Controller's host did not answer" : st.heartbeat.scheduled ? `${st.heartbeat.problem ? "MISSING" : "OK     "} heartbeat (${st.heartbeat.scheduled})${st.heartbeat.problem ? `: ${st.heartbeat.problem}` : st.heartbeat.lastOkAt ? `, ran fine at ${st.heartbeat.lastOkAt}` : ""}` : st.heartbeat.installed ? "MISSING heartbeat (run start)" : "info    heartbeat not scheduled yet (run start)");
     if (st.cleanup?.problem) say(`MISSING cleanup: ${st.cleanup.problem}`);
+    if (st.handbook?.problem) say(`MISSING handbook: ${st.handbook.problem}`);
     say(`${st.controller.running ? "OK     " : "MISSING"} Controller on ${st.controller.host}${st.controller.statusAgeMin !== null ? ` (status.md ${st.controller.statusAgeMin} min old)` : ""}${st.controller.terminalProblem ? `: ${st.controller.terminalProblem}` : ""}`);
     const w = s.work;
     say(`\nDesigned features: ${w.designedFeatures.length ? w.designedFeatures.join(", ") : "none"}`);
@@ -1154,6 +1159,22 @@ function heartbeatStatus(c) {
 // --dry; the old handbook's `[--dry]` is an optional flag of a call that is meant to clean up).
 const cleanupCallsWithoutApply = (text) => [...String(text).matchAll(/node cleanup\.mjs[^`\n]*/g)].map((m) => m[0].trim()).filter((s) => !/--apply\b|--help\b|(?<!\[)--dry\b/.test(s));
 const CLEANUP_TRAP = "cleanup deletes only with --apply, so this handbook cleans up nothing (every cycle exits with code 3). A CONTROLLER.md you edited stays on update and its new version lies in .factory/new/.factory/controller/CONTROLLER.md: merge it, or add --apply to the call, then run start";
+// The handbook of an installation that kept an edited CONTROLLER.md (the new one lies in .factory/new/) may predate the heartbeat's
+// inbox and restart scripts: a Controller that does not know `inbox.mjs --done` leaves every inbox line waking it, and one that does
+// not know restart.md would not read what a restart left for it.
+const HANDBOOK_NEW = [["inbox\\.mjs --done", "reading the inbox with `node inbox.mjs` and `--done`"], ["restart\\.md", "`restart.md` after a restart"]];
+const handbookMissing = (text) => HANDBOOK_NEW.filter(([re]) => !new RegExp(re).test(text)).map(([, what]) => what);
+const HANDBOOK_NOTE = "an older CONTROLLER.md you edited stays on update and its new version lies in .factory/new/.factory/controller/CONTROLLER.md: merge it, then run start. Until then every non-empty inbox keeps waking the Controller, and a Controller restarted by the heartbeat or by itself would not know what restart.md is";
+function handbookStatus(c) {
+  const ctl = controllerHost(c) ?? { kind: "local", name: "local" };
+  const dir = heartbeatDir(c).replace(/^~(?=\/|$)/, "$HOME");
+  const out = onController(ctl, `f="${dir}/CONTROLLER.md"; if [ -f "$f" ]; then echo present; grep -c 'inbox\\.mjs --done' "$f"; grep -c 'restart\\.md' "$f"; else echo absent; fi`);
+  if (out.status !== 0 && !out.stdout) return { unknown: true };
+  const [state, inbox, restart] = String(out.stdout).trim().split("\n");
+  if (state !== "present") return { handbookInstalled: false, missing: [], problem: null };
+  const missing = [Number(inbox) ? null : HANDBOOK_NEW[0][1], Number(restart) ? null : HANDBOOK_NEW[1][1]].filter(Boolean);
+  return { handbookInstalled: true, missing, problem: missing.length ? `the Controller's CONTROLLER.md does not mention ${missing.join(" and ")}: ${HANDBOOK_NOTE}` : null };
+}
 function cleanupStatus(c) {
   const ctl = controllerHost(c) ?? { kind: "local", name: "local" };
   const dir = heartbeatDir(c).replace(/^~(?=\/|$)/, "$HOME");

@@ -15,8 +15,6 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = path.join(ROOT, "bin/agentic-factory.mjs");
 const tmp = (prefix) => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 
-// No ORCA_* variable of the machine running the tests reaches a script under test (only what a test sets itself does).
-const cleanEnv = (extra = {}) => { const env = { ...process.env, ...extra }; for (const k of Object.keys(env)) if (/^ORCA_/.test(k) && !(k in extra)) delete env[k]; return env; };
 // --- the precheck ---------------------------------------------------------------------------------------
 function watchSetup() {
   const dir = tmp("af-botwatch-");
@@ -39,7 +37,7 @@ function watchSetup() {
     fs.writeFileSync(p.status, `# Status\n## Running\n| a |\n## Needs Hu\n${needs}\n${front ? `## Needs front agent\n${front}\n` : ""}## Problems\n${problems}\n## Next\n- more\n`);
     const t = new Date(Date.now() - age * 60_000); fs.utimesSync(p.status, t, t);
   };
-  const run = () => spawnSync("node", [path.join(watch, "botwatch.mjs")], { encoding: "utf8", env: { ...cleanEnv(), PATH: `${bin}${path.delimiter}${process.env.PATH}` } });
+  const run = () => spawnSync("node", [path.join(watch, "botwatch.mjs")], { encoding: "utf8", env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` } });
   const wake = () => fs.readFileSync(path.join(watch, "wake.md"), "utf8");
   return { dir, watch, alpha, beta, write, run, wake, down: (on) => (on ? fs.writeFileSync(down, "") : fs.rmSync(down, { force: true })), done: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
@@ -341,6 +339,28 @@ test("status and doctor report a handbook that calls cleanup without --apply, an
   assert.match(p.cli("doctor").stdout, /MISSING cleanup: removable work has waited/);
   fs.rmSync(path.join(ctl, "cleanup-pending.json"));
   assert.equal(cleanup().problem, null);
+  m.done();
+});
+
+test("status, doctor, update and start say when the kept handbook does not know inbox.mjs --done or restart.md", () => {
+  const m = machine();
+  const p = m.project("theta", {});
+  const ctl = path.join(m.home, "controller-theta");
+  fs.mkdirSync(ctl, { recursive: true });
+  const handbook = () => JSON.parse(p.cli("status", "--json").stdout).setup.handbook;
+  assert.equal(handbook().problem, null, "nothing installed, nothing to report");
+  fs.writeFileSync(path.join(ctl, "CONTROLLER.md"), "| `node cleanup.mjs --all --apply` | every cycle |\nRead `inbox.md` and move processed lines.\n");
+  assert.match(handbook().problem, /does not mention reading the inbox with `node inbox\.mjs` and `--done` and `restart\.md` after a restart.*\.factory\/new\/.*run start|does not mention .*inbox\.mjs.*restart\.md.*merge it, then run start/s);
+  assert.match(p.cli("doctor").stdout, /MISSING handbook: the Controller's CONTROLLER\.md does not mention/);
+  // The current one knows both.
+  fs.copyFileSync(path.join(p.dir, ".factory/controller/CONTROLLER.md"), path.join(ctl, "CONTROLLER.md"));
+  assert.deepEqual(handbook().missing, []);
+  assert.match(p.cli("doctor").stdout, /OK      handbook: it knows inbox\.mjs --done and restart\.md/);
+  // update and start warn about a locally kept older copy.
+  const kept = path.join(p.dir, ".factory/controller/CONTROLLER.md");
+  fs.writeFileSync(kept, fs.readFileSync(kept, "utf8").replace(/inbox\.mjs --done/g, "inbox.mjs").replace(/restart\.md/g, "restart notes"));
+  const u = p.cli("update");
+  assert.match(u.stdout, /WARNING: \.factory\/controller\/CONTROLLER\.md does not mention .*inbox\.mjs.*restart\.md.*\.factory\/new\//s);
   m.done();
 });
 

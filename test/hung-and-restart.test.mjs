@@ -1,6 +1,7 @@
 // A Controller that hangs: when the heartbeat calls it hung, who is told, when it is restarted (once), and what a restart does and
 // does not touch; and restart.mjs, which the Controller runs itself to start fresh. Fakes only: the fake Orca keeps its terminals in a
 // file, HOME is a throwaway directory, and no ORCA_* variable reaches a child process.
+import "./support/safe-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -8,8 +9,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-// No ORCA_* variable of the machine running the tests reaches a script under test (only what a test sets itself does).
-const cleanEnv = (extra = {}) => { const env = { ...process.env, ...extra }; for (const k of Object.keys(env)) if (/^ORCA_/.test(k) && !(k in extra)) delete env[k]; return env; };
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const FILES = ["heartbeat.mjs", "cli.mjs", "controller-terminal.mjs", "front-notice.mjs", "inbox.mjs", "restart.mjs", "lib.mjs", "steering/tasks.mjs"];
@@ -45,7 +44,7 @@ else if (a[0] === "terminal" && a[1] === "close") { if (s.closeFails) { console.
 else if (a[0] === "terminal" && a[1] === "send") { if (s.answerBySending) { const t = new Date(); fs.utimesSync(s.answerBySending, t, t); } out({}); }
 else if (a[0] === "orchestration" && a[1] === "inbox") out({ messages: s.messages });
 else out({});`, { mode: 0o755 });
-  const env = cleanEnv({ ORCA_CLI_COMMAND: fake, HOME: home, FACTORY_RESTART_LOCK_WAIT_MS: "300" });
+  const env = { ...process.env, ORCA_CLI_COMMAND: fake, HOME: home, FACTORY_RESTART_LOCK_WAIT_MS: "300" };
   const patch = (p) => fs.writeFileSync(state, JSON.stringify({ ...JSON.parse(fs.readFileSync(state, "utf8")), ...p }));
   const read = (name) => { try { return fs.readFileSync(path.join(ctl, name), "utf8"); } catch { return null; } };
   const write = (name, text) => fs.writeFileSync(path.join(ctl, name), text);

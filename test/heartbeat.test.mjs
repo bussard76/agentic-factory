@@ -9,8 +9,6 @@ import path from "node:path";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 
-// No ORCA_* variable of the machine running the tests reaches a script under test (only what a test sets itself does).
-const cleanEnv = (extra = {}) => { const env = { ...process.env, ...extra }; for (const k of Object.keys(env)) if (/^ORCA_/.test(k) && !(k in extra)) delete env[k]; return env; };
 function setup({ state = {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-heartbeat-"));
   const ctl = path.join(dir, "ctl"), project = path.join(dir, "p");
@@ -37,7 +35,7 @@ else if (a[0] === "orchestration" && a[1] === "inbox") out({ messages: s.message
 else out({});`);
   fs.chmodSync(fake, 0o755);
   const beat = () => {
-    const r = spawnSync("node", [path.join(ctl, "heartbeat.mjs")], { encoding: "utf8", env: cleanEnv({ ORCA_CLI_COMMAND: fake, FACTORY_CONFIG: path.join(ctl, "factory.config.json") }) });
+    const r = spawnSync("node", [path.join(ctl, "heartbeat.mjs")], { encoding: "utf8", env: { ...process.env, ORCA_CLI_COMMAND: fake, FACTORY_CONFIG: path.join(ctl, "factory.config.json") } });
     assert.equal(r.status, 0, r.stderr);
     return r.stdout;
   };
@@ -183,7 +181,7 @@ test("hosts.controller.wake.busyPointerMinutes sets how long a busy Controller i
 test("inbox.mjs --done moves exactly what was printed; a line that arrives meanwhile stays and wakes the Controller, identical text included", () => {
   const h = setup();
   h.beat();
-  const inbox = (args = []) => spawnSync("node", [path.join(h.ctl, "inbox.mjs"), ...args], { encoding: "utf8", env: cleanEnv({ FACTORY_CONFIG: path.join(h.ctl, "factory.config.json") }) });
+  const inbox = (args = []) => spawnSync("node", [path.join(h.ctl, "inbox.mjs"), ...args], { encoding: "utf8", env: { ...process.env, FACTORY_CONFIG: path.join(h.ctl, "factory.config.json") } });
   const text = () => fs.readFileSync(path.join(h.ctl, "inbox.md"), "utf8");
   h.write("inbox.md", "yes\n");
   assert.match(h.beat(), /woke term_c \(inbox\)/, "no record: every line is new, as before");
@@ -211,7 +209,7 @@ test("inbox.mjs --done moves exactly what was printed; a line that arrives meanw
 test("inbox.mjs: a half-written last line is neither printed nor moved, and a file that was edited under it is left alone; a stale or foreign record counts as all new", () => {
   const h = setup();
   h.beat();
-  const inbox = (args = []) => spawnSync("node", [path.join(h.ctl, "inbox.mjs"), ...args], { encoding: "utf8", env: cleanEnv({ FACTORY_CONFIG: path.join(h.ctl, "factory.config.json") }) });
+  const inbox = (args = []) => spawnSync("node", [path.join(h.ctl, "inbox.mjs"), ...args], { encoding: "utf8", env: { ...process.env, FACTORY_CONFIG: path.join(h.ctl, "factory.config.json") } });
   h.write("inbox.md", "one\ntw");
   assert.equal(inbox().stdout, "one\n");
   assert.equal(inbox(["--done"]).status, 0);
