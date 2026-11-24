@@ -537,6 +537,7 @@ test("format-staged honours a paths filter and leaves a merge commit alone", () 
 
 test("docsonly.mjs uses main's setting and check, journals only a docs-only verdict, and stops on a failed fetch (findings 13, 14)", () => {
   const r = repo();
+  onMain(r, { "docs/tasks/T1-x.md": TICKET, "docs/tasks/T2-y.md": TICKET });
   branch(r, "agents/t1", () => r.write("docs/guide.md", "v2\n")); r.git("push", "-q", "origin", "agents/t1");
   branch(r, "agents/t2", () => r.write("src/app.js", "export const a = 7;\n")); r.git("push", "-q", "origin", "agents/t2");
   const ctl = path.join(r.base, "controller"); fs.mkdirSync(ctl);
@@ -585,10 +586,12 @@ test("configured paths are normalised before they feed the never-docs set or the
   }
 });
 
-// --- the ticket's own process files: the docs-only path in the Controller's real flow (acceptance run 2, N1) ------------
+// --- the ticket's own process files: the docs-only path in the Controller's real flow ----------------------------
 // Every task branch of the flow carries its architecture spec review (merged in from the Architect's branch) and its report.
 // They count only for the ticket the Controller names, only as new files and never as findings. Everything else under the
-// review, report and ticket directories keeps a branch off the docs-only path (the first review of #52, findings 1 and 2).
+// review, report and ticket directories keeps a branch off the docs-only path (a forged findings file or a ticket changing its
+// status would reach main with no reader). And the path needs the ticket's own word: it applies only to a ticket that declares itself.
+const TICKET = "Status: ready\nLevel: 1\nDocumentation only: yes\n";   // a declared documentation ticket, as it is on main
 const SPEC_TEXT = "# T03 architecture spec\nVerdict: pass\nSpec: docs/tasks/T03-document-api.md 0123456789abcdef0123456789abcdef01234567\nLevel: 1\n";
 const onMain = (r, files) => {
   for (const [p, v] of Object.entries(files)) r.write(p, v);
@@ -597,7 +600,7 @@ const onMain = (r, files) => {
 // A project with three tickets (T03, its look-alike T030, T04) on main and docsOnly on.
 function ticketRepo(cfg = {}) {
   const r = repo({ docsOnly: { enabled: true }, ...cfg });
-  onMain(r, { "docs/tasks/T03-document-api.md": "Status: ready\n", "docs/tasks/T030-other.md": "Status: ready\n", "docs/tasks/T04-other.md": "Status: ready\n" });
+  onMain(r, { "docs/tasks/T03-document-api.md": TICKET, "docs/tasks/T030-other.md": TICKET, "docs/tasks/T04-other.md": TICKET });
   return r;
 }
 // The Controller's own checkout and scripts around that project; run() is `node docsonly.mjs …`.
@@ -605,7 +608,7 @@ function docsController(r) {
   const ctl = fs.mkdtempSync(path.join(r.base, "ctl-docsonly-"));
   for (const f of ["lib.mjs", "cli.mjs", "docsonly.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
   fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "demo", mainBranch: "main" }, hosts: { controller: { host: "local", controllerDir: ctl }, workers: [{ name: "local", kind: "local", projectDir: r.dir }] } }));
-  const run = (...a) => spawnSync("node", [path.join(ctl, "docsonly.mjs"), ...a], { encoding: "utf8", env: { ...process.env, FACTORY_CONFIG: "" } });
+  const run = (...a) => spawnSync("node", [path.join(ctl, "docsonly.mjs"), ...a], { encoding: "utf8", env: { ...process.env, FACTORY_CONFIG: "", ...(r.env ?? {}) } });
   const journal = () => { const f = path.join(ctl, "journal.ndjson"); return fs.existsSync(f) ? fs.readFileSync(f, "utf8").trim().split("\n").map((l) => JSON.parse(l)) : []; };
   return { run, journal };
 }
@@ -746,19 +749,19 @@ test("the ticket comes from the Controller's records, never from the branch: a t
   const r = ticketRepo(), c = docsController(r);
   const files = { "README.md": "# Demo\nmore\n", [SPEC]: SPEC_TEXT, [REPORT]: "r\n" };
   // The branch adds the ticket file itself, hoping the lookup finds it: it reads the base only.
-  let out = attempt(r, c, { "README.md": "# Demo\nmore\n", "docs/tasks/T09-evil.md": "Status: ready\n", "docs/reviews/T09-architecture-spec.md": SPEC_TEXT, "docs/reports/T09-evil.md": "r\n" }, { task: "T09", name: "agents/t09" });
+  let out = attempt(r, c, { "README.md": "# Demo\nmore\n", "docs/tasks/T09-evil.md": TICKET, "docs/reviews/T09-architecture-spec.md": SPEC_TEXT, "docs/reports/T09-evil.md": "r\n" }, { task: "T09", name: "agents/t09" });
   assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /ticket T09: no ticket file docs\/tasks\/T09-\*\.md on the base/);
   // T04 judged on T03's branch (or the other way round), a branch that is not the ticket's, and a ticket that is not on main.
-  out = attempt(r, c, files, { task: "T04" }); assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /note: origin\/agents\/t03 is not the branch of T04/);
+  out = attempt(r, c, files, { task: "T04" }); assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /origin\/agents\/t03 is not the branch of T04/);
   out = attempt(r, c, { ...files, "docs/reviews/T04-architecture-spec.md": SPEC_TEXT }, { task: "T04", name: "agents/t04" }); assert.equal(out.status, 3, out.stdout);
   out = attempt(r, c, files, { task: "T03", name: "feature/t03" }); assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /is not the branch of T03/);
   out = attempt(r, c, files, { task: "T03", name: "agents/T03" }); assert.equal(out.status, 3, out.stdout);
   // Two ticket files for one id on the base: unclear which report is the ticket's.
-  onMain(r, { "docs/tasks/T03-copy.md": "Status: ready\n" });
+  onMain(r, { "docs/tasks/T03-copy.md": TICKET });
   out = attempt(r, c, files); assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /more than one ticket file/);
   // A project whose tickets live in the reports directory: a report there would BE a ticket file (Status: integrated releases dependents).
   const q = repo({ docsOnly: { enabled: true }, steering: { tasksDir: "docs/reports" } }), d = docsController(q);
-  onMain(q, { "docs/reports/T03-document-api.md": "Status: ready\n" });
+  onMain(q, { "docs/reports/T03-document-api.md": TICKET });
   out = attempt(q, d, { "README.md": "# Demo\nmore\n", [SPEC]: SPEC_TEXT, "docs/reports/T03-document-api.md": "Status: integrated\n" });
   assert.equal(out.status, 3, out.stdout);
   assert.deepEqual([...c.journal(), ...d.journal()], [], "none of these was journaled");
@@ -766,7 +769,7 @@ test("the ticket comes from the Controller's records, never from the branch: a t
 
 test("a ticket directory outside docs/ and a custom allowlist: the process files still pass, the tickets stay refused", () => {
   const r = repo({ docsOnly: { enabled: true, paths: ["handbook/**"] }, steering: { tasksDir: "work/tickets" } }), c = docsController(r);
-  onMain(r, { "work/tickets/T03-document-api.md": "Status: ready\n", "handbook/intro.md": "x\n" });
+  onMain(r, { "work/tickets/T03-document-api.md": TICKET, "handbook/intro.md": "x\n" });
   let out = attempt(r, c, { "handbook/intro.md": "y\n", [SPEC]: SPEC_TEXT, [REPORT]: "r\n" });
   assert.equal(out.status, 0, out.stdout + out.stderr);
   out = attempt(r, c, { "handbook/intro.md": "z\n", "work/tickets/T03-document-api.md": "Status: integrated\n" });
@@ -775,15 +778,27 @@ test("a ticket directory outside docs/ and a custom allowlist: the process files
   assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /only the ticket's own process files \(2\), no change to documentation/);
 });
 
-test("github-issues mode: the report is issue-<n>.md named by the Controller's --ref, any other issue number is refused, and a missing --ref accepts the spec review only", () => {
+// A fake gh that prints the file FAKE_ISSUE_BODY names for `gh issue view <n> --json body --jq .body`.
+function fakeGh(r, body) {
+  const bin = fs.mkdtempSync(path.join(r.base, "fake-gh-")), text = path.join(bin, "body.txt");
+  fs.writeFileSync(path.join(bin, "gh"), "#!/bin/sh\ncat \"$FAKE_ISSUE_BODY\"\n", { mode: 0o755 });
+  fs.writeFileSync(text, body);
+  r.env = { PATH: `${bin}${path.delimiter}${process.env.PATH}`, FAKE_ISSUE_BODY: text };
+  return (b) => fs.writeFileSync(text, b);
+}
+test("github-issues mode: the report is issue-<n>.md named by the Controller's --ref, the issue's own text must declare it, any other issue number is refused", () => {
   const r = repo({ docsOnly: { enabled: true }, steering: { mode: "github-issues" } }), c = docsController(r);
+  const setBody = fakeGh(r, "Update the README.\n\n${TICKET}".replace("${TICKET}", TICKET));
   const spec = "docs/reviews/I12-architecture-spec.md", files = { "README.md": "# Demo\nmore\n", [spec]: SPEC_TEXT, "docs/reports/issue-12.md": "r\n" };
   const opts = { task: "I12", name: "agents/i12" };
-  assert.equal(attempt(r, c, files, { ...opts, args: ["--ref", "#12"] }).status, 0);
+  assert.equal(attempt(r, c, files, { ...opts, args: ["--ref", "#12"] }).status, 0, "control: declared issue, its own two files");
   let out = attempt(r, c, files, { ...opts, args: ["--ref", "#13"] }); assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /issue-12\.md"?  <- installed/);
-  out = attempt(r, c, files, opts); assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /issue-12\.md"?  <- installed/);
-  assert.equal(attempt(r, c, { "README.md": "# Demo\nmore\n", [spec]: SPEC_TEXT }, opts).status, 0);
+  out = attempt(r, c, files, opts); assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /the issue.s text was not supplied/, "without --ref there is no issue text to read");
   out = attempt(r, c, { ...files, "docs/reports/issue-13.md": "r\n" }, { ...opts, args: ["--ref", "#12"] }); assert.equal(out.status, 3, out.stdout);
+  for (const body of ["Add GET /health.\n", "Add GET /health.\nLevel: 2\nDocumentation only: yes\n", "Level: 1\n", "Level: 1\nDocumentation only: no\n", "Level: 1 | 2 | 3\nDocumentation only: yes\n", `${TICKET}Documentation only: yes\n`]) {
+    setBody(body);
+    out = attempt(r, c, files, { ...opts, args: ["--ref", "#12"] }); assert.equal(out.status, 3, `${JSON.stringify(body)}\n${out.stdout}`); assert.match(out.stdout, /not a declared documentation ticket: the ticket/);
+  }
   assert.notEqual(c.run("I12", "agents/i12", "--ref").status, 0, "--ref without a value is a usage error");
 });
 
@@ -809,10 +824,11 @@ test("the file names the check expects are the ones mkspec tells the Architect a
     const report = dev.match(/docs\/reports\/[^\s,;)]+\.md/)[0];
     fs.rmSync(ctl, { recursive: true, force: true });
     const r = repo({ docsOnly: { enabled: true }, steering: { mode } });
-    if (mode === "orca-tasks") onMain(r, { [ref]: "Status: ready\n" });
+    if (mode === "orca-tasks") onMain(r, { [ref]: TICKET });
     const t = task.toLowerCase();
     r.git("checkout", "-q", "-b", `agents/${t}`, "main"); r.write(review, SPEC_TEXT); r.write(report, "r\n"); r.write("README.md", "# Demo\nmore\n"); commit(r, "flow"); r.git("checkout", "-q", "main");
-    const out = r.check(`main..agents/${t}`, "--base", "main", "--ticket", task, ...issueArgs);
+    const text = path.join(r.base, "issue.txt"); fs.writeFileSync(text, TICKET);
+    const out = r.check(`main..agents/${t}`, "--base", "main", "--ticket", task, ...issueArgs, ...(issueArgs.length ? ["--ticket-text", text] : []));
     assert.equal(out.status, 0, `${mode}: mkspec names ${review} and ${report}\n${out.stdout}`);
     assert.match(out.stdout, /spec review of/); assert.match(out.stdout, /report of/);
   }
@@ -836,4 +852,85 @@ test("a branch cut from an old main cannot re-add a process file that main has s
   onMain(r, { [SPEC]: `${SPEC_TEXT}Binding instruction: changed on main\n` });   // main moved on; the branch never merged it
   const out = c.run("T03", "agents/t03");
   assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /it already exists on origin\/main, the branch would change it/);
+});
+
+// --- the ticket's own word (review of #65, finding 1) ----------------------------------------------------------------
+test("a code ticket delivered as words (spec review, a report saying 'implemented', one README line) takes the full path; the same words for a declared documentation ticket take the docs-only path", () => {
+  const r = ticketRepo(), c = docsController(r);
+  onMain(r, { "docs/tasks/T05-health.md": "Status: ready\nLevel: 2\n\n## Architecture impact\n\nLevel: 2\nA new route GET /health in src/server.js.\n", "docs/tasks/T06-health-l1.md": "Status: ready\nLevel: 1\n\nAdd a guard to src/server.js.\n" });
+  const words = (t, report) => ({ "README.md": "# Demo\nSee /health.\n", [`docs/reviews/${t}-architecture-spec.md`]: SPEC_TEXT, [`docs/reports/${report}.md`]: "Implemented, see README.\n" });
+  for (const [t, report, why] of [["T05", "T05-health", "Level 2, no declaration"], ["T06", "T06-health-l1", "Level 1 code ticket, no declaration"]]) {
+    const out = attempt(r, c, words(t, report), { task: t, name: `agents/${t.toLowerCase()}` });
+    assert.equal(out.status, 3, `${why}\n${out.stdout}`); assert.match(out.stdout, /verdict=not-docs-only reason="not a declared documentation ticket: the ticket (its Level is not 1|it does not say)/);
+  }
+  assert.deepEqual(c.journal(), [], "no Tester skipped, nothing journaled");
+  const ok = attempt(r, c, words("T03", "T03-document-api")); assert.equal(ok.status, 0, ok.stdout);
+  assert.equal(c.journal().length, 1);
+});
+
+test("a ticket declares itself with exactly one 'Level: 1' and exactly one 'Documentation only: yes': anything else, any higher level, an unfilled template and a second line keep the Tester", () => {
+  const r = ticketRepo(), c = docsController(r);
+  const bodies = {
+    "no declaration": "Status: ready\nLevel: 1\n", "level 2": "Status: ready\nLevel: 2\nDocumentation only: yes\n", "level 3": "Level: 3\nDocumentation only: yes\n",
+    "no level": "Status: ready\nDocumentation only: yes\n", "unfilled template": "Level: 1 | 2 | 3\nDocumentation only: yes\n", "no": "Level: 1\nDocumentation only: no\n",
+    "maybe": "Level: 1\nDocumentation only: yes, mostly\n", "two declarations": `${TICKET}Documentation only: yes\n`, "two levels": `${TICKET}Level: 1\n`,
+    "level 1 then 2": `${TICKET}Level: 2\n`, "in the template's comment": "Level: 1\n<!-- Documentation only: yes -- add this line -->\n", "indented": "Level: 1\n  Documentation only: yes\n", "level 10": "Level: 10\nDocumentation only: yes\n",
+  };
+  let n = 10;
+  for (const [why, body] of Object.entries(bodies)) {
+    const id = `T${n++}`, report = `${id}-x`;
+    onMain(r, { [`docs/tasks/${report}.md`]: body });
+    const out = attempt(r, c, { "README.md": `# Demo\n${id}\n`, [`docs/reviews/${id}-architecture-spec.md`]: SPEC_TEXT, [`docs/reports/${report}.md`]: "r\n" }, { task: id, name: `agents/${id.toLowerCase()}` });
+    assert.equal(out.status, 3, `${why}\n${out.stdout}`); assert.match(out.stdout, /not a declared documentation ticket/, why);
+  }
+  // CRLF line endings and trailing blanks are still the declaration.
+  onMain(r, { "docs/tasks/T40-x.md": "Status: ready\r\nLevel: 1 \r\nDocumentation only: yes\t\r\n" });
+  assert.equal(attempt(r, c, { "README.md": "# Demo\nT40\n", "docs/reviews/T40-architecture-spec.md": SPEC_TEXT }, { task: "T40", name: "agents/t40" }).status, 0);
+});
+
+test("a declaration on the task branch does not count: the ticket is read as it is on the base, and a ticket changed by the branch is refused anyway", () => {
+  const r = ticketRepo(), c = docsController(r);
+  onMain(r, { "docs/tasks/T05-health.md": "Status: ready\nLevel: 2\n" });
+  const flowFiles = { "README.md": "# Demo\nSee /health.\n", "docs/reviews/T05-architecture-spec.md": SPEC_TEXT, "docs/reports/T05-health.md": "Implemented.\n" };
+  // the branch declares its own ticket
+  let out = attempt(r, c, { ...flowFiles, "docs/tasks/T05-health.md": "Status: ready\nLevel: 1\nDocumentation only: yes\n" }, { task: "T05", name: "agents/t05" });
+  assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /docs\/tasks\/T05-health\.md"?  <- installed/);
+  // the branch adds a second, declared ticket file for the same id
+  out = attempt(r, c, { ...flowFiles, "docs/tasks/T05-other.md": TICKET }, { task: "T05", name: "agents/t05" }); assert.equal(out.status, 3, out.stdout);
+  // the declaration appears on main only after the branch was cut: the base did not have it
+  r.git("checkout", "-q", "-b", "agents/t05", "main"); for (const [p, v] of Object.entries(flowFiles)) r.write(p, v); commit(r, "words"); r.git("push", "-q", "origin", "agents/t05"); r.git("checkout", "-q", "main");
+  onMain(r, { "docs/tasks/T05-health.md": TICKET });
+  out = c.run("T05", "agents/t05"); assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /not a declared documentation ticket: the ticket its Level is not 1/);
+  assert.deepEqual(c.journal(), []);
+});
+
+test("a declared documentation ticket whose branch holds anything else takes the full path; a branch that is not the ticket's own takes it too", () => {
+  const r = ticketRepo(), c = docsController(r);
+  const base = { "README.md": "# Demo\nmore\n", [SPEC]: SPEC_TEXT, [REPORT]: "r\n" };
+  for (const [why, extra] of [["code", { "src/app.js": "export const a = 2;\n" }], ["a second report", { "docs/reports/T03-extra.md": "r\n" }], ["another ticket's spec review", { "docs/reviews/T04-architecture-spec.md": SPEC_TEXT }], ["the ticket changed", { "docs/tasks/T03-document-api.md": `${TICKET}more\n` }]]) {
+    const out = attempt(r, c, { ...base, ...extra }); assert.equal(out.status, 3, `${why}\n${out.stdout}`);
+  }
+  const out = attempt(r, c, base, { name: "feature/t03" }); assert.equal(out.status, 3); assert.match(out.stdout, /is not the branch of T03 \(agents\/t03\): the docs-only path needs the ticket's own branch and its declaration/);
+  assert.deepEqual(c.journal(), []);
+});
+
+test("an unknown ticket is not docs-only whatever the diff is, and a bad ticket id is unclear", () => {
+  const r = ticketRepo(), c = docsController(r);
+  const out = attempt(r, c, { "README.md": "# Demo\nmore\n" }, { task: "T77", name: "agents/t77" });
+  assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /not a declared documentation ticket: ticket T77: no ticket file docs\/tasks\/T77-\*\.md on the base/);
+  const range = branch(r, "d2", () => r.write("docs/guide.md", "v2\n"));
+  assert.equal(r.check(range, "--base", "main", "--ticket", "../T03", "--ticket-text", "/dev/null").status, 4);
+});
+
+test("a process file above 256 KiB is refused; a file just under is fine", () => {
+  const r = ticketRepo(), c = docsController(r);
+  const files = (size) => ({ "README.md": "# Demo\nmore\n", [SPEC]: SPEC_TEXT + "x".repeat(size) });
+  assert.equal(attempt(r, c, files(200 * 1024)).status, 0);
+  const out = attempt(r, c, files(300 * 1024)); assert.equal(out.status, 3, out.stdout); assert.match(out.stdout, /larger than 256 KiB/);
+});
+
+test("--base takes any value as before (a value that starts with a dash), and --ticket-text needs --ticket", () => {
+  const r = ticketRepo(); const range = branch(r, "d1", () => r.write("docs/guide.md", "v2\n"));
+  assert.equal(r.check(range, "--base", "-x").status, 0, "the value of --base is unused for a range, as on main");
+  assert.equal(r.check(range, "--ticket-text", "/dev/null").status, 2);
 });

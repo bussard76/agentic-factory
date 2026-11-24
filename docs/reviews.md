@@ -58,7 +58,7 @@ The template hooks (`templates/.githooks`, `templates/tools/factory-guardrails.m
 
 `--no-verify` is forbidden everywhere. The hook checks recorded coverage; the Controller remains responsible for the reviewer's independence.
 
-**Documentation-only tasks** get no separate review when the project sets `docsOnly.enabled`: the docs-only check's evidence (every changed path and the verdict) takes the review's place (process files, review findings, tickets and agent instructions never count as documentation; the one exception is the ticket's own spec review and report, which every task branch carries: new files, exactly those names, never a findings file) in the journal. A wave with nothing but documentation in it runs the format and Markdown checks instead of the full gates; the task's own process files and the status branch make it run them once, so the saving is the Tester. Details and the fail-closed rules: [testing.md](testing.md#documentation-only-changes).
+**Documentation-only tasks** (a ticket that declares it: `Level: 1`, `Documentation only: yes`) get no separate review when the project sets `docsOnly.enabled`: the docs-only check's evidence (every changed path and the verdict) takes the review's place (process files, review findings, tickets and agent instructions never count as documentation; the one exception is the ticket's own spec review and report, which every task branch carries: new files, exactly those names, never a findings file) in the journal. The task's wave still runs the full gates once (its own process files and the status branch are in it), so the saving is the Tester round. Details and the fail-closed rules: [testing.md](testing.md#documentation-only-changes).
 
 ## Findings file
 

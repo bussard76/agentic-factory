@@ -8,10 +8,12 @@
 //   review-gate      pushes to the main branch need review coverage under docs/reviews/
 //   format-staged    the project's formatter on the fully staged files (commands.formatStaged); off when not configured
 //   format-staged --finish <status>   after the other pre-commit steps: takes the formatting back if one failed
-//   docs-only [<base>..<head> [--ticket <id> [--issue <n>]] | --staged] [--base <ref>] [--json]
+//   docs-only [<base>..<head> [--ticket <id> [--issue <n> --ticket-text <file>]] | --staged] [--base <ref>] [--json]
 //                    does a candidate change documentation only? Prints the changed paths and the verdict.
-//                    --ticket <id>: the Controller's ticket for that branch; its own spec review and report (and nothing else
-//                    under docs/reviews, docs/reports or the tickets) may be on it. --issue <n>: the issue number (github-issues).
+//                    --ticket <id>: the Controller's ticket for that branch. The branch is docs-only only when the ticket, as on the
+//                    base, is a declared documentation ticket (`Level: 1` and `Documentation only: yes`); then its own spec review and
+//                    report (and nothing else under docs/reviews, docs/reports or the tickets) may be on it. --issue <n>: the issue
+//                    number (github-issues); --ticket-text <file>: the issue's text, which stands in for the ticket file.
 //                    Exit 0 docs-only, 3 not docs-only, 4 unclear (fail closed: treat as not docs-only), 2 usage.
 // Never bypass with --no-verify. Rules: docs/review-protocol.md.
 import { execFileSync, spawnSync } from "node:child_process";
@@ -70,6 +72,11 @@ const isDocsOnly = (paths) => paths.length > 0 && paths.every((p) => !REVIEWED_D
 //     would let unreviewed code through. Every version of the file in the range is read, not only the last;
 //   - it is not also a ticket file, an installed file or an agent instruction file (an overlap makes the check unclear);
 //   - at least one other path (a change to documentation) is there: process files alone are no documentation change.
+// The ticket's own word (--ticket). The diff cannot tell a documentation ticket from a code ticket delivered as words (a
+// spec review, a report saying "implemented" and one README line), and the process files used to keep every such branch
+// off this path by accident. So with --ticket the path applies only when the ticket as recorded on the BASE (never the
+// branch) says so: exactly one `Level: 1` line and exactly one `Documentation only: yes` line (a field that is absent
+// means the full path). A ticket that cannot be found, or does not say it, is not docs-only whatever the diff is.
 // Findings files (-review-<n>, -review-final, -architecture-conformance) are written on their own branches and never
 // belong to a docs-only task; a ticket file changing its Status is the wave's own status branch, never the task's.
 const DEFAULT_DOCS_PATHS = ["docs/**", "*.md"];
@@ -113,16 +120,29 @@ function repoPath(p) {
   return !s || s.includes("\0") || /^[A-Za-z]:/.test(s) || s.split("/").some((x) => x === "." || x === "..") ? null : s;
 }
 // The directories where the Controller's flow keeps the process files of a ticket (mkspec.mjs and the push gate name them).
+const PROCESS_FILE_MAX = 256 * 1024;
 const PROCESS_DIRS = ["docs/reviews/**", "docs/reports/**"];
 // The two files of one ticket as { files: path → kind }. { error } for an option that is not a ticket id (a caller's bug:
 // unclear); { note } when the ticket cannot be established from the base tree or the settings: then NO process file is
 // accepted (the plain check, which refuses them) and the note says why.
-function ticketFiles(cfg, rev, ticket, issue, others) {
+// Why a ticket's text does not declare a documentation ticket, or "": exactly one `Level: 1` line (a level above the lowest
+// is never documentation; "Level: 1 | 2 | 3" of an unfilled template is not a level) and exactly one `Documentation only: yes` line.
+function declaredProblem(text) {
+  const lines = String(text).split(/\r?\n/), only = (re) => lines.filter((l) => re.test(l));
+  const level = only(/^Level:/i), decl = only(/^Documentation only:/i);
+  if (level.length !== 1 || !/^Level:[ \t]*1[ \t]*$/i.test(level[0])) return "its Level is not 1";
+  if (decl.length !== 1 || !/^Documentation only:[ \t]*yes[ \t]*$/i.test(decl[0])) return "it does not say `Documentation only: yes`";
+  return "";
+}
+function ticketFiles(cfg, rev, ticket, issue, others, textFile) {
   if (typeof ticket !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(ticket) || ticket.includes("..")) return { error: `--ticket must be a ticket id (letters, digits, . _ -), got ${JSON.stringify(ticket)}` };
   const files = new Map([[`docs/reviews/${ticket}-architecture-spec.md`, "spec review"]]);
   const mode = cfg.steering?.mode ?? "orca-tasks";
+  let declared = "";
   if (mode === "github-issues") {
     if (issue !== undefined) { if (!/^[1-9]\d{0,9}$/.test(issue)) return { error: `--issue must be a number, got ${JSON.stringify(issue)}` }; files.set(`docs/reports/issue-${issue}.md`, "report"); }
+    // The issue is not in the tree: the Controller hands over its text, read before the work.
+    try { if (!textFile) return { note: "the issue's text was not supplied (--ticket-text)" }; declared = declaredProblem(readFileSync(textFile, "utf8")); } catch { return { note: "the issue's text cannot be read" }; }
   } else if (mode === "orca-tasks") {
     if (issue !== undefined) return { note: "--issue belongs to steering.mode github-issues; this project's tickets are task files" };
     const dir = repoPath(cfg.steering?.tasksDir ?? "docs/tasks");
@@ -132,6 +152,7 @@ function ticketFiles(cfg, rev, ticket, issue, others) {
     try { listed = git("ls-tree", "-z", rev, "--", `${dir}/`).split("\0").filter(Boolean).map((l) => /^(\d{6}) (\w+) [0-9a-f]+\t(.*)$/s.exec(l)); } catch (e) { return { note: `the ticket directory ${dir} cannot be read on the base: ${String(e.stderr || e.message).trim().split("\n")[0]}` }; }
     const mine = listed.filter((m) => m && m[2] === "blob" && m[3].startsWith(`${dir}/`) && m[3].slice(dir.length + 1).startsWith(`${ticket}-`) && m[3].endsWith(".md") && !m[3].slice(dir.length + 1).includes("/"));
     if (mine.length !== 1) return { note: `ticket ${ticket}: ${mine.length ? "more than one" : "no"} ticket file ${dir}/${ticket}-*.md on the base` };
+    try { declared = declaredProblem(git("show", `${rev}:${mine[0][3]}`)); } catch { return { note: `ticket ${ticket}: its file cannot be read on the base` }; }
     const report = mine[0][3].slice(dir.length + 1, -3);
     if (!/^[\x21-\x7e][\x20-\x7e]*$/.test(report)) return { note: `ticket ${ticket}: the ticket file name is not plain text` };
     files.set(`docs/reports/${report}.md`, "report");
@@ -140,7 +161,7 @@ function ticketFiles(cfg, rev, ticket, issue, others) {
     if (NEVER_DOCS.some((re) => re.test(p))) return { note: `${p}: a dot path or an agent instruction file` };
     if (others.some((re) => re.test(p))) return { note: `${p} is also a ticket, installed or process-state file of the factory (does steering.tasksDir overlap docs/reviews or docs/reports?)` };
   }
-  return { files };
+  return { files, undeclared: declared && `the ticket ${declared}` };
 }
 // The settings, the allowlist and the factory's set for a config and the tree it was read from; or an error message.
 // ticket: { id, issue } of the Controller's ticket when its own process files are accepted (see above).
@@ -164,8 +185,9 @@ function docsContext(cfg, rev, ticket) {
   try {
     const others = factory.map(globToRegExp);
     let expect, ticketNote;
-    if (ticket) { const t = ticketFiles(cfg, rev, ticket.id, ticket.issue, others); if (t.error) return { error: t.error }; expect = t.files; ticketNote = t.note; }
-    return { globs: paths, res: paths.map(globToRegExp), types: [...DOC_TYPES, ...extra], factory: [...others, ...PROCESS_DIRS.map(globToRegExp)], expect, ticket: ticket?.id, ticketNote };
+    let undeclared;
+    if (ticket) { const t = ticketFiles(cfg, rev, ticket.id, ticket.issue, others, ticket.textFile); if (t.error) return { error: t.error }; expect = t.files; ticketNote = t.note; undeclared = t.note ? (t.note.startsWith("ticket ") ? t.note : `ticket ${ticket.id}: ${t.note}`) : t.undeclared; }
+    return { globs: paths, res: paths.map(globToRegExp), types: [...DOC_TYPES, ...extra], factory: [...others, ...PROCESS_DIRS.map(globToRegExp)], expect, ticket: ticket?.id, ticketNote, undeclared };
   } catch (e) { return { error: `docsOnly.paths: ${e.message}` }; }
 }
 // One path: why it is not documentation, or "" when it is.
@@ -187,6 +209,8 @@ function processProblem(e, ctx, inCommit) {
   if (!inCommit && e.status === "A" && ctx.left && spawnSync("git", ["cat-file", "-e", `${ctx.left}:${e.path}`], { stdio: "ignore" }).status === 0) return `${what}: it already exists on ${ctx.leftName}, the branch would change it`;
   if (inCommit ? !/^[AM]$/.test(e.status) || !ctx.netAdded.has(e.path) : e.status !== "A") return `${what}: it must be added by this branch (it exists on the base, is changed or removed, or does not end up in the range)`;
   if ((e.status === "M" && !REGULAR.test(e.oldMode)) || !REGULAR.test(e.newMode)) return `${what}: only plain files (100644) are documentation`;
+  // The push gate reads every file under docs/reviews/ on every push: a process file is a page or two, not megabytes.
+  try { if (Number(git("cat-file", "-s", e.newSha).trim()) > PROCESS_FILE_MAX) return `${what}: larger than ${PROCESS_FILE_MAX / 1024} KiB`; } catch { return `${what}: its size cannot be read`; }
   let text;
   try { text = git("cat-file", "blob", e.newSha); } catch { return `${what}: its content cannot be read`; }
   // The push gate reads every file under docs/reviews/ as the independent review of the commit it names.
@@ -248,23 +272,24 @@ function docsOnly(argv) {
     }
     process.exit(EXIT[r.verdict]);
   };
-  const usage = () => { console.error("usage: factory-guardrails.mjs docs-only [<base>..<head> [--ticket <id> [--issue <n>]] | --staged] [--base <ref>] [--json]"); process.exit(2); };
+  const usage = () => { console.error("usage: factory-guardrails.mjs docs-only [<base>..<head> [--ticket <id> [--issue <n> --ticket-text <file>]] | --staged] [--base <ref>] [--json]"); process.exit(2); };
   // Options that take a value: [flag, value] pairs come out of the argument list.
-  const takeOpt = (flag) => { const i = argv.indexOf(flag); if (i < 0) return undefined; const v = argv[i + 1]; argv.splice(i, 2); return v === undefined || v.startsWith("-") || argv.includes(flag) ? usage() : v; };
-  const baseOpt = takeOpt("--base"), ticketId = takeOpt("--ticket"), issue = takeOpt("--issue");
+  const takeOpt = (flag) => { const i = argv.indexOf(flag); if (i < 0) return undefined; const v = argv[i + 1]; argv.splice(i, 2); return v === undefined || argv.includes(flag) ? usage() : v; };
+  const baseOpt = takeOpt("--base"), ticketId = takeOpt("--ticket"), issue = takeOpt("--issue"), textFile = takeOpt("--ticket-text");
   const baseRef = baseOpt ?? `origin/${MAIN}`;
   const rest = argv;
-  if (rest.length > 1 || (rest[0]?.startsWith("-") && rest[0] !== "--staged") || (issue !== undefined && ticketId === undefined) || (ticketId !== undefined && !(rest[0] && rest[0] !== "--staged"))) usage();
+  if (rest.length > 1 || (rest[0]?.startsWith("-") && rest[0] !== "--staged") || ((issue !== undefined || textFile !== undefined) && ticketId === undefined) || (ticketId !== undefined && !(rest[0] && rest[0] !== "--staged"))) usage();
   try {
     if (rest[0] && rest[0] !== "--staged") {
       const m = /^(.+?)\.\.\.?(.+)$/.exec(rest[0]);
       if (!m) throw new Error(`not a range: ${rest[0]}`);
       const head = git("rev-parse", "--verify", `${m[2]}^{commit}`).trim();
       const base = git("merge-base", git("rev-parse", "--verify", `${m[1]}^{commit}`).trim(), head).trim();
-      const ctx = docsContext(configAt(base), base, ticketId === undefined ? undefined : { id: ticketId, issue });
+      const ctx = docsContext(configAt(base), base, ticketId === undefined ? undefined : { id: ticketId, issue, textFile });
       if (ctx.expect) { ctx.left = git("rev-parse", "--verify", `${m[1]}^{commit}`).trim(); ctx.leftName = m[1]; }
       const what = `${rest[0]} (base ${base.slice(0, 12)}, head ${head.slice(0, 12)})`;
-      const r = classify(parseRaw(git("diff", "--raw", "-z", "--no-renames", "--no-abbrev", base, head)), ctx);
+      let r = classify(parseRaw(git("diff", "--raw", "-z", "--no-renames", "--no-abbrev", base, head)), ctx);
+      if (r.verdict === "docs-only" && ctx.undeclared) r = { ...r, verdict: "not-docs-only", reason: `not a declared documentation ticket: ${ctx.undeclared}` };
       if (r.verdict === "docs-only") {
         // Every commit on the way, too: the net diff hides code that was added and removed again.
         for (const sha of git("rev-list", `${base}..${head}`).trim().split("\n").filter(Boolean)) {

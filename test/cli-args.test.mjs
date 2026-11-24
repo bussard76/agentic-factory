@@ -116,7 +116,7 @@ test("a positional argument is a usage error where the usage names none", () => 
 const FOREIGN = {
   "controller/capacity.mjs": ["--json"],
   "controller/cleanup.mjs": ["--json", "--full", "-q", "--prune", "--porcelain", "--terminal", "--verify", "--worktree", "-r", "--merged", "--delete", "--dispatch"],
-  "controller/docsonly.mjs": ["-C", "-q", "--verify", "--path-format", "--git-common-dir", "--json", "--ticket", "--issue"],
+  "controller/docsonly.mjs": ["-C", "-q", "--verify", "--path-format", "--git-common-dir", "--json", "--ticket", "--issue", "--ticket-text", "--jq"],
   "controller/heartbeat.mjs": ["--json", "--label", "--state", "--terminal", "--worktree", "--comment", "--workspace-status", "--unread", "--limit", "--for", "--timeout-ms", "--text", "--enter", "--screen"],
   "controller/restart.mjs": ["--json", "--terminal", "--worktree", "-C", "--format"],
   "controller/names.mjs": ["--repo", "--limit", "--json", "--worktree", "--display-name", "--terminal", "--title"],

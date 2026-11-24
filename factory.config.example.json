@@ -173,13 +173,13 @@
     ],
     "formatCheck": "",
     "markdownCheck": "",
-    "$docsChecks": "Optional. formatCheck (e.g. a formatter's check mode such as \"prettier --check .\", run through the project's own tooling) and markdownCheck (e.g. \"markdownlint-cli2 '**/*.md'\") are what a documentation-only wave runs instead of verify and e2e (docsOnly.enabled); an empty one is skipped.",
+    "$docsChecks": "Optional. formatCheck (e.g. a formatter's check mode such as \"prettier --check .\", run through the project's own tooling) and markdownCheck (e.g. \"markdownlint-cli2 '**/*.md'\") are what a wave of documentation alone runs instead of verify and e2e (docsOnly.enabled); a task's wave never qualifies (its spec review, report and status branch are in it), so they matter little; an empty one is skipped.",
     "formatStaged": "",
     "$formatStaged": "Optional, off when empty: pre-commit runs this formatter in write mode on the staged files (paths appended) and stages the result, e.g. \"prettier --write --ignore-unknown\" run through the project's own tooling. Or { \"command\": \"…\", \"paths\": [\"**/*.py\"] } to pass only matching files. Partially staged files keep their unstaged changes."
   },
   "docsOnly": {
     "enabled": false,
-    "$enabled": "true: a change that touches documentation only (tools/factory-guardrails.mjs docs-only, fail closed) gets no Tester (the ticket's own spec review and report, new files, do not count against it); a wave with nothing but documentation runs commands.formatCheck and commands.markdownCheck instead of the full gates (with neither configured, or with the task's process files or a status branch in the wave, the full gates). Read from the main branch's factory.config.json, so it takes a reviewed change to get it there (agentic-factory init asks once; later it is a ticket: the factory's docs/testing.md). false: every change takes the full path.",
+    "$enabled": "true: a change that touches documentation only (tools/factory-guardrails.mjs docs-only, fail closed) and whose ticket says so itself (Level: 1 and Documentation only: yes, as on the main branch) gets no Tester (the ticket's own spec review and report, new files, do not count against it); its wave still runs the full gates once (only a wave of documentation alone, with none of a task's process files in it, runs commands.formatCheck and commands.markdownCheck instead). Read from the main branch's factory.config.json, so it takes a reviewed change to get it there (agentic-factory init asks once; later it is a ticket: the factory's docs/testing.md). false: every change takes the full path.",
     "paths": [
       "docs/**",
       "*.md"
