@@ -1,48 +1,58 @@
 // The Controller's own word about where it is in its loop, so the heartbeat does not have to read it off Orca or the screen.
-//   node cycle.mjs start  first act of a cycle: removes controller.waiting.json (the marker) and prints the worker mail it has not
-//                         printed as handled before; what it printed is kept in mail.read.json
-//   node cycle.mjs end    last act of a cycle, after status.md is written and wait.mjs is armed: records the mail printed by `start`
-//                         as handled (mail.handled.json: the heartbeat stops counting it, as inbox.mjs --done does for inbox.md) and
+//   node cycle.mjs start  first act of a cycle: removes controller.waiting.json (the marker) and prints every worker message it has
+//                         not recorded as handled, in full; exactly what it printed is kept in mail.read.json, with the time and
+//                         the terminal of the session that read it
+//   node cycle.mjs end    last act of a cycle, after status.md is written and wait.mjs is armed: records what `start` printed as
+//                         handled (mail.handled.json: the heartbeat stops counting it, as inbox.mjs --done does for inbox.md) and
 //                         writes the marker, which says "my cycle is over, I sit at my prompt, type to me when there is something"
+// What counts as handled is exactly what a `start` printed in this session since the last restart: a list left by a session that
+// died, by a restart, or by another terminal is thrown away at `end` and its mail stays new; mail that was not printed (more than 200
+// messages in Orca's list, or mail that arrived later) stays new too. Nothing is cut: a message is printed whole or not recorded.
 // The marker is only trusted while nothing contradicts it (heartbeat.mjs): status.md newer than it, output in the terminal a moment ago,
-// a confirmation question on the screen, or a restart since all mean the Controller is working after all. A cycle that crashes before
-// `end` handled nothing. A Controller whose handbook does not know this script never writes a marker, and the heartbeat then acts as
-// it always did.
+// a confirmation question on the screen, or a restart since all mean the Controller is working after all. A Controller whose handbook
+// does not know this script never writes a marker, and the heartbeat then acts as it always did.
 // Usage: node cycle.mjs start|end
 import "./cli.mjs";
 import fs from "node:fs";
 import { RUNNER, file, orcaJson, writeJson } from "./lib.mjs";
 
-const MARKER = "controller.waiting.json", READ = "mail.read.json", HANDLED = "mail.handled.json", KEEP = 500, SHOW = 30;
+const MARKER = "controller.waiting.json", READ = "mail.read.json", HANDLED = "mail.handled.json", KEEP = 500;
 const [mode] = process.argv.slice(2);
 if (mode !== "start" && mode !== "end") { console.error("usage: node cycle.mjs start|end"); process.exit(1); }
-const ids = (name) => { try { const v = JSON.parse(fs.readFileSync(file(name), "utf8")); return Array.isArray(v) ? v.filter((x) => typeof x === "string") : []; } catch { return []; } };
+const json = (name) => { try { return JSON.parse(fs.readFileSync(file(name), "utf8")); } catch { return null; } };
+const ids = (name) => { const v = json(name); return Array.isArray(v) ? v.filter((x) => typeof x === "string") : []; };
+const session = process.env.ORCA_TERMINAL_HANDLE ?? null;
 
 if (mode === "end") {
-  // Mail this cycle read becomes handled only now: a Controller that died mid-cycle acted on none of it.
-  const read = ids(READ);
-  if (read.length) { writeJson(HANDLED, [...new Set([...ids(HANDLED), ...read])].slice(-KEEP)); fs.rmSync(file(READ), { force: true }); }
+  const read = json(READ);
+  fs.rmSync(file(READ), { force: true });
+  let recorded = 0, dropped = "";
+  if (read && Array.isArray(read.ids) && read.ids.length) {
+    const restartedAt = Number(json("heartbeat.restarted.json")?.at ?? 0);
+    if (!Number.isFinite(Number(read.at)) || Number(read.at) <= restartedAt) dropped = "it was read before the last restart";
+    else if ((read.session ?? null) !== session) dropped = "it was read by another terminal";
+    else { writeJson(HANDLED, [...new Set([...ids(HANDLED), ...read.ids.filter((x) => typeof x === "string")])].slice(-KEEP)); recorded = read.ids.length; }
+  }
   writeJson(MARKER, { at: Date.now() });
-  console.log(`marked as waiting${read.length ? `; ${read.length} message(s) recorded as handled` : ""}: the heartbeat may type a wake line into this terminal when there is work`);
+  console.log(`marked as waiting${recorded ? `; ${recorded} message(s) recorded as handled` : ""}${dropped ? `; the mail list of an earlier session was not recorded (${dropped}): that mail stays new` : ""}: the heartbeat may type a wake line into this terminal when there is work`);
   process.exit(0);
 }
 
-// start: clear the marker first, whatever happens next.
+// start: clear the marker first, whatever happens next. A list that a dead session left is replaced below or dropped.
 fs.rmSync(file(MARKER), { force: true });
-if (RUNNER !== "orca") { console.log("no worker mail (runner is not orca)"); process.exit(0); }
+if (RUNNER !== "orca") { fs.rmSync(file(READ), { force: true }); console.log("no worker mail (runner is not orca)"); process.exit(0); }
 let messages;
 try {
-  const j = orcaJson(["orchestration", "inbox", "--limit", "200"]);
+  const j = orcaJson(["orchestration", "inbox", "--limit", "200", "--full"]);
   if (!Array.isArray(j?.result?.messages)) throw new Error("no message list");
   messages = j.result.messages.filter((m) => m && typeof m.id === "string" && m.type !== "status" && m.type !== "heartbeat");
 } catch (error) {
-  console.log(`worker mail not read (${String(error.message).split("\n")[0].slice(0, 120)}): run \`orca orchestration inbox --limit 200 --json\` yourself; nothing was recorded`);
+  fs.rmSync(file(READ), { force: true });
+  console.log(`worker mail not read (${String(error.message).split("\n")[0].slice(0, 120)}): run \`orca orchestration inbox --limit 200 --full --json\` yourself; nothing was recorded`);
   process.exit(0);
 }
 const handled = new Set(ids(HANDLED));
 const open = messages.filter((m) => !handled.has(m.id));
-// The newest ones in full; older ones by count (the Controller's context is not a log). All of them count as read.
-for (const m of open.slice(-SHOW)) console.log(["#", m.id, m.type, m.from ?? "", m.subject ?? "", "|", String(m.body ?? "").slice(0, 2000)].map(String).join(" "));
-if (open.length > SHOW) console.log(`(${open.length - SHOW} older message(s) not shown: \`orca orchestration inbox --limit 200 --json\` lists them)`);
+for (const m of open) console.log(["#", m.id, m.type, m.from ?? "", m.subject ?? "", "|", String(m.body ?? "")].map(String).join(" "));
 if (!open.length) console.log(`(no worker mail that was not handled before${messages.length ? `; ${messages.length} older message(s) already handled` : ""})`);
-writeJson(READ, open.map((m) => m.id));
+writeJson(READ, { at: Date.now(), session, ids: open.map((m) => m.id) });

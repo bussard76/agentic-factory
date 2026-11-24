@@ -13,8 +13,8 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
 const FILES = ["heartbeat.mjs", "cycle.mjs", "cli.mjs", "controller-terminal.mjs", "front-notice.mjs", "inbox.mjs", "restart.mjs", "lib.mjs", "steering/tasks.mjs"];
 const worker = JSON.stringify({ t1: { name: "T1 · Worker Developer", host: "local", terminal: "term_w", worktree: "/w/t1" } });
 const doneMsg = { id: "m1", type: "worker_done", from: "term_w", subject: "done" };
-// A run at a tenth minute is the full check (ready tickets, running workers).
-const TENTH = "--import=data:text/javascript,Date.prototype.getMinutes=()=>0";
+// A run at a tenth minute is the full check (ready tickets, running workers). The minute is injected (FACTORY_MINUTE, pinned to 5
+// for every test by support/safe-env.mjs), never read from the wall clock.
 
 function setup({ state = {}, tenth = false } = {}) {
   const dir = tempDir("af-wakeidle-");
@@ -32,13 +32,13 @@ import fs from "node:fs";
 const a = process.argv.slice(2), s = JSON.parse(fs.readFileSync(${JSON.stringify(stateFile)}, "utf8"));
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(a) + "\\n");
 const out = (result) => console.log(JSON.stringify({ ok: true, result }));
-if (a[0] === "terminal" && a[1] === "list") out({ terminals: s.terminals });
+if (a[0] === "terminal" && a[1] === "list") out({ terminals: s.terminals.map((t) => (t.lastOutputAgo === undefined ? t : { ...t, lastOutputAt: Date.now() - t.lastOutputAgo })) });
 else if (a[0] === "terminal" && a[1] === "wait") out({ wait: { satisfied: s.idle } });
 else if (a[0] === "terminal" && a[1] === "read") { if (s.readFails) { console.error("orca: read failed"); process.exit(1); } out({ tail: s.screenText ?? "" }); }
 else if (a[0] === "orchestration" && a[1] === "inbox") { if (s.inboxFails) { console.error("orca: down"); process.exit(1); } out({ messages: s.messages }); }
 else out({});`);
   fs.chmodSync(fake, 0o755);
-  const env = { ...process.env, ORCA_CLI_COMMAND: fake, FACTORY_CONFIG: path.join(ctl, "factory.config.json"), ...(tenth ? { NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} ${TENTH}`.trim() } : {}) };
+  const env = { ...process.env, ORCA_CLI_COMMAND: fake, FACTORY_CONFIG: path.join(ctl, "factory.config.json"), FACTORY_MINUTE: tenth ? "0" : "5" };
   const beat = () => { const r = spawnSync("node", [path.join(ctl, "heartbeat.mjs")], { encoding: "utf8", env }); assert.equal(r.status, 0, r.stderr); return r.stdout; };
   const cycle = (mode) => spawnSync("node", [path.join(ctl, "cycle.mjs"), mode], { encoding: "utf8", env, cwd: ctl });
   const all = () => (fs.existsSync(calls) ? fs.readFileSync(calls, "utf8").trim().split("\n").map((l) => JSON.parse(l)) : []);
@@ -64,7 +64,7 @@ test("idle at its prompt with a background shell (Orca says busy): the marker wa
   h.marker();
   h.write("inbox.md", "2026-11-24 start both Developers\n");
   const out = h.beat();
-  assert.match(out, /woke term_c \(inbox; it marked itself waiting at \d\d:\d\d\)/);
+  assert.match(out, /woke term_c \(inbox; it marked itself waiting at \d\d:\d\d, its terminal had been quiet for \d+ s\)/);
   assert.equal(h.sent().length, 1);
   assert.match(h.sent()[0], /^Heartbeat: run the next cycle of "The loop"/);
   assert.equal(h.waits(), 0, "the Controller's own word replaces the 15 s question to Orca");
@@ -91,7 +91,7 @@ test("an unanswered wake is not typed every minute; after wake.repeatMinutes it 
   h.done();
 });
 
-test("idle with ready tickets only and a background shell: woken at the tenth minute's check; without a marker it gets the pointer", () => {
+test("idle with ready tickets only and a background shell: woken at the tenth minute's check", () => {
   const h = setup({ tenth: true });
   h.first();
   h.ticket();
@@ -99,11 +99,34 @@ test("idle with ready tickets only and a background shell: woken at the tenth mi
   assert.match(h.beat(), /woke term_c \(1 ready; it marked itself waiting/);
   assert.equal(h.sent().length, 1);
   h.done();
-  // No marker (an older handbook): Orca says busy, the pointer follows after the busy time, once per state, again after the repeat time.
+});
+
+test("without a marker (an older handbook) the busy fallback is main's: a pointer once per state for inbox, mail and wave, none for tickets, no repeat", () => {
   const g = setup({ tenth: true });
   g.first();
   g.ticket();
   assert.match(g.beat(), /busy, not woken \(1 ready; Orca: not idle\)/);
+  g.busyFor(30);
+  g.beat();
+  assert.equal(g.sent().length, 0, "ready tickets are no pointer without a marker, as on main");
+  g.write("inbox.md", "do this\n");
+  g.busyFor(3);
+  g.beat();
+  assert.equal(g.sent().length, 1);
+  assert.match(g.sent()[0], /inbox\.md has a new instruction/);
+  for (const min of [11, 25, 61]) { g.age("heartbeat.pointer", min * 60_000); g.busyFor(3); g.beat(); }
+  assert.equal(g.sent().length, 1, "once per state, however long it lasts: nothing is repeated");
+  assert.equal(g.has("heartbeat.pointer.count"), true);
+  g.done();
+});
+
+test("a marker that is there but not believed (the terminal keeps printing): the pointer covers ready tickets too and is repeated, at most three times per state", () => {
+  const busyTerm = { handle: "term_c", title: "p · Controller", lastOutputAgo: 2_000 };
+  const g = setup({ tenth: true, state: { terminals: [busyTerm] } });
+  g.first();
+  g.ticket();
+  g.marker();
+  assert.match(g.beat(), /busy, not woken \(1 ready; marker not used: its terminal printed \d+ s ago; Orca: not idle\)/);
   assert.equal(g.sent().length, 0, "not at once");
   g.busyFor(3);
   assert.match(g.beat(), /pointed the busy Controller to ready/);
@@ -113,22 +136,28 @@ test("idle with ready tickets only and a background shell: woken at the tenth mi
   g.age("heartbeat.pointer", 5 * 60_000);
   g.beat();
   assert.equal(g.sent().length, 1, "not before wake.repeatMinutes");
-  g.age("heartbeat.pointer", 11 * 60_000);
-  g.beat();
-  assert.equal(g.sent().length, 2, "an unanswered pointer is typed again");
+  for (let n = 2; n <= 4; n++) { g.age("heartbeat.pointer", 11 * 60_000); g.busyFor(3); g.beat(); assert.equal(g.sent().length, n, `repeat ${n - 1}`); }
+  g.age("heartbeat.pointer", 11 * 60_000); g.busyFor(3); g.beat();
+  assert.equal(g.sent().length, 4, "three repeats are the end: a stuck state is bounded");
+  g.write("inbox.md", "a new instruction\n");
+  g.busyFor(3); g.beat();
+  assert.equal(g.sent().length, 5, "a new state is a new pointer");
   g.done();
 });
 
-test("running workers at the tenth minute reach a busy-looking Controller as a pointer, and an unreadable source does not", () => {
-  const h = setup({ tenth: true, state: { terminals: [{ handle: "term_c", title: "p · Controller" }, { handle: "term_w", title: "T1 · Worker Developer" }] } });
+test("running workers at the tenth minute reach a Controller whose marker is not believed as a pointer; an unreadable source does not", () => {
+  const terms = [{ handle: "term_c", title: "p · Controller", lastOutputAgo: 2_000 }, { handle: "term_w", title: "T1 · Worker Developer" }];
+  const h = setup({ tenth: true, state: { terminals: terms } });
   h.write("workers.json", worker);
   h.first();
+  h.marker();
   h.busyFor(3);
   h.beat();
   assert.match(h.sent()[0] ?? "", /ready tickets or running workers/);
   h.done();
-  const g = setup({ tenth: true });
+  const g = setup({ tenth: true, state: { terminals: [terms[0]] } });
   g.first();
+  g.marker();
   fs.rmSync(path.join(g.project, "docs/tasks"), { recursive: true });   // tickets cannot be listed
   g.busyFor(3);
   g.write("heartbeat.last", "");
@@ -221,7 +250,7 @@ test("a wave's gate and wavewait.mjs write the journal while the Controller sits
   h.done();
 });
 
-test("cycle.mjs: end writes the marker, start removes it even when Orca fails; start prints only mail not handled before, the newest in full", () => {
+test("cycle.mjs: end writes the marker, start removes it even when Orca fails; start prints every unhandled message whole and records exactly those", () => {
   const h = setup();
   assert.equal(h.cycle("end").status, 0);
   assert.ok(JSON.parse(fs.readFileSync(path.join(h.ctl, "controller.waiting.json"), "utf8")).at > Date.now() - 10_000);
@@ -231,23 +260,53 @@ test("cycle.mjs: end writes the marker, start removes it even when Orca fails; s
   assert.equal(h.has("controller.waiting.json"), false, "cleared before anything can fail");
   assert.match(bad.stdout, /worker mail not read/);
   assert.equal(h.has("mail.read.json"), false, "nothing printed, nothing read");
-  const msgs = [{ id: "a", type: "status", subject: "x" }, { id: "b", type: "question", from: "w", subject: "s", body: "b".repeat(5000) }, ...Array.from({ length: 40 }, (_, i) => ({ id: `n${i}`, type: "worker_done", from: "w", subject: `s${i}` }))];
+  const msgs = [{ id: "a", type: "status", subject: "x" }, { id: "b", type: "question", from: "w", subject: "s", body: "b".repeat(5000) }, ...Array.from({ length: 44 }, (_, i) => ({ id: `n${i}`, type: "worker_done", from: "w", subject: `s${i}` }))];
   h.patch({ inboxFails: false, messages: msgs });
   const ok = h.cycle("start");
-  assert.match(ok.stdout, /\(11 older message\(s\) not shown/);
-  assert.match(ok.stdout, /# n39 /);
+  assert.equal(ok.stdout.split("\n").filter((l) => l.startsWith("# ")).length, 45, "all of them are printed: no cap");
+  assert.ok(ok.stdout.includes("b".repeat(5000)), "a body is printed whole");
   assert.doesNotMatch(ok.stdout, /# a /, "status messages are not worker mail");
+  assert.ok(h.all().some((c) => c[0] === "orchestration" && c[1] === "inbox" && c.includes("--full")), "the full bodies are asked for");
   h.cycle("end");
-  const handled = JSON.parse(fs.readFileSync(path.join(h.ctl, "mail.handled.json"), "utf8"));
-  assert.equal(handled.length, 41);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(h.ctl, "mail.handled.json"), "utf8")).length, 45);
   const again = h.cycle("start");
-  assert.match(again.stdout, /no worker mail that was not handled before; 41 older message\(s\) already handled/);
+  assert.match(again.stdout, /no worker mail that was not handled before; 45 older message\(s\) already handled/);
   assert.equal(h.cycle("stop").status, 1);
   h.done();
 });
 
+test("mail is handled only when this session's start printed it: a list left by a dead session, a restart or another terminal is thrown away, and its mail stays new", () => {
+  const h = setup();
+  h.patch({ messages: [doneMsg] });
+  const as = (handle) => ({ ...process.env, ORCA_CLI_COMMAND: path.join(h.dir, "fake-orca.mjs"), FACTORY_CONFIG: path.join(h.ctl, "factory.config.json"), ...(handle ? { ORCA_TERMINAL_HANDLE: handle } : {}) });
+  const run = (mode, handle) => spawnSync("node", [path.join(h.ctl, "cycle.mjs"), mode], { encoding: "utf8", env: as(handle), cwd: h.ctl });
+  const handled = () => (h.has("mail.handled.json") ? JSON.parse(fs.readFileSync(path.join(h.ctl, "mail.handled.json"), "utf8")) : []);
+  // A dead session printed m1; a new Controller in another terminal forgets `start` and runs `end`: nothing is recorded.
+  run("start", "term_old");
+  const lateEnd = run("end", "term_new");
+  assert.match(lateEnd.stdout, /was not recorded \(it was read by another terminal\)/);
+  assert.deepEqual(handled(), []);
+  assert.equal(h.has("mail.read.json"), false, "and the list is gone");
+  // Printed before a restart, ended after it.
+  run("start", "term_c");
+  fs.writeFileSync(path.join(h.ctl, "heartbeat.restarted.json"), JSON.stringify({ at: Date.now() + 1000 }));
+  assert.match(run("end", "term_c").stdout, /it was read before the last restart/);
+  assert.deepEqual(handled(), []);
+  // The same session, start then end: handled. A message that arrived after start is not.
+  fs.rmSync(path.join(h.ctl, "heartbeat.restarted.json"));
+  run("start", "term_c");
+  h.patch({ messages: [doneMsg, { id: "m2", type: "worker_done", from: "term_w", subject: "later" }] });
+  run("end", "term_c");
+  assert.deepEqual(handled(), ["m1"]);
+  // A list that is not a list of the printed shape records nothing.
+  fs.writeFileSync(path.join(h.ctl, "mail.read.json"), JSON.stringify({ at: Date.now(), session: null, ids: "m2" }));
+  run("end", null);
+  assert.deepEqual(handled(), ["m1"]);
+  h.done();
+});
+
 test("really busy: output a moment ago, or status.md written after the marker: nothing is typed, however long, and the marker is not used", () => {
-  const h = setup({ state: { terminals: [{ handle: "term_c", title: "p · Controller", lastOutputAt: Date.now() - 2_000 }] } });
+  const h = setup({ state: { terminals: [{ handle: "term_c", title: "p · Controller", lastOutputAgo: 2_000 }] } });
   h.first();
   h.marker();
   h.write("inbox.md", "do this\n");
@@ -319,4 +378,127 @@ test("a Controller that crashed after marking itself waiting: nothing is typed i
   h.beat(); h.beat();
   assert.equal(h.sent().length, 0);
   h.done();
+});
+
+const events = (h) => { try { return fs.readFileSync(path.join(h.ctl, "front-events.log"), "utf8").split("\n").filter((l) => /FRONT-EVENT UNANSWERED/.test(l)); } catch { return []; } };
+const health = (h) => { try { return fs.readFileSync(path.join(h.ctl, "heartbeat-health.md"), "utf8"); } catch { return ""; } };
+
+test("a new reason is never held back by the repeat timer of an older one; when the repeats are used up the Front agent is told once and it stays reported until the Controller reacts", () => {
+  const h = setup();
+  h.write("workers.json", worker);
+  h.first();
+  h.marker();
+  h.write("inbox.md", "line one\n");
+  h.beat();                                                    // wake 1
+  // A worker message one minute later: a new reason, typed at once although the first wake is a minute old.
+  h.patch({ messages: [doneMsg] });
+  assert.match(h.beat(), /woke term_c \(1 worker message/);
+  assert.equal(h.sent().length, 2);
+  // Another inbox line: new again.
+  h.write("inbox.md", "line one\nline two\n");
+  assert.match(h.beat(), /woke term_c \(inbox/);
+  assert.equal(h.sent().length, 3);
+  // The Controller ignores everything. The same state is repeated three times, 11 minutes apart, and then it is used up.
+  for (let n = 4; n <= 6; n++) { h.unanswered(11); assert.match(h.beat(), /woke term_c \(unanswered wake|woke term_c \(inbox/); assert.equal(h.sent().length, n); }
+  assert.equal(events(h).length, 0, "not told while repeats are left");
+  h.unanswered(11);
+  assert.match(h.beat(), /3 repeats are used up.*told the Front agent \(UNANSWERED\)/s);
+  assert.equal(h.sent().length, 6);
+  assert.equal(events(h).length, 1);
+  assert.match(health(h), /UNANSWERED since \d\d:\d\d: the Controller marked itself waiting at \d\d:\d\d, was woken \d+ times/);
+  // Nothing more for the same state, and the Front agent is not told again.
+  for (let i = 0; i < 3; i++) { h.unanswered(30); h.beat(); }
+  assert.equal(h.sent().length, 6);
+  assert.equal(events(h).length, 1, "once");
+  assert.match(health(h), /UNANSWERED/, "stays reported");
+  // A new reason after that is still typed.
+  h.patch({ messages: [doneMsg, { id: "m7", type: "escalation", from: "term_w", subject: "q" }] });
+  assert.match(h.beat(), /woke term_c \(1 worker message/);
+  assert.equal(h.sent().length, 7);
+  // The Controller reacts (writes status.md after the marker): the report ends.
+  h.write("status.md", "# Status\nagain\n");
+  h.beat();
+  assert.doesNotMatch(health(h), /UNANSWERED/);
+  h.done();
+});
+
+test("lastOutputAt that is null, missing, not a number or in the future is unknown, and unknown is busy: the marker is not believed and Orca is asked", () => {
+  for (const bad of [null, "2026-11-24T10:00:00Z", "1700000000000", Number.NaN, Date.now() + 3_600_000, 0]) {
+    const h = setup({ state: { terminals: [{ handle: "term_c", title: "p · Controller", lastOutputAt: bad }] } });
+    h.first();
+    h.marker();
+    h.write("inbox.md", "do this\n");
+    assert.match(h.beat(), /busy, not woken \(inbox; marker not used: Orca gives no usable lastOutputAt for its terminal; Orca: not idle\)/, String(bad));
+    assert.equal(h.sent().length, 0, String(bad));
+    assert.equal(h.waits(), 1, "the old path asks Orca");
+    h.done();
+  }
+  // Absent altogether.
+  const g = setup();
+  const state = JSON.parse(fs.readFileSync(path.join(g.dir, "state.json"), "utf8"));
+  for (const t of state.terminals) delete t.lastOutputAt;
+  g.patch({ terminals: state.terminals });
+  g.first(); g.marker(); g.write("inbox.md", "do this\n");
+  assert.match(g.beat(), /marker not used: Orca gives no usable lastOutputAt/);
+  assert.equal(g.sent().length, 0);
+  // Orca idle on the old path: woken as on main, without the marker.
+  g.patch({ idle: true });
+  assert.match(g.beat(), /woke term_c \(inbox\)/);
+  g.done();
+});
+
+test("the ready-ticket look is spent only by a sent wake: a failed ticket read or a failed send is looked at again at the next beat", () => {
+  // The ticket source fails at the look.
+  const h = setup();
+  h.first();
+  h.marker();
+  fs.renameSync(path.join(h.project, "docs/tasks"), path.join(h.project, "docs/tasks.away"));
+  assert.match(h.beat(), /ready tickets could not be read/);
+  assert.equal(h.has("heartbeat.markerseen.json"), false, "not recorded");
+  fs.renameSync(path.join(h.project, "docs/tasks.away"), path.join(h.project, "docs/tasks"));
+  h.ticket();
+  assert.match(h.beat(), /woke term_c \(1 ready/, "the next beat looks again");
+  h.done();
+  // The send fails right after the look.
+  const g = setup();
+  g.first();
+  g.marker();
+  g.ticket();
+  const fake = path.join(g.dir, "fake-orca.mjs");
+  const real = fs.readFileSync(fake, "utf8");
+  fs.writeFileSync(fake, real.replace('else out({});', 'else if (a[0] === "terminal" && a[1] === "send" && s.sendFails) { console.error("orca: send failed"); process.exit(1); } else out({});'));
+  g.patch({ sendFails: true });
+  const r = spawnSync("node", [path.join(g.ctl, "heartbeat.mjs")], { encoding: "utf8", env: { ...process.env, ORCA_CLI_COMMAND: fake, FACTORY_CONFIG: path.join(g.ctl, "factory.config.json") } });
+  assert.notEqual(r.status, 0, "the failed send is an error of the run");
+  assert.equal(g.has("heartbeat.markerseen.json"), false, "the look is not spent");
+  assert.equal(g.has("heartbeat.markerwake.json"), false);
+  g.patch({ sendFails: false });
+  assert.match(g.beat(), /woke term_c \(1 ready/);
+  assert.equal(g.sent().length, 2, "the failed attempt and the good one");
+  g.done();
+});
+
+test("a marker older than this Controller's terminal record belongs to the session before: it is not believed", () => {
+  const h = setup();
+  h.first();
+  h.marker(300_000);
+  fs.writeFileSync(path.join(h.ctl, "controller-terminal.txt"), `term_c\n${h.project}\n`);
+  h.write("inbox.md", "do this\n");
+  assert.match(h.beat(), /busy, not woken \(inbox; marker not used: the marker is older than this Controller's terminal record/);
+  assert.equal(h.sent().length, 0);
+  h.done();
+});
+
+test("the heartbeat takes its tenth minute from FACTORY_MINUTE, not from the wall clock: a test never depends on the time it runs", () => {
+  const h = setup({ tenth: false });
+  h.write("workers.json", worker);
+  h.first();
+  h.write("heartbeat.last", "");
+  assert.doesNotMatch(h.beat(), /\(workers/, "minute 5: no full check");
+  const hh = setup({ tenth: true, state: { terminals: [{ handle: "term_c", title: "p · Controller" }, { handle: "term_w", title: "T1 · Worker Developer" }] } });
+  hh.write("workers.json", worker);
+  hh.first();
+  hh.patch({ idle: true });
+  assert.match(hh.beat(), /woke term_c \(workers\)/, "minute 0: the full check");
+  h.done(); hh.done();
 });

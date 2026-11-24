@@ -772,7 +772,7 @@ function doctor() {
     else if (!hb.installed) info("heartbeat not scheduled yet (the Controller is not started: run start)");
     else bad("heartbeat not scheduled: nothing wakes the Controller from outside, so finished workers wait for a person (run start; if that fails it says why)");
   }
-  { const hb = handbookStatus(c); if (hb.problem) bad(`handbook: ${hb.problem}`); else if (hb.handbookInstalled) ok("handbook: it knows inbox.mjs --done and restart.md"); }
+  { const hb = handbookStatus(c); if (hb.problem) bad(`handbook: ${hb.problem}`); else if (hb.handbookInstalled) ok("handbook: it knows inbox.mjs --done, restart.md and cycle.mjs end"); }
   { const cl = cleanupStatus(c); if (cl.problem) bad(`cleanup: ${cl.problem}`); else if (cl.unknown) info("cleanup: the Controller's host did not answer, so it is not known whether the handbook calls cleanup with --apply"); else if (!cl.handbookInstalled) info("cleanup: not checked, no Controller handbook is installed yet (run start)"); else ok("cleanup: the handbook calls it with --apply and no removable work waits"); }
   if (!heartbeatOn(c) && c.hosts.controller.heartbeat === false) info("heartbeat off (hosts.controller.heartbeat is false): you wake the Controller yourself");
   { const s = staleLimit(c); if (s.note) info(`stale limit: ${s.note}`); }
@@ -1167,17 +1167,17 @@ const CLEANUP_TRAP = "cleanup deletes only with --apply, so this handbook cleans
 // The handbook of an installation that kept an edited CONTROLLER.md (the new one lies in .factory/new/) may predate the heartbeat's
 // inbox and restart scripts: a Controller that does not know `inbox.mjs --done` leaves every inbox line waking it, and one that does
 // not know restart.md would not read what a restart left for it.
-const HANDBOOK_NEW = [["inbox\\.mjs --done", "reading the inbox with `node inbox.mjs` and `--done`"], ["restart\\.md", "`restart.md` after a restart"]];
+const HANDBOOK_NEW = [["inbox\\.mjs --done", "reading the inbox with `node inbox.mjs` and `--done`"], ["restart\\.md", "`restart.md` after a restart"], ["cycle\\.mjs end", "ending a cycle with `node cycle.mjs end` (the marker that lets the heartbeat wake an idle Controller whatever Orca says)"]];
 const handbookMissing = (text) => HANDBOOK_NEW.filter(([re]) => !new RegExp(re).test(text)).map(([, what]) => what);
-const HANDBOOK_NOTE = "an older CONTROLLER.md you edited stays on update and its new version lies in .factory/new/.factory/controller/CONTROLLER.md: merge it, then run start. Until then every non-empty inbox keeps waking the Controller, and a Controller restarted by the heartbeat or by itself would not know what restart.md is";
+const HANDBOOK_NOTE = "an older CONTROLLER.md you edited stays on update and its new version lies in .factory/new/.factory/controller/CONTROLLER.md: merge it, then run start. Until then every non-empty inbox keeps waking the Controller, a Controller restarted by the heartbeat or by itself would not know what restart.md is, and an idle Controller that Orca reads as busy (a background `wait.mjs`) is reached only by the slower pointer";
 function handbookStatus(c) {
   const ctl = controllerHost(c) ?? { kind: "local", name: "local" };
   const dir = heartbeatDir(c).replace(/^~(?=\/|$)/, "$HOME");
-  const out = onController(ctl, `f="${dir}/CONTROLLER.md"; if [ -f "$f" ]; then echo present; grep -c 'inbox\\.mjs --done' "$f"; grep -c 'restart\\.md' "$f"; else echo absent; fi`);
+  const out = onController(ctl, `f="${dir}/CONTROLLER.md"; if [ -f "$f" ]; then echo present; grep -c 'inbox\\.mjs --done' "$f"; grep -c 'restart\\.md' "$f"; grep -c 'cycle\\.mjs end' "$f"; else echo absent; fi`);
   if (out.status !== 0 && !out.stdout) return { unknown: true };
-  const [state, inbox, restart] = String(out.stdout).trim().split("\n");
+  const [state, inbox, restart, cycle] = String(out.stdout).trim().split("\n");
   if (state !== "present") return { handbookInstalled: false, missing: [], problem: null };
-  const missing = [Number(inbox) ? null : HANDBOOK_NEW[0][1], Number(restart) ? null : HANDBOOK_NEW[1][1]].filter(Boolean);
+  const missing = [Number(inbox) ? null : HANDBOOK_NEW[0][1], Number(restart) ? null : HANDBOOK_NEW[1][1], Number(cycle) ? null : HANDBOOK_NEW[2][1]].filter(Boolean);
   return { handbookInstalled: true, missing, problem: missing.length ? `the Controller's CONTROLLER.md does not mention ${missing.join(" and ")}: ${HANDBOOK_NOTE}` : null };
 }
 function cleanupStatus(c) {
