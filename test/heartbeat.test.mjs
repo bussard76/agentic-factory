@@ -147,26 +147,47 @@ test("a worker message or a finished wave reaches a busy Controller as a pointer
   h.done();
 });
 
-test("the busy pointer is held back by a real confirmation question for at most the hold time, and a sentence that merely contains such words does not hold it", () => {
+test("a real confirmation question is never answered with the pointer, however long it lasts; after the hold time the Front agent is told, once, and again only when the question changes; prose does not hold the pointer", () => {
   const h = setup({ state: { idle: false } });
   h.beat();
   h.write("inbox.md", "do this\n");
   busySince(h, 3);
   const screen = (text) => h.patch({ screenText: text });
+  const health = () => { try { return fs.readFileSync(path.join(h.ctl, "heartbeat-health.md"), "utf8"); } catch { return null; } };
+  const events = () => { try { return fs.readFileSync(path.join(h.ctl, "front-events.log"), "utf8").split("\n").filter((l) => /FRONT-EVENT DIALOG/.test(l)); } catch { return []; } };
   const dialogs = ["Allow this command to run?\n 1. Yes\n 2. No", "Overwrite file? (y/n)", "Continue? [Y/n]: ", "Press Enter to continue"];
   for (const d of dialogs) {
-    fs.rmSync(path.join(h.ctl, "heartbeat.dialog.json"), { force: true }); fs.rmSync(path.join(h.ctl, "heartbeat.pointer"), { force: true });
+    fs.rmSync(path.join(h.ctl, "heartbeat.dialog.json"), { force: true });
     screen(d);
-    assert.match(h.beat(), /pointer not typed yet: a confirmation question is visible/, d);
+    assert.match(h.beat(), /pointer not typed: a confirmation question is visible .*the Front agent is told after 15/, d);
   }
   assert.equal(h.sent().length, 0);
-  // Held, not suppressed: after wake.dialogHoldMinutes the pointer is typed.
+  assert.equal(events().length, 0, "not told before the hold time");
+  // Held for the whole hold time: nothing is typed, the Front agent is told once.
+  screen(dialogs[0]);
   h.write("heartbeat.dialog.json", JSON.stringify({ since: Date.now() - 16 * 60_000, last: Date.now() - 30_000 }));
-  assert.match(h.beat(), /visible for the whole hold time: typing the pointer anyway/);
+  const out = h.beat();
+  assert.match(out, /appears to be waiting at a confirmation dialog \(since \d\d:\d\d, 16 minutes\): nothing is typed into it, it needs a person; told the Front agent/);
+  assert.equal(h.sent().length, 0, "never typed into a dialog");
+  assert.equal(events().length, 1);
+  h.beat();
+  assert.match(health() ?? "", /WAITING AT A CONFIRMATION DIALOG since \d\d:\d\d: nothing is typed into it/);
+  for (let i = 0; i < 3; i++) { h.beat(); }
+  assert.equal(events().length, 1, "once, not every minute");
+  assert.equal(h.sent().length, 0);
+  // Another question: told again. The same question later: not again.
+  screen("Overwrite other file? (y/n)");
+  h.beat();
+  assert.equal(events().length, 2, "a changed question is told again");
+  assert.equal(h.sent().length, 0);
+  // The dialog is answered by a person: the report ends, and the pointer may be typed.
+  screen("> ");
+  h.beat(); h.beat();
+  assert.equal(health(), null, "the dialog report ends with the dialog");
   assert.equal(h.sent().length, 1);
   // Ordinary prose, also in the last lines, does not hold it (the reviewer's examples).
   for (const prose of ["Do you want to merge T7 now? I will wait.", "I will press enter later; the plan: do you want to proceed with T3?", "Are you sure about 1. yes or 2. no? (see the table above)"]) {
-    fs.rmSync(path.join(h.ctl, "heartbeat.pointer"), { force: true }); fs.rmSync(path.join(h.ctl, "heartbeat.dialog.json"), { force: true });
+    fs.rmSync(path.join(h.ctl, "heartbeat.pointer"), { force: true });
     const n = h.sent().length;
     screen(prose);
     h.beat();
@@ -304,6 +325,58 @@ test("stress: a writer that appends with O_APPEND (cat >>) all the time, while t
   assert.deepEqual(seen, Array.from({ length: N }, (_, i) => `line ${i + 1}`), "every line exactly once, in order");
   assert.equal(fs.readFileSync(path_, "utf8").split("\n").filter(Boolean).length, N, "inbox.md still has all of them");
   assert.equal(fs.readFileSync(path.join(h.ctl, "inbox-done.md"), "utf8").split("\n").filter(Boolean).length, N);
+  h.done();
+});
+
+test("a last line without its newline is shown and counted like any other once the file has been quiet for a minute, wakes once, and is not cut in half before", () => {
+  const h = setup();
+  h.beat();
+  const inbox = inboxIn(h), path_ = path.join(h.ctl, "inbox.md");
+  h.write("heartbeat.last", "");   // no idle check due
+  h.write("inbox.md", "first line\nsecond, still being writ");
+  assert.equal(inbox().stdout, "first line\n", "a writer caught mid-append is not cut in half");
+  assert.equal(inbox(["--done"]).status, 0);
+  assert.doesNotMatch(h.beat(), /woke/, "the heartbeat counts what inbox.mjs shows: the first line is handled, nothing of the tail yet");
+  assert.doesNotMatch(h.beat(), /woke/, "and it does not wake every minute for a line that is still being written");
+  // Quiet for a minute: the tail is a line now, for the script and for the heartbeat alike.
+  const t = new Date(Date.now() - 61_000); fs.utimesSync(path_, t, t);
+  assert.equal(inbox().stdout, "first line\nsecond, still being writ", "shown");
+  h.write("heartbeat.last", ""); h.age("heartbeat.last", 5 * 60_000);
+  fs.utimesSync(path_, t, t);
+  assert.match(h.beat(), /woke term_c \(inbox\)/);
+  assert.equal(inbox(["--done"]).status, 0);
+  h.age("heartbeat.last", 5 * 60_000);
+  for (let i = 0; i < 3; i++) assert.doesNotMatch(h.beat(), /woke/, "handled: it does not wake every minute");
+  fs.appendFileSync(path_, "ten\n"); fs.utimesSync(path_, t, t);   // the writer ends its line much later
+  assert.equal(inbox().stdout, "ten\n", "the rest is what is new");
+  h.done();
+});
+
+test("a replaced, emptied or shrunk inbox.md is all new even when its start has the same text; the marker of an earlier format counts as all new", () => {
+  const h = setup();
+  h.beat();
+  const inbox = inboxIn(h), path_ = path.join(h.ctl, "inbox.md");
+  const old = new Date(Date.now() - 5 * 60_000);
+  const ageInbox = () => fs.utimesSync(path_, old, old);
+  h.write("inbox.md", "alpha\nbeta\n"); ageInbox();
+  inbox(); assert.equal(inbox(["--done"]).status, 0);
+  assert.equal(inbox().stdout, "(no new lines in inbox.md)\n");
+  // Replaced by a new file with the same text: a new inode or creation time.
+  fs.rmSync(path_); fs.writeFileSync(path_, "alpha\nbeta\n"); ageInbox();
+  assert.equal(inbox().stdout, "alpha\nbeta\n", "replaced: everything is new");
+  inbox(["--done"]);
+  // Emptied in place and refilled with a shorter start: smaller than when it was recorded.
+  fs.writeFileSync(path_, ""); fs.writeFileSync(path_, "alpha\n"); ageInbox();
+  assert.equal(inbox().stdout, "alpha\n", "shrunk: everything is new");
+  inbox(["--done"]);
+  // The marker without identity (written before this check existed): all new once.
+  const rec = JSON.parse(fs.readFileSync(path.join(h.ctl, "inbox.handled.json"), "utf8"));
+  fs.writeFileSync(path.join(h.ctl, "inbox.handled.json"), JSON.stringify({ bytes: rec.bytes, hash: rec.hash }));
+  assert.equal(inbox().stdout, "alpha\n");
+  // The same file, only appended to: still handled up to the record.
+  inbox(["--done"]);
+  fs.appendFileSync(path_, "gamma\n"); ageInbox();
+  assert.equal(inbox().stdout, "gamma\n");
   h.done();
 });
 

@@ -374,6 +374,8 @@ const hangCheck = () => {
   const lines = [];
   if (next.since) lines.push(hungText(next));
   if (notStarted && !restarted) lines.push(`RESTARTED at ${hhmm(restartAt)}, but the Controller has not written status.md since: it has not started a cycle`);
+  const dlgState = readJson("heartbeat.dialog.json", {});
+  if (dlgState.reportedShape) lines.push(`WAITING AT A CONFIRMATION DIALOG since ${hhmm(dlgState.since)}: nothing is typed into it, it needs a person`);
   if (twoControllers && !restarted) lines.push(`TWO CONTROLLERS: the old terminal ${twoControllers} could not be closed after the restart: close it by hand`);
   if (!lines.length && next.restartedAt && now - next.restartedAt < 60 * 60_000) lines.push(`RESTARTED automatically at ${hhmm(next.restartedAt)} after a hang`);
   writeHealth(lines);
@@ -410,14 +412,24 @@ if (!idle) {
   const finished = wave.state === "finished";
   if ((inboxWaiting || fresh.length || finished) && Date.now() - busySince >= WAKE.busyPointerMinutes * 60_000) {
     const key = JSON.stringify([inboxWaiting ? createHash("sha1").update(readText("inbox.md")).digest("hex") : null, fresh, finished ? wave.handle : null]);
-    // A confirmation question on the screen delays the pointer (Enter would take its default), by at most wake.dialogHoldMinutes.
-    const onDialog = readText("heartbeat.pointer") !== key && dialogVisible(readScreen());
+    // While the last lines of the screen look like a confirmation question nothing is typed, however long it lasts (Enter would take
+    // its default). After wake.dialogHoldMinutes the Front agent is told instead, once, and again only when the question changes.
+    const pending = readText("heartbeat.pointer") !== key, screenNow = pending ? readScreen() : null;
+    const onDialog = pending && dialogVisible(screenNow);
     const dlg = readJson("heartbeat.dialog.json", {}), now = Date.now();
-    const heldSince = onDialog ? (dlg.since && dlg.last && now - dlg.last < 3 * 60_000 ? dlg.since : now) : 0;
-    if (onDialog) fs.writeFileSync(file("heartbeat.dialog.json"), JSON.stringify({ since: heldSince, last: now })); else fs.rmSync(file("heartbeat.dialog.json"), { force: true });
-    if (onDialog && now - heldSince < WAKE.dialogHoldMinutes * 60_000) log(`pointer not typed yet: a confirmation question is visible in the Controller's terminal (held ${Math.round((now - heldSince) / 60_000)} of ${WAKE.dialogHoldMinutes} minutes at most)`);
-    else if (readText("heartbeat.pointer") !== key) {
-      if (onDialog) log("a confirmation question has been visible for the whole hold time: typing the pointer anyway");
+    if (!onDialog) fs.rmSync(file("heartbeat.dialog.json"), { force: true });
+    else {
+      const shape = frame(screenNow.split("\n").slice(-8).join("\n"));
+      const state = { since: dlg.since && dlg.last && now - dlg.last < 3 * 60_000 ? dlg.since : now, last: now, shape, reportedShape: dlg.reportedShape };
+      const held = Math.round((now - state.since) / 60_000);
+      if (now - state.since >= WAKE.dialogHoldMinutes * 60_000 && state.reportedShape !== shape) {
+        state.reportedShape = shape;
+        const text = `the Controller appears to be waiting at a confirmation dialog (since ${hhmm(state.since)}, ${held} minutes): nothing is typed into it, it needs a person`;
+        log(`${text}; told the Front agent: ${tellFront("DIALOG", text, { type: "question" }).join(", ")}`);
+      } else log(`pointer not typed: a confirmation question is visible in the Controller's terminal (${held} minutes; the Front agent is told after ${WAKE.dialogHoldMinutes})`);
+      fs.writeFileSync(file("heartbeat.dialog.json"), JSON.stringify(state));
+    }
+    if (!onDialog && pending) {
       const inboxOnly = inboxWaiting && !fresh.length && !finished;
       orca("terminal", "send", "--terminal", terminal.handle, "--text", inboxOnly ? POINTER : POINTER_MAIL, "--enter");
       fs.writeFileSync(file("heartbeat.pointer"), key);

@@ -32,7 +32,7 @@ The same as in `FRONT_AGENT.md`, "How you work with {{HUMAN}}": full transparenc
 
 ## Relaying answers and orders to the Controller
 
-- Append one dated line to its `inbox.md` ({{INBOX_CMD}}); `inbox.md` stays the record of orders.
+- Append one dated line to its `inbox.md` ({{INBOX_CMD}}); `inbox.md` stays the record of orders. `inbox.md` is **append-only**: only ever append to it (one `>>` per line, ending with a newline); never empty, edit, replace or rewrite it, also not to "clean up", because the Controller records how far it has read by position, and a file that is emptied and refilled can hide a new line.
 - For something urgent, also send the text into the Controller's terminal: `orca terminal send --terminal <handle> --text "…" --enter` (for a Controller on another machine, add `--environment <its Orca environment>`).
 - As soon as an answer is relayed, update or close the item.
 

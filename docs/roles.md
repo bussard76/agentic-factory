@@ -42,7 +42,7 @@ Files in the controller directory on the server (default `~/controller/`):
 | File | Written by | Content |
 |---|---|---|
 | `status.md` | Controller, after every cycle, overwritten completely | worker table; what reached `main`; "Needs the human" with options and recommendation; acceptance items with a sentence to try; problems; next steps |
-| `inbox.md` | Front agent | the human's answers and new orders, one dated line each; append-only: the Controller never rewrites it, `node inbox.mjs --done` records how far it has handled it and copies those lines to `inbox-done.md` |
+| `inbox.md` | Front agent | the human's answers and new orders, one dated line each; append-only for everybody, the human included: never empty, edit or replace it; the Controller never rewrites it, `node inbox.mjs --done` records how far it has handled it and copies those lines to `inbox-done.md` |
 | `events.md` | Front agent (transition only) | worker events relayed from the human's machine |
 | `journal.ndjson` | Controller | one JSON event per line, see [improvement.md](improvement.md) |
 | `front-events.log` | Controller, when the event happens | with the Front agent on the server or a bot as Front agent: one line per event, `<date> FRONT-EVENT <KIND>: <one sentence>`, kinds `DONE`, `PUSHED`, `GATE-GREEN`, `GATE-RED`, `REVIEW`, `NEEDS-HUMAN`, `BLOCKED`, `IDLE`, `ANSWER`. Append-only; never archived, rotated or truncated, and the inbox archival must not touch it |
