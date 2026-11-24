@@ -120,7 +120,7 @@ git status
 
 An older project has not chosen yet whether an Architect maintains an `ARCHITECTURE.md`. `status` asks; set `architecture.mode` to `architect` or `off` in `factory.config.json` and run `update` again.
 
-To stay on a release instead of `main`, use `git -C ~/agentic-factory checkout <tag>`, for example `v0.1.12`. `pull --ff-only` then stops working until you run `git -C ~/agentic-factory switch main`.
+To stay on a release instead of `main`, use `git -C ~/agentic-factory checkout <tag>`, for example `v0.1.13`. `pull --ff-only` then stops working until you run `git -C ~/agentic-factory switch main`.
 
 </details>
 
@@ -136,13 +136,12 @@ Open points are in [`debt.md`](debt.md), and past reviews of this repository in 
 
 ## What has run for real
 
-- **Run for real, twice:** end to end on macOS in a throwaway project, with a Claude Code Controller and an Orca bot as Front agent. The second run followed START.md alone: three tickets reached the main branch without a manual wake-up, and cleanup removed the workers by itself.
-- **Not run for real since:** the last run was on a state before the latest heartbeat, cleanup and wave changes. Those are tested against fakes only.
+- **Run for real, three times:** end to end on macOS in throwaway projects, with a Claude Code Controller and an Orca bot as Front agent. The last run was on this release's state minus its last small fix (#70). Four tickets reached the main branch, two of them through the documentation-only path. Every wave ran the full gate for code, one wave stopped because a commit was pushed after its review, and cleanup removed the finished workers with `--apply`.
+- **Not run for real:** a remote Controller host, a Controller on another agent CLI than Claude Code, and a documentation-only wave on a remote worker host.
 - **Tested against fakes:** the test suite replaces Orca, ssh, `launchctl`, `crontab` and `gh` with fakes that record their calls. That is how the heartbeat, the wake rules, cleanup, capacity, the bot watch and the second-factory rules are tested.
 - **Never run against a real Orca:** the automatic restart of a hung Controller (off by default). That closing the Controller's terminal leaves its workers alone is unproven. [Orca](docs/orca.md#heartbeat) lists what a restart kills and what is unproven.
-- **Not tested again:** a remote Controller host, and a documentation-only wave on a remote worker host.
-- **Opt-in and little mileage:** the documentation-only path did not apply in the second real run, because a task branch also carries its spec review and report; it now accepts those two files of the ticket and needs the ticket's own declaration, tested with fakes and reviewed, but no real run has used it since. The formatter on staged files was tested with a stand-in, not with `prettier` itself. Both are off until you turn them on.
-- **Unproven:** why Orca read a Claude Code Controller at its prompt as busy for five minutes in one run. The heartbeat therefore does not guess from the screen. See "Busy or idle?" in [Orca](docs/orca.md#heartbeat).
+- **Opt-in:** the documentation-only path applied in the last real run, for two tickets. What it saves is the Tester round, not the gate. The formatter on staged files was tested with a stand-in, not with `prettier` itself. Both are off until you turn them on.
+- **Unproven:** why Orca reads a Claude Code Controller as busy while its `wait.mjs` background shell runs. In the last run the Controller had to be woken by hand once, after 12 minutes. The heartbeat therefore does not guess from the screen. See "Busy or idle?" in [Orca](docs/orca.md#heartbeat).
 
 ## Documentation
 
@@ -177,7 +176,7 @@ site/         the one-page intro
 
 ## A start, not an end state
 
-Version 0.1.12, first extracted on 2026-10-31 from a project that has run this way since 2026-10-27.
+Version 0.1.13, first extracted on 2026-10-31 from a project that has run this way since 2026-10-27.
 
 Each project adapts its copy, and `update` never overwrites those changes. The numbers in the config are starting values that get calibrated from measurements. A remote server and a day and night rhythm are options.
 
