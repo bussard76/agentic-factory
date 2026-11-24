@@ -116,6 +116,7 @@ test("a positional argument is a usage error where the usage names none", () => 
 // A new one goes here; an option the script itself reads goes into its Usage: line instead.
 const FOREIGN = {
   "controller/capacity.mjs": ["--json"],
+  "controller/cycle.mjs": ["--limit"],
   "controller/cleanup.mjs": ["--json", "--full", "-q", "--prune", "--porcelain", "--terminal", "--verify", "--worktree", "-r", "--merged", "--delete", "--dispatch"],
   "controller/docsonly.mjs": ["-C", "-q", "--verify", "--path-format", "--git-common-dir", "--json", "--ticket", "--issue", "--ticket-text", "--jq"],
   "controller/reviewed.mjs": ["-C", "-q", "-e", "-z", "--raw", "--no-renames", "--no-tags", "--verify", "--is-ancestor"],
