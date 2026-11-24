@@ -102,8 +102,10 @@ for (const host of HOSTS) {
 // dispatch state (lib.mjs workerStatus). Orca is asked at most once per run, and for the sidebar at most every 10 minutes:
 // the counts are cached in heartbeat.workers.json. `fresh` (the full check) always asks.
 const COUNT_CACHE_MS = 10 * 60_000;
-// FACTORY_MINUTE (0-59) replaces the wall clock's minute: a hook for the tests, so that no test depends on the minute it runs in.
-const minuteNow = /^\d{1,2}$/.test(process.env.FACTORY_MINUTE ?? "") ? Number(process.env.FACTORY_MINUTE) : new Date().getMinutes();
+// FACTORY_MINUTE (0-59) replaces the wall clock's minute, but only inside the test support environment (test/support/safe-env.mjs sets
+// AF_TEST_SAFE_BIN): a stray FACTORY_MINUTE in a cron or launchd environment is ignored, so no test depends on the minute it runs in
+// and production always reads the clock.
+const minuteNow = process.env.AF_TEST_SAFE_BIN && /^\d{1,2}$/.test(process.env.FACTORY_MINUTE ?? "") ? Number(process.env.FACTORY_MINUTE) : new Date().getMinutes();
 const fullCheck = minuteNow % 10 === 0;
 let counted;
 const workerCounts = (records, fresh = fullCheck) => {

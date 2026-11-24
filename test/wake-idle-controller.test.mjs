@@ -40,7 +40,15 @@ else out({});`);
   fs.chmodSync(fake, 0o755);
   const env = { ...process.env, ORCA_CLI_COMMAND: fake, FACTORY_CONFIG: path.join(ctl, "factory.config.json"), FACTORY_MINUTE: tenth ? "0" : "5" };
   const beat = () => { const r = spawnSync("node", [path.join(ctl, "heartbeat.mjs")], { encoding: "utf8", env }); assert.equal(r.status, 0, r.stderr); return r.stdout; };
-  const cycle = (mode) => spawnSync("node", [path.join(ctl, "cycle.mjs"), mode], { encoding: "utf8", env, cwd: ctl });
+  // cycle.mjs acts only from the recorded Controller terminal: the record is written around the call (the heartbeat tests that follow must
+  // not see it), and the environment says which terminal and which agent session the call comes from (handle null: no variable at all).
+  const cycle = (mode, { handle = "term_c", record = "term_c", agent = "agent-1" } = {}) => {
+    const recordFile = path.join(ctl, "controller-terminal.txt");
+    if (record) fs.writeFileSync(recordFile, `${record}\n${project}\n`);
+    const e = { ...env, ORCA_AGENT_SESSION_ID: agent };
+    if (handle) e.ORCA_TERMINAL_HANDLE = handle; else delete e.ORCA_TERMINAL_HANDLE;
+    try { return spawnSync("node", [path.join(ctl, "cycle.mjs"), mode], { encoding: "utf8", env: e, cwd: ctl }); } finally { fs.rmSync(recordFile, { force: true }); }
+  };
   const all = () => (fs.existsSync(calls) ? fs.readFileSync(calls, "utf8").trim().split("\n").map((l) => JSON.parse(l)) : []);
   const sent = () => all().filter((a) => a[0] === "terminal" && a[1] === "send").map((a) => a[a.indexOf("--text") + 1]);
   const waits = () => all().filter((a) => a[0] === "terminal" && a[1] === "wait").length;
@@ -275,33 +283,69 @@ test("cycle.mjs: end writes the marker, start removes it even when Orca fails; s
   h.done();
 });
 
-test("mail is handled only when this session's start printed it: a list left by a dead session, a restart or another terminal is thrown away, and its mail stays new", () => {
+test("mail is handled only when this session's start printed it: a list left by a dead session, a restart, another terminal or a relaunched agent is thrown away, and its mail stays new", () => {
   const h = setup();
   h.patch({ messages: [doneMsg] });
-  const as = (handle) => ({ ...process.env, ORCA_CLI_COMMAND: path.join(h.dir, "fake-orca.mjs"), FACTORY_CONFIG: path.join(h.ctl, "factory.config.json"), ...(handle ? { ORCA_TERMINAL_HANDLE: handle } : {}) });
-  const run = (mode, handle) => spawnSync("node", [path.join(h.ctl, "cycle.mjs"), mode], { encoding: "utf8", env: as(handle), cwd: h.ctl });
   const handled = () => (h.has("mail.handled.json") ? JSON.parse(fs.readFileSync(path.join(h.ctl, "mail.handled.json"), "utf8")) : []);
-  // A dead session printed m1; a new Controller in another terminal forgets `start` and runs `end`: nothing is recorded.
-  run("start", "term_old");
-  const lateEnd = run("end", "term_new");
-  assert.match(lateEnd.stdout, /was not recorded \(it was read by another terminal\)/);
+  // Printed in terminal term_old; the Controller was started again in term_new (the record changed); its cycle forgot `start`.
+  h.cycle("start", { handle: "term_old", record: "term_old" });
+  const lateEnd = h.cycle("end", { handle: "term_new", record: "term_new" });
+  assert.match(lateEnd.stdout, /was not recorded \(it was read by another session\)/);
   assert.deepEqual(handled(), []);
   assert.equal(h.has("mail.read.json"), false, "and the list is gone");
+  // The agent was relaunched in the same terminal (a new Orca agent session) and its cycle forgot `start`: the old list is not its own.
+  h.cycle("start", { agent: "agent-1" });
+  const relaunched = h.cycle("end", { agent: "agent-2" });
+  assert.match(relaunched.stdout, /was not recorded \(it was read by another session\)/);
+  assert.deepEqual(handled(), []);
+  assert.equal(h.has("controller.waiting.json"), true, "the marker is the new session's own word and is written");
   // Printed before a restart, ended after it.
-  run("start", "term_c");
+  h.cycle("start");
   fs.writeFileSync(path.join(h.ctl, "heartbeat.restarted.json"), JSON.stringify({ at: Date.now() + 1000 }));
-  assert.match(run("end", "term_c").stdout, /it was read before the last restart/);
+  assert.match(h.cycle("end").stdout, /it was read before the last restart/);
   assert.deepEqual(handled(), []);
   // The same session, start then end: handled. A message that arrived after start is not.
   fs.rmSync(path.join(h.ctl, "heartbeat.restarted.json"));
-  run("start", "term_c");
+  h.cycle("start");
   h.patch({ messages: [doneMsg, { id: "m2", type: "worker_done", from: "term_w", subject: "later" }] });
-  run("end", "term_c");
+  h.cycle("end");
   assert.deepEqual(handled(), ["m1"]);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(h.ctl, "controller.waiting.json"), "utf8")).startedAt > 0, true, "the marker names the start of its cycle");
   // A list that is not a list of the printed shape records nothing.
-  fs.writeFileSync(path.join(h.ctl, "mail.read.json"), JSON.stringify({ at: Date.now(), session: null, ids: "m2" }));
-  run("end", null);
+  fs.writeFileSync(path.join(h.ctl, "mail.read.json"), JSON.stringify({ at: Date.now(), session: "term_c|a1", ids: "m2" }));
+  h.cycle("end");
   assert.deepEqual(handled(), ["m1"]);
+  h.done();
+});
+
+test("cycle.mjs acts only from the Controller's own terminal: a worker, a person in another terminal, a shell without the handle, or no record to compare with change nothing", () => {
+  const h = setup();
+  h.patch({ messages: [doneMsg] });
+  const state = () => ["controller.waiting.json", "mail.read.json", "mail.handled.json"].map((f) => h.has(f));
+  // From the Controller: both work.
+  assert.equal(h.cycle("start").status, 0);
+  assert.deepEqual(state(), [false, true, false]);
+  // A worker's terminal runs `end` and `start`: nothing changes, and it says why.
+  const end = h.cycle("end", { handle: "term_w" });
+  assert.equal(end.status, 0);
+  assert.match(end.stdout, /this is terminal term_w, not the Controller's \(term_c\): nothing was changed/);
+  assert.deepEqual(state(), [false, true, false], "no marker, the list is neither committed nor deleted");
+  // The Controller ends its cycle; a worker's `start` must not remove its marker or replace its list.
+  h.cycle("end");
+  assert.deepEqual(state(), [true, false, true]);
+  const start = h.cycle("start", { handle: "term_w" });
+  assert.match(start.stdout, /not the Controller's.*nothing was changed/);
+  assert.deepEqual(state(), [true, false, true], "the Controller's marker stands");
+  // No handle in the environment.
+  const bare = h.cycle("end", { handle: null });
+  assert.match(bare.stdout, /ORCA_TERMINAL_HANDLE is not set.*nothing was changed/);
+  h.write("controller.waiting.json", JSON.stringify({ at: 1 }));
+  h.cycle("start", { handle: null });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(h.ctl, "controller.waiting.json"), "utf8")).at, 1, "not removed");
+  // No record of the Controller's terminal: nothing to compare with.
+  const norecord = h.cycle("end", { record: null });
+  assert.match(norecord.stdout, /there is no controller-terminal\.txt.*nothing was changed/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(h.ctl, "controller.waiting.json"), "utf8")).at, 1);
   h.done();
 });
 
@@ -501,4 +545,16 @@ test("the heartbeat takes its tenth minute from FACTORY_MINUTE, not from the wal
   hh.patch({ idle: true });
   assert.match(hh.beat(), /woke term_c \(workers\)/, "minute 0: the full check");
   h.done(); hh.done();
+});
+
+test("FACTORY_MINUTE is honoured only inside the test support environment: a stray one in a real environment is ignored and the clock decides", () => {
+  const h = setup({ state: { idle: true, terminals: [{ handle: "term_c", title: "p · Controller" }, { handle: "term_w", title: "T1 · Worker Developer" }] } });
+  h.write("workers.json", worker);
+  h.first();
+  const real = { ...process.env, ORCA_CLI_COMMAND: path.join(h.dir, "fake-orca.mjs"), FACTORY_CONFIG: path.join(h.ctl, "factory.config.json"), FACTORY_MINUTE: "0", NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=data:text/javascript,Date.prototype.getMinutes=()=>7`.trim() };
+  delete real.AF_TEST_SAFE_BIN;
+  const r = spawnSync("node", [path.join(h.ctl, "heartbeat.mjs")], { encoding: "utf8", env: real });
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stdout, /\(workers/, "the clock says minute 7: no full check, whatever FACTORY_MINUTE says");
+  h.done();
 });
