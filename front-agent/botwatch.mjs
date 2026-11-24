@@ -18,6 +18,7 @@ import { controllerHost, expand } from "./hosts.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const here = (name) => path.join(HERE, name);
 const NO_STATUS_GRACE_MS = 15 * 60_000;
+const HEALTH_MARK = "@@HEARTBEAT-HEALTH@@";
 const digest = (text) => createHash("sha256").update(text).digest("hex").slice(0, 12);
 const oneLine = (text) => text.replace(/[\x00-\x1f\x7f-\x9f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
 
@@ -38,15 +39,17 @@ function probe(cfg) {
   const host = controllerHost(cfg);
   const dir = cfg.hosts?.controller?.controllerDir ?? "~/controller";
   if (host.kind === "local") {
-    const file = path.join(expand(dir), "status.md");
-    if (!fs.existsSync(file)) return { host: host.name, mtime: 0, text: "" };
-    return { host: host.name, mtime: fs.statSync(file).mtimeMs / 1000, text: fs.readFileSync(file, "utf8") };
+    const file = path.join(expand(dir), "status.md"), healthFile = path.join(expand(dir), "heartbeat-health.md");
+    const health = fs.existsSync(healthFile) ? fs.readFileSync(healthFile, "utf8").trim() : "";
+    if (!fs.existsSync(file)) return { host: host.name, mtime: 0, text: "", health };
+    return { host: host.name, mtime: fs.statSync(file).mtimeMs / 1000, text: fs.readFileSync(file, "utf8"), health };
   }
   // BatchMode: a password prompt would hang until the precheck's timeout. An ssh failure throws: the host is unreachable.
   const ssh = [...(host.sshConfig ? ["-F", expand(host.sshConfig)] : []), "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host.ssh];
-  const out = execFileSync("ssh", [...ssh, `f=${dir}/status.md; if [ -f "$f" ]; then stat -c %Y "$f" 2>/dev/null || stat -f %m "$f"; cat "$f"; else echo 0; fi`], { encoding: "utf8", timeout: 20_000, stdio: ["ignore", "pipe", "pipe"] });
+  const out = execFileSync("ssh", [...ssh, `f=${dir}/status.md; if [ -f "$f" ]; then stat -c %Y "$f" 2>/dev/null || stat -f %m "$f"; cat "$f"; else echo 0; fi; echo; echo ${HEALTH_MARK}; cat ${dir}/heartbeat-health.md 2>/dev/null`], { encoding: "utf8", timeout: 20_000, stdio: ["ignore", "pipe", "pipe"] });
   const [mtime, ...rest] = out.split("\n");
-  return { host: host.name, mtime: Number(mtime) || 0, text: rest.join("\n") };
+  const body = rest.join("\n"), at = body.lastIndexOf(HEALTH_MARK);
+  return { host: host.name, mtime: Number(mtime) || 0, text: at >= 0 ? body.slice(0, at) : body, health: at >= 0 ? body.slice(at + HEALTH_MARK.length).trim() : "" };
 }
 
 // One project: compare with its last state line and return the reasons to wake the bot, plus the new state.
@@ -59,10 +62,14 @@ export function checkProject(project, prev, now = Date.now(), read = probe) {
   const reasons = [];
   let problem = "";
   try {
-    const { host, mtime, text } = read(cfg);
+    const { host, mtime, text, health = "" } = read(cfg);
     const ageMin = mtime ? Math.round((now / 1000 - mtime) / 60) : null;
     if (!mtime) problem = now - next.firstSeen >= NO_STATUS_GRACE_MS ? `NO STATUS: status.md missing on ${host} (Controller not started?)` : "";
     else if (ageMin > staleMin) problem = `STALE: status.md is ${ageMin} min old (limit ${staleMin})`;
+    // heartbeat-health.md says what the heartbeat found wrong with the Controller itself (hung, restarted); it is read even when status.md is not there.
+    const healthDigest = digest(health);
+    if (prev?.health !== undefined && prev.health !== healthDigest) reasons.push(`CONTROLLER HEALTH: ${oneLine(health) || "(cleared)"}`);
+    next.health = healthDigest;
     if (mtime) {
       const s = sections(text);
       for (const [key, label] of [["needs", `NEEDS ${human.toUpperCase()}`], ["front", "NEEDS FRONT AGENT"], ["problems", "PROBLEMS"]]) {

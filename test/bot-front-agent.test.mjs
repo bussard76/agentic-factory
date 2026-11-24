@@ -67,6 +67,22 @@ test("the precheck sets a baseline, then wakes the bot only for a change, local 
   h.done();
 });
 
+test("the heartbeat's health file (a hung Controller) wakes the bot once, and again when it clears", () => {
+  const h = watchSetup();
+  h.write(h.alpha); h.write(h.beta);
+  assert.equal(h.run().status, 1, "baseline");
+  const health = path.join(h.dir, "controller-alpha", "heartbeat-health.md");
+  fs.writeFileSync(health, "- HUNG since 08:00: busy, no change for 31 minutes\n");
+  assert.equal(h.run().status, 0);
+  assert.match(h.wake(), /## alpha[\s\S]*CONTROLLER HEALTH: - HUNG since 08:00/);
+  assert.doesNotMatch(h.wake(), /## beta/);
+  assert.equal(h.run().status, 1, "reported once");
+  fs.rmSync(health);
+  assert.equal(h.run().status, 0);
+  assert.match(h.wake(), /CONTROLLER HEALTH: \(cleared\)/);
+  h.done();
+});
+
 test("a stale status and an unreachable host wake the bot once, not every 5 minutes", () => {
   const h = watchSetup();
   h.write(h.alpha); h.write(h.beta);

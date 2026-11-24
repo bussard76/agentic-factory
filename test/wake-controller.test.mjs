@@ -51,7 +51,7 @@ function beatSetup(terminals, extra = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "af-wake-"));
   const ctl = path.join(dir, "ctl"), project = path.join(dir, "p");
   fs.mkdirSync(path.join(ctl, "steering"), { recursive: true }); fs.mkdirSync(path.join(project, "docs/tasks"), { recursive: true });
-  for (const f of ["heartbeat.mjs", "cli.mjs", "controller-terminal.mjs", "lib.mjs", "steering/tasks.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
+  for (const f of ["heartbeat.mjs", "cli.mjs", "controller-terminal.mjs", "front-notice.mjs", "inbox.mjs", "restart.mjs", "lib.mjs", "steering/tasks.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
   fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main", humanName: "Alex" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local", projectDir: project, orcaRepoId: "r" }] } }));
   fs.writeFileSync(path.join(ctl, "status.md"), "# Status\n");
   const state = path.join(dir, "state.json"), calls = path.join(dir, "calls.log"), fake = path.join(dir, "fake.mjs");
@@ -351,15 +351,36 @@ test("a job that is scheduled but silent or failing is reported, not OK", () => 
   assert.match(h.cli(["start"]).stdout, /scheduled with launchd/);
   h.stamp(0);
   assert.match(h.cli(["doctor"]).stdout, /OK      heartbeat scheduled \(launchd\)/);
-  h.stamp(10);
+  // N5: a job installed a moment ago is "not run yet" even when the heartbeat.alive a reinstall leaves behind is old.
+  h.stamp(10); h.touch("heartbeat.ok", 10);   // what the job before the reinstall left behind
+  const fresh = h.cli(["doctor"]);
+  assert.equal(fresh.status, 0, fresh.stdout);
+  assert.match(fresh.stdout, /OK      heartbeat scheduled \(launchd\)/);
+  assert.doesNotMatch(fresh.stdout, /MISSING/);
+  for (const f of fs.readdirSync(h.agents).filter((f) => /heartbeat.*\.plist$/.test(f))) { const t = new Date(Date.now() - 20 * 60_000); fs.utimesSync(path.join(h.agents, f), t, t); }
   const silent = h.cli(["doctor"]);
   assert.equal(silent.status, 1);
   assert.match(silent.stdout, /MISSING heartbeat scheduled \(launchd\), but it has not run for 10 minutes/);
   assert.match(hb(h).problem, /has not run for 10 minutes/);
   assert.match(JSON.parse(h.cli(["status", "--json"]).stdout).next, /scheduled but it has not run/);
-  h.stamp(0);
+  h.stamp(0); fs.rmSync(path.join(h.ctlDir, "heartbeat.ok"), { force: true });
   fs.writeFileSync(path.join(h.flags, "last-exit"), "127");
   assert.match(h.cli(["doctor"]).stdout, /MISSING heartbeat scheduled \(launchd\), but its last run failed \(exit code 127/);
+  h.done();
+});
+
+test("start clears the heartbeat's record of an automatic restart, and renders the project's thresholds into CONTROLLER.md", () => {
+  const h = startSetup();
+  assert.match(h.cli(["start"]).stdout, /scheduled with launchd/);
+  assert.match(fs.readFileSync(path.join(h.ctlDir, "CONTROLLER.md"), "utf8"), /above 50 percent[\s\S]*restarted less than 30 minutes ago/, "the defaults");
+  fs.writeFileSync(path.join(h.ctlDir, "heartbeat.hung.json"), JSON.stringify({ hangRestarts: 1 }));
+  h.edit((c) => { c.hosts.controller.restart = { contextPercent: 70, minGapMinutes: 45 }; c.hosts.controller.hung = { minutes: 40, restartAfterMinutes: 20 }; c.hosts.controller.wake = { idleMinutes: 60, busyPointerMinutes: 4 }; });
+  h.cli(["start"]);
+  assert.equal(fs.existsSync(path.join(h.ctlDir, "heartbeat.hung.json")), false, "a person ran start: the record is cleared");
+  const text = fs.readFileSync(path.join(h.ctlDir, "CONTROLLER.md"), "utf8");
+  assert.match(text, /above 70 percent[\s\S]*restarted less than 45 minutes ago/);
+  assert.match(text, /at most every 60 minutes[\s\S]*after 4 minutes[\s\S]*for 40 minutes, counts as hung[\s\S]*if nothing changed 20 minutes later/);
+  assert.doesNotMatch(text, /\{\{/);
   h.done();
 });
 

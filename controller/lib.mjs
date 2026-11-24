@@ -65,6 +65,15 @@ const ctlHost = workerHosts.find((h) => h.name === controllerHostName) ?? worker
 export const PROJECT_DIR = projectDirOn({ ...ctlHost, kind: "local", projectDir: ctl.projectDir ?? ctlHost.projectDir, projectsDir: ctl.projectsDir ?? ctlHost.projectsDir });
 export const CONTROLLER_HOME = ctl.controllerDir ?? "~/controller"; // as configured: a leading ~ is expanded by the shell of the host it is used on
 export const CONTROLLER_DIR = expand(CONTROLLER_HOME);
+// Tuning of the heartbeat's wakes, of hang detection and of restarts (hosts.controller.wake, .hung, .restart). A missing or
+// unusable value is the default; the defaults are documented in docs/orca.md.
+const positive = (v, fallback) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : fallback);
+export const WAKE = { idleMinutes: positive(ctl.wake?.idleMinutes, 30), busyPointerMinutes: positive(ctl.wake?.busyPointerMinutes, 2) };
+export const HUNG = {
+  minutes: positive(ctl.hung?.minutes, 25), restartAfterMinutes: positive(ctl.hung?.restartAfterMinutes, 15), restart: ctl.hung?.restart !== false,
+  patterns: Array.isArray(ctl.hung?.patterns) ? ctl.hung.patterns.filter((p) => typeof p === "string" && p) : [], patternMinutes: positive(ctl.hung?.patternMinutes, 10),
+};
+export const RESTART = { minGapMinutes: positive(ctl.restart?.minGapMinutes, 30), contextPercent: positive(ctl.restart?.contextPercent, 50) };
 
 // --- orca --------------------------------------------------------------------------------------
 export function hasBin(name) { return spawnSync("sh", ["-c", `command -v ${name}`], { stdio: "ignore" }).status === 0; }
@@ -179,6 +188,8 @@ export const readState = (name, fallback) => {
 };
 /** Writes through a temporary file and a rename, so a reader in another process never sees a half-written file. */
 export const writeJson = (name, value) => { const tmp = `${file(name)}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n"); fs.renameSync(tmp, file(name)); };
+/** Writes text through a temporary file and a rename (as writeJson), for files the watchers read from outside. */
+export const writeText = (name, text) => { const tmp = `${file(name)}.${process.pid}.tmp`; fs.writeFileSync(tmp, text); fs.renameSync(tmp, file(name)); };
 export const journal = (type, task, extra = {}) => fs.appendFileSync(file("journal.ndjson"), JSON.stringify({ ts: new Date().toISOString(), type, task, ...extra }) + "\n");
 export const modelFor = (tier, agent = config.agents?.default ?? "codex") => (agent === FALLBACK.agent ? FALLBACK.models?.[tier] : MODELS[tier]) ?? MODELS.default;
 /** A setup or shell terminal in an entry. Its name contains the entry's role, but it is neither the worker nor a wave. */

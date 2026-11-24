@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { check } from "../controller/cli.mjs";
-import { controllerPlaces, locateController } from "../controller/controller-terminal.mjs";
+import { controllerPlaces, controllerSession, createArgs, createdHandle, locateController } from "../controller/controller-terminal.mjs";
 import { heartbeatCronCheckScript, heartbeatCronScript, heartbeatLabel, heartbeatPlist, statusWatchCronScript, statusWatchLabel, statusWatchPlist } from "./heartbeat-cron.mjs";
 import { applyReadGrants } from "./read-grants.mjs";
 import { copyTreeAtomic, withLock, writeFileAtomic } from "./safe-write.mjs";
@@ -419,6 +419,10 @@ function templateVars(c) {
     UI_LANGUAGE: c.project.language === "de" ? "German" : "English", LANGUAGE_NAME: c.project.language === "de" ? "German" : "English",
     MAX_ROUNDS: String(c.reviews.maxRounds), SUITE_MAX: String(ctl.capacity?.suiteWorkersMax ?? c.capacity.suiteWorkersMax), READONLY_MAX: String(ctl.capacity?.readOnlyWorkersMax ?? c.capacity.readOnlyWorkersMax),
     UNIT_SLOTS: String(ctl.capacity?.gate?.unitSlots ?? c.capacity.gate.unitSlots), E2E_SLOTS: String(ctl.capacity?.gate?.e2eSlots ?? c.capacity.gate.e2eSlots),
+    // hosts.controller.wake, .hung and .restart: defaults as in controller/lib.mjs and docs/orca.md.
+    WAKE_IDLE_MINUTES: String(c.hosts.controller.wake?.idleMinutes ?? 30), BUSY_POINTER_MINUTES: String(c.hosts.controller.wake?.busyPointerMinutes ?? 2),
+    HUNG_MINUTES: String(c.hosts.controller.hung?.minutes ?? 25), HUNG_RESTART_MINUTES: String(c.hosts.controller.hung?.restartAfterMinutes ?? 15),
+    CONTEXT_PERCENT: String(c.hosts.controller.restart?.contextPercent ?? 50), RESTART_GAP_MINUTES: String(c.hosts.controller.restart?.minGapMinutes ?? 30),
     MODEL_SMALL: c.agents.models.small, MODEL_DEFAULT: c.agents.models.default, MODEL_LARGE: c.agents.models.large,
     AGENT_DEFAULT: c.agents.default, AGENT_FALLBACK: c.agents.fallback.agent, FB_SMALL: c.agents.fallback.models.small, FB_DEFAULT: c.agents.fallback.models.default, FB_LARGE: c.agents.fallback.models.large, QUOTA_THRESHOLD: String(c.agents.fallback.quotaThresholdPercent),
     WAVE_PASSED: String(c.reviews.waveTriggers.passedTasks), WAVE_MINUTES: String(c.reviews.waveTriggers.waitMinutes), FAST_LANE_MAX: String(c.improvement.fastLaneMaxParallel),
@@ -953,7 +957,6 @@ const controllerTerminal = (c) => {
   } catch { return null; }
 };
 const hasControllerTerminal = (c) => Boolean(controllerTerminal(c)?.terminal);
-const agentCommand = (agent, prompt, args) => `${agent}${args ? ` ${args}` : ""} ${JSON.stringify(prompt)}`;
 
 // Reads the Controller's status.md (local file or over ssh): age in minutes and the open "Needs <human>" items.
 function controllerStatus(c) {
@@ -1112,7 +1115,10 @@ function heartbeatScheduled(c, ctl, dir) {
   const label = heartbeatJob(c);
   if (ctl.kind !== "local" || !fs.existsSync(launchdPlistPath(label))) return {};
   const printed = spawnSync("launchctl", ["print", `gui/${process.getuid()}/${label}`], { encoding: "utf8" });
-  return printed.status === 0 ? { how: "launchd", lastExit: Number(/last exit code = (-?\d+)/.exec(printed.stdout ?? "")?.[1] ?? 0) } : {};
+  // The plist is written when the job is installed (not when it is unchanged), so its age tells a job installed a moment ago from one
+  // that went silent: a reinstall leaves the old heartbeat.alive behind for the first minutes.
+  let installedMin; try { installedMin = (Date.now() - fs.statSync(launchdPlistPath(label)).mtimeMs) / 60000; } catch { /* no plist time */ }
+  return printed.status === 0 ? { how: "launchd", installedMin, lastExit: Number(/last exit code = (-?\d+)/.exec(printed.stdout ?? "")?.[1] ?? 0) } : {};
 }
 // What doctor and status report. scheduled: cron, launchd, or "external" (it ran in the last minutes although neither is set up:
 // the host's own scheduler runs it). state, for a job that is scheduled: "not-yet" (just installed), "never-ran", "silent" (no
@@ -1132,7 +1138,7 @@ function heartbeatStatus(c) {
   let state = null, problem = null;
   if (scheduled && scheduled !== "external") {
     if (seen === null) [state, problem] = installed !== null && installed > HEARTBEAT_SILENT_MIN ? ["never-ran", `it has never run (it was installed ${Math.round(installed)} minutes ago; see heartbeat.log, and run start to schedule it again)`] : ["not-yet", null];
-    else if (!runs) [state, problem] = ["silent", `it has not run for ${Math.round(seen)} minutes (see heartbeat.log; run start to schedule it again)`];
+    else if (!runs) [state, problem] = by.installedMin !== undefined && by.installedMin <= HEARTBEAT_SILENT_MIN ? ["not-yet", null] : ["silent", `it has not run for ${Math.round(seen)} minutes (see heartbeat.log; run start to schedule it again)`];
   }
   // Only a copy that writes heartbeat.alive can tell "started" from "got through".
   if (!problem && started !== null && (scheduled || runs) && (ok === null ? started > 1 : ok - started > 2)) [state, problem] = ["failed", `its last run did not get through (it starts but ends in an error or without Orca: see heartbeat.log)`];
@@ -1371,8 +1377,7 @@ async function start() {
   if (frontKind(c) === "orca-bot") failed += armBotWatch(c, fa);
   const ctl = c.hosts.workers.find((h) => h.name === c.hosts.controller.host) ?? { kind: "local", name: "local" };
   const dir = c.hosts.controller.controllerDir ?? "~/controller";
-  const prompt = `Read ${dir}/CONTROLLER.md and act as the Controller for the project ${c.project.name}.`;
-  const session = `cd ${dir} && ${agentCommand(c.agents.default, prompt, c.agents.controllerArgs)}`;
+  const session = controllerSession({ dir, project: c.project.name, agent: c.agents.default, args: c.agents.controllerArgs });
   const title = controllerTitle(c);
   if (minimal(c)) {
     say("\nStandard:"); if (!installStandard()) failed++;
@@ -1420,6 +1425,9 @@ async function start() {
     else { failed++; say(`Gate on ${h.name}: could not copy it to ${dir} (${(cp.stderr || "").trim().slice(0, 200)}). Gates run there too, so this start failed.`); }
   }
   failed += armHeartbeat(c, ctl, dir);
+  // Running `start` is somebody looking at the project: a Controller restarted automatically after a hang may be restarted once more
+  // if it hangs again, so the heartbeat's record of that restart (and of a hang in progress) is cleared here and nowhere else.
+  try { if (ctl.kind === "local") fs.rmSync(path.join(expandHome(dir), "heartbeat.hung.json"), { force: true }); else spawnSync("ssh", [...sshArgsFor(ctl), `rm -f ${dir}/heartbeat.hung.json`], { encoding: "utf8" }); } catch { /* a later start clears it */ }
   // The Controller's own agent session, in an Orca terminal so the Front agent can read it and send it text.
   const located = controllerTerminal(c);
   const running = located?.terminal;
@@ -1440,9 +1448,9 @@ async function start() {
     if (ctl.kind === "remote" && (!ctl.orcaEnvironment || !remoteHome.startsWith("/") || (!remotePath.startsWith("/") && !/^~(?:\/|$)/.test(remotePath)))) { failed++; say(`Controller session: set hosts.workers[].orcaEnvironment to the saved Orca environment name and configure an absolute or ~/ remote project path; ensure ssh can resolve the remote home. Start it by hand:\n  ${session}`); }
     else {
     const where = ctl.kind === "local" ? ["--worktree", `path:${cwd}`] : ["--environment", ctl.orcaEnvironment, "--worktree", `path:${path.posix.resolve(remotePath.replace(/^~(?=\/|$)/, remoteHome))}`];
-    const r = spawnSync(ORCA_BIN, ["terminal", "create", ...where, "--title", title, "--command", session, "--json"], { encoding: "utf8" });
+    const r = spawnSync(ORCA_BIN, createArgs({ where, title, session }), { encoding: "utf8" });
     if (r.status === 0 && /"ok":\s*true/.test(r.stdout)) {
-      let created; try { const j = JSON.parse(r.stdout).result; created = j?.terminal?.handle ?? j?.handle; } catch { /* the title finds it */ }
+      const created = createdHandle(r.stdout);   // without a handle the Controller's name finds it
       if (created) recordHandle(c, ctl, created, ctl.kind === "local" ? cwd : path.posix.resolve(remotePath.replace(/^~(?=\/|$)/, remoteHome)));
       say(`Controller session: started (Orca terminal "${title}"). ${TRUST_HINT}`);
     }

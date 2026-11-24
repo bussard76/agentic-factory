@@ -1,18 +1,24 @@
 // Wakes this directory's Controller from outside, so noticing finished work does not depend on the Controller itself
-// (docs/learnings.md). `agentic-factory start` runs it from cron every minute. Worker messages and a finished wave wake it
-// at once; the full work check runs at each tenth minute. It marks progress in Orca's sidebar without a model.
-// It only sends text into the Controller's terminal: it never starts or restarts a Controller. Each Controller directory
-// has its own copy and state, so projects on one host stay independent. Usage: node heartbeat.mjs
+// (docs/learnings.md). `agentic-factory start` runs it from cron or launchd every minute. A worker message, a finished wave
+// and a new inbox line wake it at once; the full work check runs at each tenth minute; an idle project is woken at most every
+// hosts.controller.wake.idleMinutes. It marks progress in Orca's sidebar without a model.
+// It sends text into the Controller's terminal, and it starts a new Controller in exactly one case: a Controller that is busy
+// without any sign of work (status.md and the journal unchanged) for hosts.controller.hung.minutes is reported to the Front
+// agent, and when nothing changed after hosts.controller.hung.restartAfterMinutes it is restarted once through restart.mjs (the same
+// session `start` makes); a second hang is escalated and never restarted automatically. Each Controller directory has its own
+// copy and state, so projects on one host stay independent. Usage: node heartbeat.mjs
 import "./cli.mjs";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { controllerPlaces, locateController } from "./controller-terminal.mjs";
-import { HOSTS, HUMAN, MAIN, ORCA, PROJECT, PROJECT_DIR, STEERING, config, dispatchStates, file, hostNamed, orcaEnvArgsOn, workerStatus, worktreeRefOn } from "./lib.mjs";
+import { HOSTS, HUMAN, HUNG, MAIN, ORCA, PROJECT, PROJECT_DIR, STEERING, WAKE, config, dispatchStates, file, hostNamed, journal, orcaCall, orcaEnvArgsOn, workerStatus, worktreeRefOn, workspacesOn } from "./lib.mjs";
+import { tellFront, writeHealth } from "./front-notice.mjs";
+import { newLines } from "./inbox.mjs";
+import { restartController } from "./restart.mjs";
 
 const IDLE_WAIT_MS = 15_000;
-const IDLE_WAKE_MS = 55 * 60_000; // Nothing to do: wake about hourly, a little under so a 60-minute tick is not missed.
-const INBOX_POINTER_MS = 5 * 60_000; // A busy Controller gets a pointer to the inbox after this long.
 const LOG_LIMIT = 1 << 20;
 const MESSAGE = "Heartbeat: run the next cycle of \"The loop\" in CONTROLLER.md now, then stop and wait for the next heartbeat.";
 // Nothing a worker or a message wrote is ever typed into the Controller's terminal: the lines above and the one below are
@@ -20,6 +26,7 @@ const MESSAGE = "Heartbeat: run the next cycle of \"The loop\" in CONTROLLER.md 
 // title says goes only into the sidebar comment, on one line.
 const oneLine = (text, n) => String(text ?? "").replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, n);
 const POINTER = "Heartbeat: inbox.md has a new instruction. Read it after your current step.";
+const POINTER_MAIL = "Heartbeat: something new is waiting (inbox.md, worker mail or a finished wave). Run step 1 of \"The loop\" in CONTROLLER.md after your current step.";
 const title = `${PROJECT} · Controller`;
 
 const LOCK = file("heartbeat.lock.d");
@@ -55,9 +62,11 @@ const startedTickets = () => (STEERING === "github-issues"
 
 // An unreadable source counts as work: a false wake costs one cycle, a missed one stalls the project.
 let newlySettled = [];
+// An inbox line counts when the Controller has not handled it (inbox.mjs): a line it already handled, and left in inbox.md, wakes nobody.
+const inboxHasNew = () => newLines() > 0;
 const pendingWork = () => {
   const reasons = [];
-  if (readText("inbox.md").trim()) reasons.push("inbox");
+  if (inboxHasNew()) reasons.push("inbox");
   // Running workers are work. A finished worker's record waits for cleanup: a worker that settled without a worker_done
   // message wakes the Controller once, when it is first seen settled, and not again at every tenth minute.
   try {
@@ -160,7 +169,7 @@ const showNotice = (text, status, unread) => {
 };
 const updateNotice = () => {
   const open = needsHuman();
-  if (readText("inbox.md").trim()) return showNotice(say("Working: instruction from the inbox", "Arbeitet: Auftrag aus der Inbox"), "in-progress", false);
+  if (inboxHasNew()) return showNotice(say("Working: instruction from the inbox", "Arbeitet: Auftrag aus der Inbox"), "in-progress", false);
   if (open.length) return showNotice(`${say("Waiting for you", "Wartet auf dich")}: ${open[0].slice(2, 200)}`, "in-review", true);
   const { running, unknown } = workerCounts(readJson("workers.json", {}));
   const active = running + unknown;
@@ -193,14 +202,22 @@ const events = messages.map((m) => m.id);
 
 // Marks a finished worker for the human at once, also while the Controller is busy. Each one is announced only once.
 const announced = new Set(readJson("heartbeat.announced.json", []));
-const mark = (args) => { try { run(ORCA, ["worktree", "set", ...args, "--unread", "--json"]); } catch (error) { log(`marking failed: ${short(error)}`); } };
+// A worker's worktree may be removed by cleanup before this runs: that is not a failure, so it is skipped when the directory is
+// gone and, for a host whose directory cannot be looked at from here, a "not found" answer from Orca is not logged.
+const GONE = /not.?found|no such|does not exist|unknown worktree|no worktree/i;
+const mark = (args, quietWhenGone = false) => {
+  try { run(ORCA, ["worktree", "set", ...args, "--unread", "--json"]); }
+  catch (error) { if (!(quietWhenGone && GONE.test(`${error.stderr ?? ""} ${error.stdout ?? ""} ${error.message}`))) log(`marking failed: ${short(error)}`); }
+};
 const announce = (id, line, worker) => {
   announced.add(id);
   fs.writeFileSync(file("heartbeat.announced.json"), JSON.stringify([...announced].slice(-500)));
   log(line);
   if (worker?.dir && worker.host) {
-    try { const host = hostNamed(worker.host); mark(["--worktree", worktreeRefOn(host, worker.dir), "--workspace-status", "completed", ...orcaEnvArgsOn(host)]); }
-    catch (error) { log(`marking failed: ${short(error)}`); }
+    try {
+      const host = hostNamed(worker.host);
+      if (host.kind !== "local" || fs.existsSync(path.join(workspacesOn(host), worker.dir))) mark(["--worktree", worktreeRefOn(host, worker.dir), "--workspace-status", "completed", ...orcaEnvArgsOn(host)], true);
+    } catch (error) { log(`marking failed: ${short(error)}`); }
   }
   mark(["--worktree", `path:${PROJECT_DIR}`]);
 };
@@ -216,34 +233,133 @@ const fresh = events.filter((id) => !seen.has(id));
 const remember = () => fs.writeFileSync(file("heartbeat.seen.json"), JSON.stringify([...seen, ...fresh].slice(-500)));
 if (!seenExisted) { remember(); log("baseline of worker messages recorded"); process.exit(0); } // Old messages wake nobody.
 
-const inboxWaiting = readText("inbox.md").trim() !== "";
+const inboxWaiting = inboxHasNew();
+const mtimeOf = (name) => { try { return fs.statSync(file(name)).mtimeMs; } catch { return 0; } };
+const hhmm = (ms) => new Date(ms).toTimeString().slice(0, 5);
 
+// Is the Controller idle? Orca's answer to `terminal wait --for tui-idle`, asked at most once per run and only when something needs
+// it. Orca exits non-zero when the wait is not satisfied and says why in its answer: orcaCall reads it even then, and it goes to the
+// log. Whether a session that sits at its prompt with a background shell running reads as idle is Orca's decision, and in a real
+// run it did not (docs/orca.md, "Heartbeat"); the pointer further down is the answer to that, not a guess at the screen.
+let idleAnswer;
+const probeIdle = () => (idleAnswer ??= (() => {
+  const r = orcaCall(["terminal", "wait", "--terminal", terminal.handle, "--for", "tui-idle", "--timeout-ms", String(IDLE_WAIT_MS)]);
+  const idle = r?.result?.wait?.satisfied === true;
+  return { idle, why: idle ? "" : oneLine(r?.error?.code ?? r?.result?.wait?.status ?? (r ? "not idle" : "no answer"), 60) };
+})());
+// Since when has the Controller been busy without a break? A reading older than 3 minutes proves nothing about the time before it.
+const noteBusy = (idle) => {
+  if (idle) { fs.rmSync(file("heartbeat.busy.json"), { force: true }); return Date.now(); }
+  const b = readJson("heartbeat.busy.json", {}), now = Date.now();
+  const since = b.since && b.last && now - b.last < 3 * 60_000 ? b.since : now;
+  fs.writeFileSync(file("heartbeat.busy.json"), JSON.stringify({ since, last: now }));
+  return since;
+};
+
+// ---- A Controller that hangs. Hung is: busy, its terminal still changing, and no sign of work (status.md and the journal
+// unchanged) for hosts.controller.hung.minutes; or a text pattern the project configured visible for hung.patternMinutes. A
+// terminal that does not change (an idle prompt that Orca reads as busy because of a background shell) is not hung. The Front
+// agent is told at once; when nothing changed after hung.restartAfterMinutes the Controller is restarted once (restart.mjs), and a
+// second hang is escalated. The heartbeat never writes status.md: its age is the sign of work.
+const HUNG_FILE = "heartbeat.hung.json", SCREEN_ACTIVE_MS = 3 * 60_000;
+const patternRegexes = HUNG.patterns.flatMap((p) => { try { return [new RegExp(p, "i")]; } catch { log(`ignored a hosts.controller.hung.patterns entry that is no regular expression: ${oneLine(p, 60)}`); return []; } });
+const readScreen = () => {
+  try {
+    const read = orca("terminal", "read", "--terminal", terminal.handle, "--screen").result ?? {};
+    const tail = read.terminal?.tail ?? read.tail ?? read.lines ?? read.text ?? "";
+    return Array.isArray(tail) ? tail.join("\n") : String(tail);
+  } catch { return null; }
+};
+// Only the change of the screen is used, never its words (except the configured patterns).
+const screenChanging = (text) => {
+  const prev = readJson("heartbeat.screen.json", {}), now = Date.now();
+  const hash = createHash("sha1").update(text).digest("hex");
+  const next = { hash, changedAt: prev.hash && prev.hash !== hash ? now : prev.changedAt ?? null };
+  fs.writeFileSync(file("heartbeat.screen.json"), JSON.stringify(next));
+  return next.changedAt !== null && now - next.changedAt <= SCREEN_ACTIVE_MS;
+};
+const hungText = (n) => {
+  if (n.escalated) return `HUNG AGAIN since ${hhmm(n.since)} (${n.why}) after the automatic restart at ${hhmm(n.restartedAt)}: it is not restarted again and needs a person: close the Controller's terminal and run agentic-factory start`;
+  const what = n.restartFailed ? `the automatic restart failed (${n.restartFailed})`
+    : n.hangRestarts >= 1 ? `it was restarted automatically at ${hhmm(n.restartedAt)} already, so it is not restarted again`
+      : !HUNG.restart ? "automatic restart is off (hosts.controller.hung.restart)"
+        : `it is restarted at ${hhmm(n.since + HUNG.restartAfterMinutes * 60_000)} unless it recovers`;
+  return `HUNG since ${hhmm(n.since)}: ${n.why}; ${what}`;
+};
+// Returns true when it restarted the Controller: the terminal this run holds is then the old one.
+const hangCheck = () => {
+  if (!fs.existsSync(file("status.md"))) return false;   // it has not started its first cycle
+  const now = Date.now(), state = readJson(HUNG_FILE, {});
+  const activity = Math.max(mtimeOf("status.md"), mtimeOf("journal.ndjson"), readJson("heartbeat.restarted.json", {}).at ?? 0);   // a fresh Controller gets its time
+  const quietMin = (now - activity) / 60_000;
+  const next = { hangRestarts: state.hangRestarts ?? 0, restartedAt: state.restartedAt };
+  const screen = quietMin >= 5 || patternRegexes.length ? readScreen() : null;
+  const changing = screen !== null && screenChanging(screen);
+  if (patternRegexes.length && screen !== null && patternRegexes.some((re) => re.test(screen))) next.patternSince = state.patternSince ?? now;
+  let why = "";
+  if (next.patternSince && now - next.patternSince >= HUNG.patternMinutes * 60_000) why = `a configured text pattern has been visible in its terminal for ${Math.round((now - next.patternSince) / 60_000)} minutes`;
+  if (!why && quietMin >= HUNG.minutes && wave.state !== "running" && changing && !probeIdle().idle) why = `busy, its terminal keeps changing, but status.md and the journal have not changed for ${Math.round(quietMin)} minutes`;
+  let restarted = false;
+  const tell = [];   // told after the health file is written: a status watch run for it reads that file
+  if (!why) { if (state.since) log(`Controller no longer hung (${state.why})`); }
+  else {
+    Object.assign(next, { since: state.since ?? now, why: state.why ?? why, acted: state.acted, escalated: state.escalated, restartFailed: state.restartFailed });
+    if (!state.since) { log(hungText(next)); tell.push(["HUNG", () => hungText(next)]); }
+    else if (!next.acted && now - next.since >= HUNG.restartAfterMinutes * 60_000) {
+      next.acted = true;
+      if (next.hangRestarts >= 1) {
+        next.escalated = true;
+        journal("escalation", "controller", { note: "hung again after an automatic restart", since: new Date(next.since).toISOString() });
+        log(hungText(next)); tell.push(["HUNG-AGAIN", () => hungText(next)]);
+      } else if (!HUNG.restart) log("still hung; automatic restart is off (hosts.controller.hung.restart): reported only");
+      else {
+        const result = restartController({ reason: `hung: ${next.why}`, kind: "hang", lockHeld: true, tell: false });
+        log(`restart: ${result.message}`);
+        if (result.ok) { tell.push(["RESTARTED", () => result.event]); next.hangRestarts += 1; next.restartedAt = Date.now(); for (const k of ["since", "why", "acted", "restartFailed"]) delete next[k]; restarted = true; }
+        else { next.restartFailed = oneLine(result.message, 120); tell.push(["HUNG", () => hungText(next)]); }
+      }
+    }
+  }
+  // Open problems for the Front agent's watch (front-notice.mjs). A restart is mentioned for an hour.
+  writeHealth(next.since ? [hungText(next)] : next.restartedAt && now - next.restartedAt < 60 * 60_000 ? [`RESTARTED automatically at ${hhmm(next.restartedAt)} after a hang`] : []);
+  fs.writeFileSync(file(HUNG_FILE), JSON.stringify(next));
+  for (const [kind, text] of tell) log(`told the Front agent (${kind}): ${tellFront(kind, text(), { type: kind === "RESTARTED" ? "status" : "question", from: restarted ? undefined : terminal.handle }).join(", ")}`);
+  return restarted;
+};
+if (hangCheck()) process.exit(0);
+
+const ERROR_REASONS = new Set(["workers unreadable", "tickets unreadable"]);
 const reasons = fullCheck ? pendingWork() : inboxWaiting ? ["inbox"] : [];
 if (fresh.length) reasons.unshift(`${fresh.length} worker message`);
 if (wave.state === "finished") reasons.unshift("wave finished");
 // A Controller that only waits for the human is not woken: it would achieve nothing and cost model time.
 if (!reasons.length && needsHuman().length) process.exit(0);
 const lastWake = fs.existsSync(file("heartbeat.last")) ? fs.statSync(file("heartbeat.last")).mtimeMs : 0;
-if (!reasons.length && Date.now() - lastWake < IDLE_WAKE_MS) process.exit(0);
-
+// Idle (nothing new, nothing ready, no worker running) is woken at most every wake.idleMinutes; a source that cannot be read is no event.
+if (Date.now() - lastWake < WAKE.idleMinutes * 60_000 && reasons.every((r) => ERROR_REASONS.has(r))) process.exit(0);
 
 // A Controller that has not written its first status.md has not started its first cycle: it may still sit at its agent CLI's
-// first-start dialog (trust this folder), and a line typed there is Enter on a default. Whatever the reason, nothing is typed yet.
-if (!fs.existsSync(file("status.md"))) { log(`no status.md yet, so the Controller has not started: nothing typed (${reasons.join(", ") || "hourly check"})`); process.exit(0); }
+// first-start dialog (trust this folder), and a line typed there is Enter on a default. A restarted one has the old status.md, so
+// there it has to be newer than the restart. Whatever the reason, nothing is typed yet.
+if (!fs.existsSync(file("status.md"))) { log(`no status.md yet, so the Controller has not started: nothing typed (${reasons.join(", ") || "idle check"})`); process.exit(0); }
+const restartedAt = readJson("heartbeat.restarted.json", {}).at ?? 0;
+if (restartedAt && mtimeOf("status.md") <= restartedAt) { log(`the Controller was restarted at ${hhmm(restartedAt)} and has not written status.md since: nothing typed (${reasons.join(", ") || "idle check"})`); process.exit(0); }
 
-// Output timestamps are no idle signal: an idle session still redraws. A timeout counts as busy.
-let idle = false;
-try {
-  idle = orca("terminal", "wait", "--terminal", terminal.handle, "--for", "tui-idle", "--timeout-ms", String(IDLE_WAIT_MS)).result.wait.satisfied === true;
-} catch { idle = false; }
+const { idle, why: busyWhy } = probeIdle();
+const busySince = noteBusy(idle);
 if (!idle) {
-  log(`busy, not woken (${reasons.join(", ") || "hourly check"})`);
-  // A long cycle must not starve the inbox. Point the running session to it, once per inbox state.
-  const inboxAt = inboxWaiting ? fs.statSync(file("inbox.md")).mtimeMs : 0;
-  if (inboxWaiting && Date.now() - inboxAt > INBOX_POINTER_MS && readText("heartbeat.pointer") !== String(inboxAt)) {
-    orca("terminal", "send", "--terminal", terminal.handle, "--text", POINTER, "--enter");
-    fs.writeFileSync(file("heartbeat.pointer"), String(inboxAt));
-    log("pointed the busy Controller to the inbox");
+  log(`busy, not woken (${reasons.join(", ") || "idle check"}; Orca: ${busyWhy})`);
+  // A long cycle must not starve what is waiting, and Orca may read an idle session as busy. After a short continuous busy period the
+  // running session gets a one-line pointer, once per state of what is waiting (inbox lines, worker mail, a finished wave).
+  const finished = wave.state === "finished";
+  if ((inboxWaiting || fresh.length || finished) && Date.now() - busySince >= WAKE.busyPointerMinutes * 60_000) {
+    const key = JSON.stringify([inboxWaiting ? createHash("sha1").update(readText("inbox.md")).digest("hex") : null, fresh, finished ? wave.handle : null]);
+    if (readText("heartbeat.pointer") !== key) {
+      const inboxOnly = inboxWaiting && !fresh.length && !finished;
+      orca("terminal", "send", "--terminal", terminal.handle, "--text", inboxOnly ? POINTER : POINTER_MAIL, "--enter");
+      fs.writeFileSync(file("heartbeat.pointer"), key);
+      log(inboxOnly ? "pointed the busy Controller to the inbox" : "pointed the busy Controller to new mail or a finished wave");
+    }
   }
   process.exit(0);
 }
@@ -255,4 +371,4 @@ fs.writeFileSync(file("heartbeat.last"), "");
 remember();
 if (newlySettled.length) fs.writeFileSync(file("heartbeat.settled.json"), JSON.stringify([...readJson("heartbeat.settled.json", []), ...newlySettled].slice(-500)));
 if (wave.state === "finished") fs.writeFileSync(file("heartbeat.wave"), wave.handle);
-log(`woke ${terminal.handle} (${reasons.join(", ") || "hourly check"})`);
+log(`woke ${terminal.handle} (${reasons.join(", ") || "idle check"})`);

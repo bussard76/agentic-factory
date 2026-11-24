@@ -1,0 +1,57 @@
+// Tells the Front agent that something is wrong with the Controller itself (hung, restarted, hung again): the heartbeat and
+// restart.mjs use it, because a Controller that cannot act cannot tell anybody. A library; its callers are the scripts.
+// Three ways, the same ones the Controller's own front events use (CONTROLLER.md, "Noticing that work has finished"):
+//  1. heartbeat-health.md in the Controller directory, one line per open problem. statuswatch.mjs (terminal Front agent) and
+//     botwatch.mjs (bot) read it in the same probe as status.md, locally or over ssh, so it reaches either kind within one
+//     watch interval wherever the Controller runs. It is a file of its own: the heartbeat never writes status.md, whose age
+//     is the sign that the Controller works.
+//  2. A FRONT-EVENT line in front-events.log, the record a Front agent on the server or a bot follows.
+//  3. At once, where the Front agent is on this machine: the bot gets `orca orchestration send --to bot:<name>`, a terminal
+//     Front agent gets a run of its own statuswatch.mjs (it delivers into an idle terminal, else the sidebar shows it).
+//     A Front agent on another machine cannot be reached from here, and waits for its next watch (1).
+// Usage: none; a module, imported by the scripts
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { ORCA, PROJECT, config, file, writeText } from "./lib.mjs";
+
+export const HEALTH_FILE = "heartbeat-health.md";
+// Everything that reaches a file, an agent's input or a sidebar is one line without control characters.
+export const oneLine = (text, n = 300) => String(text ?? "").replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, n);
+
+/** The open problems, one line each. An empty list removes the file. Returns true when the file changed. */
+export function writeHealth(lines) {
+  const text = lines.map((l) => `- ${oneLine(l)}`).join("\n");
+  let current = "";
+  try { current = fs.readFileSync(file(HEALTH_FILE), "utf8").trim(); } catch { /* none yet */ }
+  if (current === text) return false;
+  if (!text) fs.rmSync(file(HEALTH_FILE), { force: true });
+  else writeText(HEALTH_FILE, `${text}\n`);
+  return true;
+}
+
+// The Controller is on another machine than the Front agent when its host is a remote one in the configuration.
+const controllerRemote = () => (config.hosts?.workers ?? []).some((h) => h.name === (config.hosts?.controller?.host ?? "local") && h.kind === "remote");
+
+/**
+ * Appends the event to front-events.log and delivers it where it can be reached from here. `type` is "question" for something
+ * the human must decide and "status" for the rest. `push: false` only records it (3 is skipped). Returns what was done, for the log;
+ * never throws.
+ */
+export function tellFront(kind, text, { type = "status", from, push = true } = {}) {
+  const done = [], line = oneLine(text);
+  try { fs.appendFileSync(file("front-events.log"), `${new Date().toISOString()} FRONT-EVENT ${kind}: ${line}\n`); done.push("front-events.log"); } catch { /* read-only directory */ }
+  if (!push || controllerRemote()) return done;
+  const front = config.hosts?.frontAgent ?? {};
+  try {
+    if (front.kind === "orca-bot" && front.bot) {
+      execFileSync(ORCA, ["orchestration", "send", "--to", `bot:${front.bot}`, "--type", type, "--subject", kind, "--body", `${kind}: ${line}`, ...(from ? ["--from", from] : []), "--json"], { encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
+      done.push(`bot ${front.bot}`);
+    } else if (!front.kind || front.kind === "terminal") {
+      const watch = path.join(os.homedir(), "front-agent", PROJECT, "statuswatch.mjs");
+      if (fs.existsSync(watch)) { execFileSync("node", [watch], { encoding: "utf8", timeout: 90_000, stdio: ["ignore", "pipe", "pipe"] }); done.push("statuswatch"); }
+    }
+  } catch (error) { done.push(`not delivered at once (${oneLine(error.message, 100)})`); }
+  return done;
+}

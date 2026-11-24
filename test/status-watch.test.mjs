@@ -51,6 +51,22 @@ test("a change reaches the Front agent's terminal, found by what Orca knows, wha
   h.done();
 });
 
+test("what the heartbeat found wrong with the Controller (heartbeat-health.md) reaches the Front agent like a status change, and its clearing does too", () => {
+  const h = setup({ terminals: (p) => [agentIn(p)] });
+  const ctl = path.join(h.dir, "controller");
+  h.status("nothing"); h.run();
+  fs.writeFileSync(path.join(ctl, "heartbeat-health.md"), "- HUNG since 08:00: busy, no change for 31 minutes\n");
+  h.run();
+  assert.match(h.calls("send").at(-1)[h.calls("send").at(-1).indexOf("--text") + 1], /CONTROLLER HEALTH: - HUNG since 08:00/);
+  const n = h.calls("send").length;
+  h.run();
+  assert.equal(h.calls("send").length, n, "said once");
+  fs.rmSync(path.join(ctl, "heartbeat-health.md"));
+  h.run();
+  assert.match(h.calls("send").at(-1)[h.calls("send").at(-1).indexOf("--text") + 1], /CONTROLLER HEALTH: \(cleared\)/);
+  h.done();
+});
+
 test("once a bot is the Front agent, a terminal watch left from before sends nothing", () => {
   const h = setup({ terminals: (p) => [agentIn(p)] });
   h.status("nothing"); h.run();
