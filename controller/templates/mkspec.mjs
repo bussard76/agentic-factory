@@ -112,7 +112,7 @@ ${scope}
 5. Only after the gates finished: write docs/reviews/${T}-review-${round}.md with findings by severity, debt candidates, 'Reviewed commit: <full SHA>' and 'Verdict: pass|fail'. Commit only that file on branch ${BRANCH_PREFIX}${T.toLowerCase()}-review-${round} created from the reviewed head, never --no-verify, push only that branch.
 ${REVIEW_RULE}
 Read-only otherwise; demo or mock only; never send anything; no Docker.
-Reply: worker_done with verdict and --report-path docs/reviews/${T}-review-${round}.md.`;
+Reply: worker_done with verdict, the review branch and its full SHA, and --report-path docs/reviews/${T}-review-${round}.md.`;
   },
   reeval() {
     const [T, ref, branch, sha, last] = pos; const lv = split(last);
@@ -123,7 +123,7 @@ Steps:
 2. Classify every finding of that review as 'functional defect' or 'debt candidate'. Do not invent new findings beyond a quick check of the main flows.
 3. The last full gates on this commit are in that review; do not rerun the full suites (that is no proof for the wave, which runs the full gate itself). Run the browser specs or API checks that cover the task's main flows once and look at the flows.
 4. Write docs/reviews/${T}-review-final.md: 'Reviewed commit: <full SHA>', 'Verdict: pass|fail', the classification table, the debt candidates, and one sentence ${HUMAN} can try on the preview for each open point. Commit only that file on branch ${BRANCH_PREFIX}${T.toLowerCase()}-review-final from ${sha}, never --no-verify, push only that branch.
-Reply: worker_done with verdict and --report-path docs/reviews/${T}-review-final.md.`;
+Reply: worker_done with verdict, the review branch and its full SHA, and --report-path docs/reviews/${T}-review-final.md.`;
   },
   specreview() {
     const [T, ref, branch] = pos;

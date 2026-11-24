@@ -7,5 +7,6 @@ const reasons = ["functional", "coverage", "load-timeout", "environment", "spec-
 if (!types.includes(type) || !task) throw new Error(`usage: node journal.mjs type(${types.join("|")}) task [k=v...]`);
 const extra = {};
 for (const p of kv) { const i = p.indexOf("="); const k = p.slice(0, i), v = p.slice(i + 1); extra[k] = /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v; }
+if (type === "review" && (extra.head || extra.by || extra.reviewSha)) throw new Error("a review event with a head is written by reviewed.mjs or docsonly.mjs after they checked it; journal.mjs does not write one");
 if (extra.reason && !reasons.includes(extra.reason)) throw new Error(`reason must be one of ${reasons.join("|")}`);
 journal(type, task, extra);

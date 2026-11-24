@@ -78,7 +78,7 @@ flowchart TD
 3. **Build:** a Developer builds test-first, keeps a checklist of every requirement, pushes after each item and self-reviews against the spec at the end.
 4. **Independent test:** another worker checks against the spec and runs the full suites. Findings go back to the Developer; then a fresh Tester checks again.
 5. **Conformance:** for levels 2 and 3 an Architect checks that the code implements the decided architecture, coarsely.
-6. **Wave:** the Controller collects passed tasks and merges them. The full suites run once on the merged state, then it goes to `main`. A wave starts when two tasks are waiting, one has waited 60 minutes, or a task blocks others.
+6. **Wave:** the Controller collects passed tasks and merges them, each at the commit its review covered (recorded in the Controller's journal), never at a branch tip that moved after the review. The full suites run once on the merged state, then it goes to `main`. A wave starts when two tasks are waiting, one has waited 60 minutes, or a task blocks others.
 7. **Acceptance:** the human's preview pulls the new `main` automatically. The human tests there in their own environment, on a private copy where data is involved. Findings become new tickets.
 
 **Bugs** take the same path. First a test must show the bug; no reproduction, no fix.

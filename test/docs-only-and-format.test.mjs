@@ -1,6 +1,7 @@
 // The docs-only check, the docs-only wave path and the formatter on staged files, in throwaway repositories with the
 // factory's own hooks and guardrails copied in. No formatter is installed: a small node script stands in for one.
 import "./support/safe-env.mjs";
+import { bind } from "./support/bind.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -228,7 +229,7 @@ function wave(r, branches, { gate: gateBody = "#!/bin/sh\nexit 1\n", env = {}, l
   const integ = path.join(r.base, "integration");
   r.git("worktree", "add", "-q", "-B", "integration", integ, "origin/main");
   const ctl = fakeController(r.base, { body: gateBody, ...ctlOpts });
-  const out = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "W", "wave", ...branches.map((b) => `origin/${b}`)], { cwd: integ, encoding: "utf8",
+  const out = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "W", "wave", ...bind(integ, branches)], { cwd: integ, encoding: "utf8",
     env: { ...CLEAN_ENV, MAIN: "main", INSTALL_CMD: "", VERIFY_CMD: verify, E2E_CMD: e2e, ...ctl.env, TRAILER: "", WAVE_WORKTREE_OK: "1", WAVE_LOG_DIR: logs, ...env } });
   r.git("worktree", "remove", "--force", integ);
   r.git("fetch", "-q", "origin");
@@ -349,7 +350,7 @@ test("the wave's gate must be this project's own: a bare or relative name, anoth
   const inside = path.join(integ, "gate"); fs.writeFileSync(inside, "#!/bin/sh\nexec \"$@\"\n", { mode: 0o755 }); fs.writeFileSync(path.join(integ, "factory.config.json"), JSON.stringify({ project: { name: "demo" } }));
   const cases = [["gate", "demo"], ["env", "demo"], ["./gate", "demo"], [path.join(r.base, "nope"), "demo"], ["/usr/bin/true", "demo"], [other.gate, "demo"], [noCfg.gate, "demo"], [noCfg.gate, "nocfg"], [renamed.gate, "demo2"], [inside, "demo"], [good.gate, ""], [path.dirname(good.gate), "demo"]];
   for (const [gate, project] of cases) {
-    const out = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "W", "wave", ...t.map((b) => `origin/${b}`)], { cwd: integ, encoding: "utf8", env: { ...CLEAN_ENV, MAIN: "main", VERIFY_CMD: "true", GATE: gate, WAVE_PROJECT: project, WAVE_WORKTREE_OK: "1", WAVE_LOG_DIR: path.join(r.base, "l") } });
+    const out = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "W", "wave", ...bind(integ, t)], { cwd: integ, encoding: "utf8", env: { ...CLEAN_ENV, MAIN: "main", VERIFY_CMD: "true", GATE: gate, WAVE_PROJECT: project, WAVE_WORKTREE_OK: "1", WAVE_LOG_DIR: path.join(r.base, "l") } });
     assert.notEqual(out.status, 0, gate + " as " + project); assert.match(out.stderr, /GATE \(.*\) is refused/, gate + " as " + project); assert.doesNotMatch(out.stdout, /merged|PUSHED/);
   }
   const ok = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "W", "wave", "origin/agents/nope"], { cwd: integ, encoding: "utf8", env: { ...CLEAN_ENV, MAIN: "main", VERIFY_CMD: "true", ...good.env, WAVE_WORKTREE_OK: "1", WAVE_LOG_DIR: path.join(r.base, "l2") } });
@@ -677,8 +678,8 @@ test("the wave after a docs-only task: no review branch is needed for the push g
   r.setMain(checks(r)); flow(r);
   assert.equal(c.run("T03", "agents/t03").status, 0);
   // The Controller's status branch of the wave: it sets Status: integrated in the ticket (CONTROLLER.md, step 2).
-  r.git("checkout", "-q", "-b", "status-wave-1", "main"); r.write("docs/tasks/T03-document-api.md", "Status: integrated\n"); commit(r, "status"); r.git("checkout", "-q", "main");
-  const w = wave(r, ["agents/t03", "status-wave-1"], { gate: '#!/bin/sh\nexec "$@"\n', verify: "echo VERIFY-RAN" });
+  r.git("checkout", "-q", "-b", "status-wave-1", "main"); r.write("docs/tasks/T03-document-api.md", r.read("docs/tasks/T03-document-api.md").replace(/^Status:.*$/m, "Status: integrated")); commit(r, "status"); r.git("checkout", "-q", "main");
+  const w = wave(r, ["agents/t03", "status-wave-1"], { gate: '#!/bin/sh\nexec "$@"\n', verify: "echo VERIFY-RAN", env: { WAVE_TASKS: "t03" } });
   assert.equal(w.status, 0, w.stdout + w.stderr);
   assert.match(w.stdout, /GATE-PATH full: not docs-only/); assert.match(w.stdout, /verify PASS/); assert.match(w.stdout, /PUSHED main/);
   assert.equal(r.git("show", "origin/main:README.md"), "# Demo\nA line more.");

@@ -1,5 +1,6 @@
 // End-to-end smoke test: init in a fresh repo, hooks bite, controller scripts run. `npm test` runs it.
 import "./support/safe-env.mjs";
+import { bind } from "./support/bind.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
@@ -289,7 +290,7 @@ function waveEnv() {
 function runWave(title, branches) {
   const integ = path.join(tmp, "..", path.basename(tmp) + "-integration");
   git("worktree", "add", "-q", "-B", "integration", integ, "origin/main");
-  const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), title, "wave", ...branches.map((b) => `origin/${b}`)], { cwd: integ, encoding: "utf8", env: waveEnv() });
+  const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), title, "wave", ...bind(integ, branches)], { cwd: integ, encoding: "utf8", env: waveEnv() });
   git("worktree", "remove", "--force", integ);
   return r;
 }

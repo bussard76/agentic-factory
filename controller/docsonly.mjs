@@ -78,5 +78,5 @@ if (!result) stop(4, `the docs-only check gave no verdict (exit ${r.status}): ${
 console.log(`docs-only check of ${ref} at ${head.slice(0, 12)} against origin/${MAIN}:`);
 for (const row of result.rows) console.log(`  ${row.status} ${JSON.stringify(row.path)}${row.why ? `  <- ${row.why}` : row.note ? `  (${row.note})` : ""}`);
 console.log(`verdict=${result.verdict} reason="${result.reason}"`);
-if (r.status === 0 && result.verdict === "docs-only") journal("review", task, { verdict: "docs-only", path: "docs-only", head, paths: result.rows.map((x) => x.path), ...(ticketArgs.length ? { ticket: task } : {}) });
+if (r.status === 0 && result.verdict === "docs-only") journal("review", task, { verdict: "docs-only", path: "docs-only", by: "docsonly.mjs", head, paths: result.rows.map((x) => x.path), ...(ticketArgs.length ? { ticket: task } : {}) });
 process.exit(r.status === 0 && result.verdict === "docs-only" ? 0 : r.status === 0 ? 4 : r.status ?? 4);
