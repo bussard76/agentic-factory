@@ -1,6 +1,7 @@
 // A worker is finished when Orca reports its dispatch settled, not when its terminal is gone. These tests run the shared
 // rule (lib.mjs) and cleanup, capacity and the heartbeat against a fake Orca whose dispatch states the test sets, in
 // throwaway repositories. The rule throughout: cleanup deletes, so anything not positively finished is busy.
+import "./support/safe-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -64,6 +65,7 @@ else if (a[0] === "worktree" && a[1] === "list") out({ worktrees: [] });
 else out({});`);
   fs.chmodSync(fake, 0o755);
   const env = { ...process.env, ORCA_CLI_COMMAND: fake, FACTORY_CONFIG: path.join(ctl, "factory.config.json") };
+  for (const k of Object.keys(env)) if (k.startsWith("ORCA_") && k !== "ORCA_CLI_COMMAND") delete env[k];   // never the developer's Orca
   const run = (script, ...args) => spawnSync("node", [path.join(ctl, script), ...args], { cwd: ctl, encoding: "utf8", env });
   const calls = () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n") : []);
   const patch = (fn) => { const s = JSON.parse(fs.readFileSync(state, "utf8")); fn(s); fs.writeFileSync(state, JSON.stringify(s)); };
@@ -172,7 +174,7 @@ test("cleanup releases only what Orca reports settled and is safe to let go, and
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-C", wt("t8"), "commit", "-qam", "x", "--allow-empty"]);
   execFileSync("git", ["-C", wt("t8"), "add", "a.txt"]); execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-C", wt("t8"), "commit", "-qm", "unpushed"]);
   const dry = h.run("cleanup.mjs", "--dry");
-  assert.equal(dry.status, 0, dry.stderr);
+  assert.equal(dry.status, 3, dry.stderr);
   const o = dry.stdout;
   assert.match(o, /would release the finished worker "T1 · Worker Developer"/);
   assert.match(o, /would remove t1 \(merged\)/, "its own setup terminal does not keep it");
@@ -185,7 +187,7 @@ test("cleanup releases only what Orca reports settled and is safe to let go, and
   assert.match(o, /kept t8: worker "T8 · Worker Developer" finished with commits that are not on origin; not released/);
   assert.match(o, /kept t9: terminal "my shell" open in it/, "a terminal that is not the worker's keeps the worktree");
   assert.ok(!h.calls().some((c) => /worker-release|terminal close|worktree rm/.test(c)), "a dry run changes nothing");
-  const r = h.run("cleanup.mjs");
+  const r = h.run("cleanup.mjs", "--apply");
   assert.equal(r.status, 0, r.stderr);
   const calls = h.calls();
   const releasedIds = calls.filter((c) => c.includes("worker-release")).map((c) => c.split(" ")[3]).sort();
@@ -198,7 +200,7 @@ test("cleanup releases only what Orca reports settled and is safe to let go, and
   // The released worker's setup terminal in t9 is remembered; once the human's shell is gone, t9 goes with it.
   h.patch((s) => { s.terminals = s.terminals.filter((t) => t.handle !== "term_9_shell"); });
   fs.rmSync(path.join(h.dir, "calls.log"));
-  const again = h.run("cleanup.mjs");
+  const again = h.run("cleanup.mjs", "--apply");
   assert.equal(again.status, 0, again.stderr);
   assert.deepEqual(h.calls().filter((c) => c.startsWith("worktree rm ")).map((c) => c.split(" ")[3].split("/").pop()), ["t9"]);
   assert.deepEqual(h.calls().filter((c) => c.startsWith("terminal close")).map((c) => c.split(" ")[3]), ["term_9_setup"]);
@@ -220,7 +222,7 @@ test("cleanup matches a record's worktree by directory name when the record hold
   h.setWorkers({ c: rec("T3 · Worker Developer", "ctx_c", "structworker_c", path.join(h.dir, "elsewhere")) });
   fs.mkdirSync(path.join(h.dir, "elsewhere"));
   h.patch((s) => { s.dispatches = { ctx_c: { state: "succeeded" } }; });
-  const o = h.run("cleanup.mjs");
+  const o = h.run("cleanup.mjs", "--apply");
   assert.ok(!h.calls().some((c) => c.includes("worker-release")), o.stdout);
   assert.deepEqual(Object.keys(h.readWorkers()), ["c"]);
   h.done();
@@ -240,7 +242,7 @@ test("cleanup keeps a finished worker's record and worktree while Orca does not 
   const h = setup({ dispatches: { ctx_a: { state: "failed", releaseFails: true } } });
   h.setWorkers({ a: rec("T1 · Worker Developer", "ctx_a", "term_a", h.wt("t1")) });
   h.repo("t1");
-  const r = h.run("cleanup.mjs");
+  const r = h.run("cleanup.mjs", "--apply");
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /kept t1: worker "T1 · Worker Developer" finished, release answered release_unknown; retried next cycle/);
   assert.match(r.stdout, /release FAILED for ctx_a/);
@@ -248,7 +250,7 @@ test("cleanup keeps a finished worker's record and worktree while Orca does not 
   assert.ok(!h.calls().some((c) => c.startsWith("worktree rm")));
   // The next cycle retries, and a confirmed release forgets it.
   h.patch((s) => { s.dispatches.ctx_a.releaseFails = false; });
-  assert.equal(h.run("cleanup.mjs").status, 0);
+  assert.equal(h.run("cleanup.mjs", "--apply").status, 0);
   assert.deepEqual(h.readWorkers(), {});
   h.done();
 });
@@ -322,7 +324,7 @@ test("a worker start.mjs started in a new worktree is released despite Orca's de
   assert.equal(keep.status, 0, keep.stderr);
   assert.equal(h.readWorkers().b.keep, true);
   assert.match(fs.readFileSync(path.join(h.ctl, "journal.ndjson"), "utf8"), /"type":"decision".*keeping worker b.*"by":"Alex wants to read it"/);
-  const r = h.run("cleanup.mjs");
+  const r = h.run("cleanup.mjs", "--apply");
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /kept t2: worker "T2 · Worker Developer" finished, kept by the Controller; `node keep.mjs b --off` lets cleanup release it/);
   assert.match(r.stdout, /kept t3: worker "T3 · Worker Developer" finished, but Orca keeps it open \(user_requested\)/, "older records stay held");
@@ -330,7 +332,7 @@ test("a worker start.mjs started in a new worktree is released despite Orca's de
   assert.deepEqual(h.calls().filter((c) => c.startsWith("worktree rm ")).map((c) => c.split(" ")[3].split("/").pop()), ["t1"]);
   assert.deepEqual(Object.keys(h.readWorkers()).sort(), ["b", "old"]);
   assert.equal(spawnSync("node", [path.join(h.ctl, "keep.mjs"), "b", "--off"], { cwd: h.ctl, encoding: "utf8", env: h.env }).status, 0);
-  assert.equal(h.run("cleanup.mjs").status, 0);
+  assert.equal(h.run("cleanup.mjs", "--apply").status, 0);
   assert.deepEqual(Object.keys(h.readWorkers()), ["old"]);
   assert.notEqual(spawnSync("node", [path.join(h.ctl, "keep.mjs"), "nosuch"], { cwd: h.ctl, encoding: "utf8", env: h.env }).status, 0);
   h.done();
@@ -340,7 +342,7 @@ test("only released and already_released count: retained and release_pending kee
   const h = setup({ dispatches: { ctx_r: { state: "succeeded", releaseAnswer: "retained" }, ctx_p: { state: "failed", releaseAnswer: "release_pending" }, ctx_a: { state: "stopped", releaseAnswer: "already_released" } } });
   h.repo("t1", "t2", "t3");
   h.setWorkers({ r: rec("T1 · Worker Developer", "ctx_r", "structworker_r", h.wt("t1")), p: rec("T2 · Worker Developer", "ctx_p", "structworker_p", h.wt("t2")), a: rec("T3 · Worker Developer", "ctx_a", "structworker_a", h.wt("t3")) });
-  const r = h.run("cleanup.mjs");
+  const r = h.run("cleanup.mjs", "--apply");
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /kept t1: worker "T1 · Worker Developer" finished, release not confirmed by Orca \(releaseState retained\); retried next cycle/);
   assert.match(r.stdout, /kept t2: worker "T2 · Worker Developer" finished, release not confirmed by Orca \(releaseState release_pending\); retried next cycle/);
@@ -354,7 +356,7 @@ test("a settled dispatch whose terminal a follow-up dispatch now owns counts as 
   h.repo("t1", "t2");
   h.setWorkers({ old: rec("T1 · Worker Developer", "ctx_old", "structworker_x", h.wt("t1")), nores: rec("T2 · Worker Developer", "ctx_gone_res", "structworker_y", h.wt("t2")) });
   assert.equal(JSON.parse(h.run("capacity.mjs", "--verbose").stdout).measured.suite, 1, "capacity counts it");
-  const r = h.run("cleanup.mjs");
+  const r = h.run("cleanup.mjs", "--apply");
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /kept t1: worker "T1 · Worker Developer" running/);
   assert.match(r.stdout, /kept t2: worker "T2 · Worker Developer" finished, but Orca reports no terminal resource for it/);
@@ -380,7 +382,7 @@ test("scenario K: a backlog of finished default-kept workers drains, 10 per clea
   const h = setup({ dispatches: Object.fromEntries(ids.map((id) => [id, { state: "succeeded", retainedReason: "user_requested" }])), filler: 320 });
   h.repo(...ids.map((_, i) => `k${i}`));
   h.setWorkers(Object.fromEntries(ids.map((id, i) => [id, rec(`K${i} · Worker Developer`, id, `structworker_${i}`, h.wt(`k${i}`), { keptByDefault: true })])));
-  const left = [1, 2, 3, 4].map(() => { const r = h.run("cleanup.mjs"); assert.equal(r.status, 0, r.stderr); return Object.keys(h.readWorkers()).length; });
+  const left = [1, 2, 3, 4].map(() => { const r = h.run("cleanup.mjs", "--apply"); assert.equal(r.status, 0, r.stderr); return Object.keys(h.readWorkers()).length; });
   assert.deepEqual(left, [30, 20, 10, 0]);
   h.done();
 });
@@ -396,7 +398,7 @@ test("the release receipt is not interpreted: only worker-show's terminalResourc
   h.repo("t1", "t2", "t3");
   h.setWorkers({ lie: rec("T1 · Worker Developer", "ctx_lie", "structworker_1", h.wt("t1")), quiet: rec("T2 · Worker Developer", "ctx_quiet", "structworker_2", h.wt("t2")), none: rec("T3 · Worker Developer", "ctx_none", "structworker_3", h.wt("t3")) });
   h.patch((s) => { s.dispatches.ctx_none.releaseAnswer = "missing"; });
-  const r = h.run("cleanup.mjs");
+  const r = h.run("cleanup.mjs", "--apply");
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /kept t1: worker "T1 · Worker Developer" finished, release not confirmed by Orca \(releaseState retained\)/);
   assert.match(r.stdout, /kept t3: worker "T3 · Worker Developer" finished, release not confirmed by Orca \(releaseState missing\)/);
@@ -418,7 +420,7 @@ test("a corrupt or null cache file is an empty cache: capacity and cleanup carry
     assert.equal(typeof JSON.parse(fs.readFileSync(path.join(h.ctl, "dispatch-settled.json"), "utf8")), "object", "rewritten");
     assert.ok(Number.isFinite(JSON.parse(fs.readFileSync(path.join(h.ctl, "capacity-state.local.json"), "utf8")).suiteMax), "calibration state rewritten");
     fs.writeFileSync(path.join(h.ctl, "dispatch-settled.json"), content);
-    const r = h.run("cleanup.mjs");
+    const r = h.run("cleanup.mjs", "--apply");
     assert.equal(r.status, 0, `${content}: ${r.stderr}`);
     assert.match(r.stdout, /released 1 dispatches/, content);
     assert.equal(typeof JSON.parse(fs.readFileSync(path.join(h.ctl, "released-terminals.json"), "utf8")), "object");

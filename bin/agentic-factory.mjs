@@ -665,6 +665,13 @@ function walk(dir, base = dir) { return fs.readdirSync(dir, { withFileTypes: tru
 const IGNORES = (node) => [".factory/new/", ".factory/controller/", ".factory/front-agent/", ".factory/server/", ".build/", ".env", ".env.*", "!.env.example", ".scratch/", ...(node ? ["node_modules/"] : [])];
 function appendGitignore(lines) { const p = ".gitignore"; const cur = fs.existsSync(p) ? fs.readFileSync(p, "utf8") : ""; const add = lines.filter((l) => !cur.split("\n").includes(l)); if (add.length) fs.writeFileSync(p, cur + (cur.endsWith("\n") || !cur ? "" : "\n") + add.join("\n") + "\n"); }
 
+// The Controller's handbook of this project (the copy `update` kept or wrote, which `start` installs): one loud line when it calls
+// cleanup without --apply. A copy changed locally stays on update, so scripts and handbook can disagree without anyone seeing.
+function warnCleanupTrap(where = ".factory/controller/CONTROLLER.md", text) {
+  const f = ".factory/controller/CONTROLLER.md";
+  const calls = cleanupCallsWithoutApply(text ?? (fs.existsSync(f) ? fs.readFileSync(f, "utf8") : ""));
+  if (calls.length) say(`\nWARNING: ${where} calls cleanup without --apply (\`${calls[0]}\`): ${CLEANUP_TRAP}.`);
+}
 // --- update ----------------------------------------------------------------------------------------
 async function update() {
   if (!fs.existsSync("factory.config.json")) { say("No factory.config.json here. Run init first."); process.exit(1); }
@@ -732,6 +739,7 @@ async function initNonInteractiveRefresh() {
   // core.hooksPath is per clone, not committed. own mode keeps its own setting.
   if (!minimal(c) && mode !== "own" && fs.existsSync(path.join(hdir, "pre-commit"))) sh("git", ["config", "core.hooksPath", c.hooks.hooksPath]);
   say(`${written} updated, ${kept} kept (locally changed). Review .factory/new/ and merge what you want.`);
+  warnCleanupTrap();
 }
 
 // --- doctor ----------------------------------------------------------------------------------------
@@ -755,7 +763,8 @@ function doctor() {
     else if (!hb.installed) info("heartbeat not scheduled yet (the Controller is not started: run start)");
     else bad("heartbeat not scheduled: nothing wakes the Controller from outside, so finished workers wait for a person (run start; if that fails it says why)");
   }
-  else if (c.hosts.controller.heartbeat === false) info("heartbeat off (hosts.controller.heartbeat is false): you wake the Controller yourself");
+  { const cl = cleanupStatus(c); if (cl.problem) bad(`cleanup: ${cl.problem}`); else if (cl.unknown) info("cleanup: the Controller's host did not answer, so it is not known whether the handbook calls cleanup with --apply"); else if (!cl.handbookInstalled) info("cleanup: not checked, no Controller handbook is installed yet (run start)"); else ok("cleanup: the handbook calls it with --apply and no removable work waits"); }
+  if (!heartbeatOn(c) && c.hosts.controller.heartbeat === false) info("heartbeat off (hosts.controller.heartbeat is false): you wake the Controller yourself");
   if (!["terminal", "orca-bot"].includes(frontKind(c))) bad(`hosts.frontAgent.kind "${frontKind(c)}" (terminal or orca-bot)`);
   if (frontKind(c) === "orca-bot") {
     const b = botWatchStatus(c);
@@ -994,6 +1003,7 @@ function collectStatus() {
     gate: { own: fs.existsSync(expandHome(`${c.hosts.controller.controllerDir ?? "~/controller"}/gate.mjs`)), sharedLeftover: fs.existsSync(path.join(os.homedir(), ".local/bin/gate")) },   // on this machine; the shared one is not used by this project
     controller: { host: ctl.host, statusAgeMin: ctl.ageMin, terminal: ctlTerminal, ...(terminalProblem ? { terminalProblem } : {}), running: ctlTerminal || (ctl.ageMin !== null && ctl.ageMin <= 25) },
     heartbeat: heartbeatStatus(c),
+    cleanup: cleanupStatus(c),
   };
   // A bot Front agent: the bot and its watch automation instead of the terminal's status watch.
   if (frontKind(c) === "orca-bot") { s.setup.frontAgent = { kind: "orca-bot", ...botWatchStatus(c) }; s.setup.statusWatch = false; }   // a bot is woken by its automation (setup.frontAgent.watchAutomation), not by a status watch
@@ -1033,6 +1043,7 @@ function collectStatus() {
   // The same kind of hint: a Controller nobody wakes from outside stays idle after each worker.
   const hb = s.setup.heartbeat;
   if (hb.enabled && !hb.unknown && s.phase !== "start" && (!hb.scheduled || hb.problem)) s.next = `${hb.scheduled ? `The heartbeat is scheduled but ${hb.problem}` : "The heartbeat is not scheduled"}, so nothing wakes the Controller when a worker finishes: run \`start\` (or set hosts.controller.heartbeat to false if you wake it yourself). Then: ${s.next}`;
+  if (s.setup.cleanup.problem && s.phase !== "start") s.next = `Cleanup does not run: ${s.setup.cleanup.problem}. Then: ${s.next}`;
   s.hints = [
     ...(s.setup.gate.sharedLeftover ? ["a shared gate is still in ~/.local/bin: this project does not use it (its gate is in its Controller directory); delete it once no older project on this host uses it"] : []),
     ...(!s.work.glossary ? ["the business terms are not written down yet (no GLOSSARY.md): capture them with domain-modeling while specifying"] : []),
@@ -1056,6 +1067,7 @@ function status() {
     say(`${st.gate.own ? "OK     " : "info   "} gate: ${st.gate.own ? "this project's own (Controller directory)" : "not in the Controller directory on this machine"}${st.gate.sharedLeftover ? "; a shared ~/.local/bin/gate is left over and not used" : ""}`);
     if (st.frontAgent) say(`${st.frontAgent.botExists ? "OK     " : "MISSING"} Front agent bot ${st.frontAgent.bot ?? "(hosts.frontAgent.bot is empty)"}\n${st.frontAgent.watchAutomation ? "OK     " : "MISSING"} its watch automation`);
     if (st.heartbeat.enabled) say(st.heartbeat.unknown ? "info    heartbeat: the Controller's host did not answer" : st.heartbeat.scheduled ? `${st.heartbeat.problem ? "MISSING" : "OK     "} heartbeat (${st.heartbeat.scheduled})${st.heartbeat.problem ? `: ${st.heartbeat.problem}` : st.heartbeat.lastOkAt ? `, ran fine at ${st.heartbeat.lastOkAt}` : ""}` : st.heartbeat.installed ? "MISSING heartbeat (run start)" : "info    heartbeat not scheduled yet (run start)");
+    if (st.cleanup?.problem) say(`MISSING cleanup: ${st.cleanup.problem}`);
     say(`${st.controller.running ? "OK     " : "MISSING"} Controller on ${st.controller.host}${st.controller.statusAgeMin !== null ? ` (status.md ${st.controller.statusAgeMin} min old)` : ""}${st.controller.terminalProblem ? `: ${st.controller.terminalProblem}` : ""}`);
     const w = s.work;
     say(`\nDesigned features: ${w.designedFeatures.length ? w.designedFeatures.join(", ") : "none"}`);
@@ -1127,6 +1139,29 @@ function heartbeatStatus(c) {
   if (!problem && by.lastExit) [state, problem] = ["failed", `its last run failed (exit code ${by.lastExit}; see heartbeat.log, and run start to schedule it again)`];
   if (scheduled && !problem && state !== "not-yet") state = ok === null ? "ok-unknown" : "ok";
   return { enabled: true, scheduled, state, installed: Boolean(scheduled) || onController(ctl, `[ -f "${dir.replace(/^~(?=\/|$)/, "$HOME")}/heartbeat.mjs" ] && echo yes`).stdout?.trim() === "yes", lastRunMin: seen === null ? null : Math.round(seen), lastOkMin: ok === null ? null : Math.round(ok), lastOkAt: ok === null ? null : clock(ok), problem };
+}
+// Cleanup deletes only with --apply (controller/cleanup.mjs). A project that updated its scripts but kept an older, edited
+// CONTROLLER.md calls it without --apply and silently stops cleaning up. Two signs: the installed handbook's own calls, and
+// cleanup-pending.json, which a run without --apply leaves when it found something to remove (--apply deletes it).
+// cleanup.pendingWarnMinutes (default 30) is how long removable work may wait before this reports it.
+// The calls of cleanup.mjs in a handbook that do not clean up: no --apply, and not a call that only looks (--help, or an unbracketed
+// --dry; the old handbook's `[--dry]` is an optional flag of a call that is meant to clean up).
+const cleanupCallsWithoutApply = (text) => [...String(text).matchAll(/node cleanup\.mjs[^`\n]*/g)].map((m) => m[0].trim()).filter((s) => !/--apply\b|--help\b|(?<!\[)--dry\b/.test(s));
+const CLEANUP_TRAP = "cleanup deletes only with --apply, so this handbook cleans up nothing (every cycle exits with code 3). A CONTROLLER.md you edited stays on update and its new version lies in .factory/new/.factory/controller/CONTROLLER.md: merge it, or add --apply to the call, then run start";
+function cleanupStatus(c) {
+  const ctl = controllerHost(c) ?? { kind: "local", name: "local" };
+  const dir = heartbeatDir(c).replace(/^~(?=\/|$)/, "$HOME");
+  const out = onController(ctl, `cat "${dir}/cleanup-pending.json" 2>/dev/null; echo @@; if [ -f "${dir}/CONTROLLER.md" ]; then echo present; grep -o 'node cleanup\\.mjs[^\`]*' "${dir}/CONTROLLER.md" 2>/dev/null; else echo absent; fi`);
+  if (out.status !== 0 && !out.stdout) return { unknown: true };
+  const [pendingText = "", callsText = ""] = String(out.stdout).split("@@\n");
+  const handbookInstalled = callsText.startsWith("present");
+  let since = null, unknownHosts = []; try { const m = JSON.parse(pendingText); since = Date.parse(m.since) || null; unknownHosts = Array.isArray(m.unknown) ? m.unknown : []; } catch {}
+  const w = Number(c.cleanup?.pendingWarnMinutes), warn = Number.isFinite(w) && w > 0 ? w : 30, pendingMin = since ? Math.round((Date.now() - since) / 60000) : null;
+  const handbookCalls = cleanupCallsWithoutApply(callsText.replace(/^present\n?/, ""));
+  const problem = handbookCalls.length ? `the Controller's CONTROLLER.md calls cleanup without --apply (\`${handbookCalls[0]}\`): ${CLEANUP_TRAP}`
+    : unknownHosts.length ? `the last cleanup run could not determine the state of ${unknownHosts.join(", ")} (Orca's terminal list did not answer), so nothing was cleaned there and it is not known whether anything waits (exit code 3). It clears when a run can look at every host`
+    : pendingMin !== null && pendingMin >= warn ? `removable work has waited ${pendingMin} minutes: cleanup ran without --apply, which removes and releases nothing (exit code 3). Run \`node cleanup.mjs --all --prune-remote --apply\` in the Controller directory, and see the Controller's handbook` : null;
+  return { pendingSince: since ? new Date(since).toISOString() : null, pendingMin, warnMin: warn, unknownHosts, handbookInstalled, handbookCalls, problem };
 }
 function removeHeartbeatJob(c, ctl) {
   const label = heartbeatJob(c), plist = launchdPlistPath(label);
@@ -1252,6 +1287,9 @@ function armBotWatch(c, frontAgentDir) {
   // The precheck and the modules it imports come from one bundle; a bundle from an older factory lacks some of them.
   const files = ["cli.mjs", "hosts.mjs", "botwatch.mjs"], missing = files.filter((f) => !fs.existsSync(path.join(frontAgentDir, f)));
   if (missing.length) { say(`Front agent bot: the Front agent bundle has no ${missing.join(", ")}; it is older than this factory. Run \`agentic-factory update\`, then start again. The bot watch was not changed.`); return 1; }
+  // Look the bot up before anything is created: a bot that does not exist leaves no watch directory and no entry in projects.json.
+  const lookup = process.env.FACTORY_SKIP_ORCA === "1" || c.agents.runner !== "orca" ? null : findBot(name);
+  if (lookup && !lookup.bot) { say(`Bot watch: ${lookup.reachable ? `Orca has no bot named "${name}" on this machine (\`${ORCA_BIN} bot list\`)` : "Orca did not answer `bot list`"}. Nothing was created. Create the bot in Orca first (a bot proposes one with \`${ORCA_BIN} bot create --offer\`, the owner accepts it), give its SOUL.md the line "For each agentic-factory project, follow ~/front-agent/<project>/FRONT_BOT.md", then run start again.`); return 1; }
   fs.mkdirSync(dir, { recursive: true });
   // The directory is shared by every project that names the bot and Orca reads it every 5 minutes: whole files, never half of one.
   // Dependencies first, so a precheck that runs in between finds the modules it imports.
@@ -1286,8 +1324,7 @@ function armBotWatch(c, frontAgentDir) {
   });
   say(`Front agent bot "${name}": watches ${projects.map((p) => p.name).join(", ")} (${dir.replace(os.homedir(), "~")})`);
   if (process.env.FACTORY_SKIP_ORCA === "1" || c.agents.runner !== "orca") { say(`Bot watch: create the automation in Orca for the bot "${name}": every 5 minutes, precheck sh ${path.join(dir, "botwatch.sh")}`); return 0; }
-  const { reachable, bot } = findBot(name);
-  if (!bot) { say(`Bot watch: ${reachable ? `Orca has no bot named "${name}" on this machine (\`${ORCA_BIN} bot list\`)` : "Orca did not answer `bot list`"}. Create the bot in Orca first (a bot proposes one with \`${ORCA_BIN} bot create --offer\`, the owner accepts it), give its SOUL.md the line "For each agentic-factory project, follow ~/front-agent/<project>/FRONT_BOT.md", then run start again.`); return 1; }
+  const { bot } = lookup;
   const existing = findBotAutomation(bot);
   if (existing) { say(`Bot watch: automation "${existing.name}" already exists for "${bot.name}"; this project is in its list`); return 0; }
   if (existing === undefined) { say("Bot watch: Orca did not answer `automations list`; nothing was created, run start again."); return 1; }
@@ -1348,6 +1385,7 @@ async function start() {
   if (ctl.kind === "local") {
     const d = expandHome(dir);
     fs.mkdirSync(d, { recursive: true }); copyTreeAtomic(".factory/controller", d); say(`Controller bundle: ${dir}`);
+    warnCleanupTrap();
     say(`Gate: ${dir}/gate (this project's own; the shared ~/.local/bin/gate is neither used nor touched)`);
     const loadlog = path.join(d, "loadlog.sh");
     // A logger of this directory that was started without the project name writes untagged lines for as long as it runs: it goes.
@@ -1367,6 +1405,9 @@ async function start() {
     else {
       say(`Controller bundle: ${ctl.name}:${remoteDir}`);
       const s = spawnSync("ssh", [...sshArgsFor(ctl), `for s in ${remoteDir}/skills/*; do n=$(basename "$s"); for t in ~/.claude/skills ~/.agents/skills; do mkdir -p "$t"; [ -e "$t/$n" ] || cp -R "$s" "$t/"; done; done; for p in $(pgrep -f "[b]ash loadlog.sh$" 2>/dev/null); do [ "$(readlink /proc/$p/cwd 2>/dev/null)" = "$(cd ${remoteDir} && pwd)" ] && kill $p; done; pgrep -f "[b]ash ${remoteLoadlog} " >/dev/null || (cd ${remoteDir} && nohup bash ${remoteLoadlog} ${quoted} >/dev/null 2>&1 &); echo ok`], { encoding: "utf8" });
+      // The same check on the handbook as it now lies on the Controller's host.
+      const hb = spawnSync("ssh", [...sshArgsFor(ctl), `grep -o 'node cleanup\\.mjs[^\`]*' "${remoteDir.replace(/^~(?=\/|$)/, "$HOME")}/CONTROLLER.md" 2>/dev/null`], { encoding: "utf8" });
+      warnCleanupTrap(`${ctl.name}:${remoteDir}/CONTROLLER.md`, hb.stdout ?? "");
       s.stdout?.trim().endsWith("ok") ? say(`User-level skills and load log on ${ctl.name}: ok`) : (failed++, say(`User-level skills or load log on ${ctl.name} failed: ${(s.stderr || "").trim().slice(0, 200)}`));
     }
   }

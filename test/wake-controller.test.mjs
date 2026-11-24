@@ -2,6 +2,7 @@
 // Controller's terminal (a recorded handle only after it is confirmed, else by title), what the wake line carries, and that
 // the heartbeat does not depend on wait.mjs. Fakes only: no real crontab, launchctl or Orca is ever reached, and HOME is a
 // throwaway directory.
+import "./support/safe-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";

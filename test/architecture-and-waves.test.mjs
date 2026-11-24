@@ -1,4 +1,5 @@
 // The architecture mode as a human's choice, the gate's shell form, and closing finished wave terminals.
+import "./support/safe-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -121,22 +122,22 @@ else if (a[1] === "read") console.log(JSON.stringify({ ok: true, result: { tail:
 else if (a[0] === "worktree" && a[1] === "list") console.log(JSON.stringify({ ok: true, result: { worktrees: [] } }));
 else console.log(JSON.stringify({ ok: true, result: {} }));`);
   fs.chmodSync(fake, 0o755);
-  const cleanup = (...args) => spawnSync("node", [path.join(ctl, "cleanup.mjs"), ...args], { cwd: project, encoding: "utf8", env: { ...process.env, ORCA_CLI_COMMAND: fake, FACTORY_CONFIG: path.join(ctl, "factory.config.json") } });
+  const cleanup = (...args) => spawnSync("node", [path.join(ctl, "cleanup.mjs"), ...args], { cwd: project, encoding: "utf8", env: Object.fromEntries(Object.entries({ ...process.env, ORCA_CLI_COMMAND: fake, FACTORY_CONFIG: path.join(ctl, "factory.config.json") }).filter(([k]) => !k.startsWith("ORCA_") || k === "ORCA_CLI_COMMAND")) });
   const closed = () => fs.readFileSync(log, "utf8").split("\n").filter((l) => l.startsWith("terminal close")).map((l) => l.split(" ")[3]);
   const dry = cleanup("--dry");
-  assert.equal(dry.status, 0, dry.stdout + dry.stderr);
+  assert.equal(dry.status, 3, dry.stdout + dry.stderr);
   assert.match(dry.stdout, /would close the finished wave terminal "p · Integration · T1"/);
   assert.match(dry.stdout, /would close the finished wave terminal "Coordinator T0"/);
   assert.doesNotMatch(dry.stdout, /would close .*(q · Integration|Coordinator T7)/);
   assert.deepEqual(closed(), [], "a dry run closes nothing");
-  const r = cleanup();
+  const r = cleanup("--apply");
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /closed 2 finished wave terminals/);
   assert.deepEqual(closed().sort(), ["term_legacy", "term_old"]);
   // Without a wave of its own, another project's newest wave is still not this project's to close.
   fs.rmSync(path.join(ctl, "wave-handle.txt"));
   fs.rmSync(log);
-  assert.equal(cleanup().status, 0);
+  assert.equal(cleanup("--apply").status, 0);
   assert.ok(!closed().some((h) => h.startsWith("term_other")));
   fs.rmSync(dir, { recursive: true, force: true });
 });

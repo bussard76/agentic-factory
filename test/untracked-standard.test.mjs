@@ -1,4 +1,5 @@
 // The factory's standard stays out of a project's history: only real git, real hooks and real worktrees here.
+import "./support/safe-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";

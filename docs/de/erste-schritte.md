@@ -68,7 +68,7 @@ Probiere das integrierte Verhalten mit dem Front-Agenten auf der Preview aus. Is
 | Controller tut nichts | Prüfe `~/controller/status.md`, `inbox.md` und `node capacity.mjs --verbose`. |
 | Worker steht still | Prüfe `node stallwatch.mjs` und sein Orca-Terminal. |
 | Tests wackeln unter Last | Prüfe `~/load.log` (die Zeilen mit `project=<dein Projekt>` am Ende) und das Gate-Journal; senke `capacity.calibration.startSuite`. |
-| Update behält deine Änderung | Führe die neue Version aus `.factory/new/` zusammen. |
+| Update behält deine Änderung | Führe die neue Version aus `.factory/new/` zusammen. Besonders wichtig bei einer geänderten `CONTROLLER.md`: eine ältere ruft `cleanup.mjs` ohne `--apply` auf, und Cleanup entfernt dann nichts (Exit-Code 3, `status` und `doctor` melden es). |
 
 ## Was `start` auf deinem Rechner schreibt
 
@@ -85,7 +85,7 @@ Im Projekt schreiben `init` und `update`, was die Tabelle im Anhang aufführt. `
 | Crontab (auf macOS ein launchd-Agent in `~/Library/LaunchAgents/de.agentic-factory.statuswatch.<projekt>.<id>.plist`) | Die Status-Überwachung (alle 5 Minuten, Front-Agent im Terminal) und der Heartbeat des Controllers | Ein Eintrag je Projekt und Verzeichnis, jeweils mit dem Projektnamen markiert; `start` fügt nur den eigenen hinzu und lässt den Rest der Crontab unberührt | `crontab -e` und die mit `# agentic-factory … : <projekt>` markierten Zeilen löschen; auf macOS `launchctl bootout gui/$(id -u)/<label>` und die Plist löschen. |
 | `~/.lean-ctx/config.toml` | Nur wenn lean-ctx installiert ist: `allow_paths` bekommt das Projekt, seinen Checkout auf dem Controller-Host und seine Worker-Workspaces, damit der Controller sie lesen darf | Geteilte Datei. Nur fehlende Pfade werden hinzugefügt (jeder als korrekt maskierter TOML-String, also geht jeder Pfad, auch mit `]` oder `"`); was da ist, Kommentare in der Liste eingeschlossen, bleibt Byte für Byte. Sind alle da, wird nichts geschrieben. Das Schreiben ist atomar (temporäre Datei und Umbenennen; die Datei behält ihre Rechte, ein Symlink bleibt einer) und wird neu berechnet, wenn sich die Datei inzwischen geändert hat. Eine Datei, die der Leser nicht ganz versteht (Liste mit anderem als Strings, der Schlüssel doppelt, ein nicht lesbarer String), bleibt unberührt, mit einer Meldung, die die von Hand zu ergänzenden Pfade nennt. | Die Pfade des Projekts aus `allow_paths` löschen. |
 | `<controllerDir>/.claude/settings.local.json` | Nur mit pi-Paket `context-mode`: `Read(<pfad>/**)`-Rechte für dieselben Pfade | Im eigenen Controller-Verzeichnis des Projekts | Einträge oder Datei löschen. |
-| Orca | Ein Repo-Eintrag (von `init` angelegt), Controller- und Worker-Terminals und -Worktrees (`~/orca/workspaces/<projekt>/`), mit Bot die Automation oben | Nach Projekt benannt | `cleanup.mjs` entfernt fertige Worktrees; den Repo-Eintrag in Orcas Oberfläche entfernen (die CLI kann ihn nur ausblenden). |
+| Orca | Ein Repo-Eintrag (von `init` angelegt), Controller- und Worker-Terminals und -Worktrees (`~/orca/workspaces/<projekt>/`), mit Bot die Automation oben | Nach Projekt benannt | `cleanup.mjs --apply` entfernt fertige Worktrees (ohne `--apply` zeigt es nur, was es entfernen würde); den Repo-Eintrag in Orcas Oberfläche entfernen (die CLI kann ihn nur ausblenden). |
 
 **Nie von `start` geschrieben:** die `.env` des Projekts, Controller, Worktrees, Worker oder Bots anderer Projekte und der launchd-Agent der Preview (`preview.plist.template` lädst du selbst).
 

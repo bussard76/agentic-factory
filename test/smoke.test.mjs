@@ -1,4 +1,5 @@
 // End-to-end smoke test: init in a fresh repo, hooks bite, controller scripts run. `npm test` runs it.
+import "./support/safe-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
@@ -172,6 +173,14 @@ test("agent entry questions, answers, status and start in an isolated home", asy
     fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
     r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
     assert.equal(r.status, 0, r.stdout + r.stderr); const sshCalls = fs.readFileSync(`${calls}.ssh`, "utf8"); assert.match(sshCalls, /pgrep -f "\[b\]ash \$HOME\/controller\/loadlog\.sh " >\/dev\/null \|\| \(cd ~\/controller && nohup bash \$HOME\/controller\/loadlog\.sh 'project'/); assert.doesNotMatch(sshCalls, /\.local\/bin\/gate/, "a remote start does not touch the shared gate either"); assert.match(sshCalls, /node heartbeat\.mjs/);
+    // A kept older handbook that calls cleanup without --apply is reported for a remote Controller host too, naming the host.
+    const sshFile = path.join(bin, "ssh"), sshOriginal = fs.readFileSync(sshFile, "utf8");
+    fs.writeFileSync(sshFile, sshOriginal.replace("case \"$*\" in ", "case \"$*\" in *'cleanup\\.mjs'*) printf 'node cleanup.mjs --all --prune-remote\\n';; "), { mode: 0o755 });
+    r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
+    assert.match(r.stdout, /WARNING: remote:~\/controller\/CONTROLLER\.md calls cleanup without --apply \(`node cleanup\.mjs --all --prune-remote`\)/, r.stdout);
+    fs.writeFileSync(sshFile, sshOriginal, { mode: 0o755 });
+    r = spawnSync("node", [CLI, "start"], { cwd: project, encoding: "utf8", env: { ...env, FACTORY_SKIP_ORCA: "0", ORCA_CLI_COMMAND: fakeOrca } });
+    assert.doesNotMatch(r.stdout, /WARNING: .*calls cleanup without --apply/, "an installed handbook with --apply is not reported");
     // Gates run on every other worker host too (workers, waves, slots): the project's gate goes there, and a failure is a failed start.
     fs.rmSync(`${calls}.ssh`); fs.rmSync(`${calls}.rsync`, { force: true });
     config.hosts.workers.push({ name: "other", kind: "remote", ssh: "fake2", projectsDir: "~/projects", orcaEnvironment: "other-env" }); fs.writeFileSync(path.join(project, "factory.config.json"), JSON.stringify(config));
@@ -610,7 +619,11 @@ test("controller scripts run against the generated config", () => {
   for (const f of ["AGENTS.md", "docs/coordinator.md", "docs/review-protocol.md", "docs/architect-protocol.md", "docs/dev-workflow.md", ".factory/controller/CONTROLLER.md"]) assert.doesNotMatch(fs.readFileSync(path.join(tmp, f), "utf8"), /\{\{[A-Z0-9_]+\}\}/, f);
   assert.match(run("templates/mkspec.mjs", "steward", "Wave 1"), /steward/);
   run("journal.mjs", "decision", "T01", "note=x");
-  assert.match(run("cleanup.mjs", "--dry"), /cleanup \(dry\)/);
+  // Orca does not answer here (it is `false`): the state is unknown, which is exit code 3 and never "nothing to remove".
+  const unknown = spawnSync("node", ["cleanup.mjs", "--dry"], { cwd: ctl, encoding: "utf8", env });
+  assert.equal(unknown.status, 3, unknown.stdout + unknown.stderr);
+  assert.match(unknown.stdout, /cleanup \(dry\)/);
+  assert.match(unknown.stdout, /NOT KNOWN WHETHER ANYTHING WAITS/);
   assert.match(run("calibrate-models.mjs"), /no change|updated/);
   assert.match(run("calibrate-models.mjs", "--days", "3"), /no change|updated/);
 });

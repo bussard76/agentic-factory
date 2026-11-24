@@ -1,5 +1,6 @@
 // The docs-only check, the docs-only wave path and the formatter on staged files, in throwaway repositories with the
 // factory's own hooks and guardrails copied in. No formatter is installed: a small node script stands in for one.
+import "./support/safe-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";

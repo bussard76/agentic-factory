@@ -1,4 +1,5 @@
 // The preview's update script run for real against a temporary HOME, and which tickets count as ready in both steering modes.
+import "./support/safe-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";

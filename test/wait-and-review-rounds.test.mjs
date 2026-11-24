@@ -1,4 +1,5 @@
 // controller/wait.mjs against a fake Orca (payload shapes, bad messages), and the bounded review rounds in mkspec.
+import "./support/safe-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";

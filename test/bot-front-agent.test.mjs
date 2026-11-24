@@ -1,6 +1,7 @@
 // An Orca bot as the Front agent (hosts.frontAgent.kind = "orca-bot"): the precheck that decides when the bot wakes,
 // start's one automation per bot, status and doctor, and the optional read grants. Fake Orca, fake ssh, a temporary HOME:
 // no test may reach a real bot, a real automation or the real tool configs.
+import "./support/safe-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -273,6 +274,9 @@ test("a bot that Orca does not know fails start and shows in status and doctor; 
   assert.equal(r.status, 1);
   assert.match(r.stdout, /Orca has no bot named "missing-bot"/);
   assert.equal(m.creates().length, 0);
+  // The lookup comes first: an unknown bot creates no watch directory and puts no project into projects.json.
+  assert.ok(!fs.existsSync(path.join(m.home, "front-agent/.bots")), "no watch directory for a bot that does not exist");
+  assert.match(r.stdout, /Nothing was created/);
   assert.match(JSON.parse(p.cli("status", "--json").stdout).next, /"missing-bot" is not in `orca bot list`/);
   assert.match(p.cli("doctor").stdout, /MISSING Front agent bot missing-bot/);
   // The default: no bot fields, the terminal watch as before, and a CONTROLLER.md without the bot paragraph.
@@ -296,5 +300,69 @@ test("a bot that Orca does not know fails start and shows in status and doctor; 
   assert.match(handbook, /Do not send it to the bot: `bot:` only reaches bots on the same machine/);
   assert.doesNotMatch(handbook, /--to "bot:/);
   assert.match(fs.readFileSync(path.join(remote.dir, ".factory/front-agent/FRONT_BOT.md"), "utf8"), /ssh srv cat ~\/controller-epsilon\/status\.md/);
+  m.done();
+});
+
+test("status and doctor report a handbook that calls cleanup without --apply, and removable work that waited too long", () => {
+  const m = machine();
+  const p = m.project("zeta", {});
+  const ctl = path.join(m.home, "controller-zeta");
+  fs.mkdirSync(ctl, { recursive: true });
+  const cleanup = () => JSON.parse(p.cli("status", "--json").stdout).setup.cleanup;
+  assert.equal(cleanup().problem, null, "nothing installed, nothing to report");
+  // An older handbook kept by update: its call has no --apply.
+  fs.writeFileSync(path.join(ctl, "CONTROLLER.md"), "| `node cleanup.mjs --all --prune-remote [--dry] [--pushed]` | every cycle |\n");
+  assert.match(cleanup().problem, /calls cleanup without --apply.*\.factory\/new\/\.factory\/controller\/CONTROLLER\.md/);
+  assert.match(p.cli("doctor").stdout, /MISSING cleanup: the Controller's CONTROLLER\.md calls cleanup without --apply/);
+  // The current handbook, and a run without --apply that found work: reported once it waited longer than the threshold.
+  fs.writeFileSync(path.join(ctl, "CONTROLLER.md"), "| `node cleanup.mjs --all --prune-remote --apply` | every cycle |\n");
+  fs.writeFileSync(path.join(ctl, "cleanup-pending.json"), JSON.stringify({ since: new Date(Date.now() - 5 * 60_000).toISOString(), pending: 2 }));
+  assert.equal(cleanup().problem, null, "five minutes is within the default 30");
+  fs.writeFileSync(path.join(ctl, "cleanup-pending.json"), JSON.stringify({ since: new Date(Date.now() - 45 * 60_000).toISOString(), pending: 2 }));
+  assert.match(cleanup().problem, /removable work has waited 45 minutes.*exit code 3/);
+  assert.match(p.cli("doctor").stdout, /MISSING cleanup: removable work has waited/);
+  fs.rmSync(path.join(ctl, "cleanup-pending.json"));
+  assert.equal(cleanup().problem, null);
+  m.done();
+});
+
+test("F3/F7: update and start say plainly when the kept handbook calls cleanup without --apply; doctor ignores a call that only looks", () => {
+  const m = machine();
+  const p = m.project("eta", {});
+  const handbook = path.join(p.dir, ".factory/controller/CONTROLLER.md");
+  assert.doesNotMatch(p.cli("update").stdout, /WARNING/, "the current handbook is fine");
+  // A locally kept older copy: the call has no --apply (the old row had an optional [--dry]).
+  fs.writeFileSync(handbook, fs.readFileSync(handbook, "utf8").replace(/ --apply/g, "").replace("--prune-remote", "--prune-remote [--dry]"));
+  const u = p.cli("update");
+  assert.equal(u.status, 0, u.stderr);
+  assert.match(u.stdout, /WARNING: \.factory\/controller\/CONTROLLER\.md calls cleanup without --apply.*\.factory\/new\/\.factory\/controller\/CONTROLLER\.md.*run start/s);
+  const s = p.cli("start");
+  assert.match(s.stdout, /WARNING: \.factory\/controller\/CONTROLLER\.md calls cleanup without --apply/, s.stdout);
+  // A rule that says "look first with --dry, then --apply" is not a call that fails to clean up.
+  const ctl = path.join(m.home, "controller-eta");
+  fs.writeFileSync(path.join(ctl, "CONTROLLER.md"), "Look first with `node cleanup.mjs --dry`, then run `node cleanup.mjs --all --apply`.\n");
+  const st = JSON.parse(p.cli("status", "--json").stdout).setup.cleanup;
+  assert.equal(st.problem, null);
+  assert.equal(st.handbookInstalled, true);
+  fs.rmSync(path.join(ctl, "CONTROLLER.md"));
+  const none = JSON.parse(p.cli("status", "--json").stdout).setup.cleanup;
+  assert.equal(none.handbookInstalled, false);
+  assert.match(p.cli("doctor").stdout, /info {4}cleanup: not checked, no Controller handbook is installed yet/);
+  m.done();
+});
+
+test("status and doctor show a cleanup run that could not determine the state of a host", () => {
+  const m = machine();
+  const p = m.project("theta", {});
+  const ctl = path.join(m.home, "controller-theta");
+  fs.mkdirSync(ctl, { recursive: true });
+  fs.writeFileSync(path.join(ctl, "CONTROLLER.md"), "| `node cleanup.mjs --all --apply` | every cycle |\n");
+  fs.writeFileSync(path.join(ctl, "cleanup-pending.json"), JSON.stringify({ since: new Date().toISOString(), pending: 0, unknown: ["srv"] }));
+  const cl = JSON.parse(p.cli("status", "--json").stdout).setup.cleanup;
+  assert.deepEqual(cl.unknownHosts, ["srv"]);
+  assert.match(cl.problem, /could not determine the state of srv.*exit code 3/);
+  assert.match(p.cli("doctor").stdout, /MISSING cleanup: the last cleanup run could not determine the state of srv/);
+  fs.rmSync(path.join(ctl, "cleanup-pending.json"));
+  assert.equal(JSON.parse(p.cli("status", "--json").stdout).setup.cleanup.problem, null);
   m.done();
 });
