@@ -302,7 +302,7 @@ test("a Controller config tuned in the Controller directory survives start: kept
   r = w.run("start");
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.deepEqual(JSON.parse(fs.readFileSync(own, "utf8")), tuned, "the Controller's own copy is not changed, nothing is merged");
-  assert.match(r.stdout, /keep\s+\S*factory\.config\.json \(its own copy was changed there, so it stays whole; nothing is merged\)/);
+  assert.match(r.stdout, /keep\s+\S*factory\.config\.json \(it differs from the project's copy, so it stays as it is/);
   for (const key of ["agents.models.default", "reviews.maxRounds", "hosts.workers"]) assert.match(r.stdout, new RegExp(key.replace(/\./g, "\\.")), `${key} is listed`);
   assert.match(r.stdout, /agents\.models\.default \(there "tuned-model", project "/);
   for (const key of ["hosts.workers[server].capacity.suiteWorkersMax (there 10", "hosts.workers[server].capacity.calibration (there {\"foreignOnlyFloor\":8}"]) assert.ok(r.stdout.includes(key), `${key}: every differing key is named, an array of named hosts by the host's name`);
@@ -362,20 +362,22 @@ test("an untouched installation by an older version, whose baseline nobody can e
   // What a v0.1.13-style installation looks like to this CLI: every file of both directories is an older version, no record, no matching manifest hash.
   for (const [dir, bundle] of [[w.ctl, ".factory/controller"], [w.fa, ".factory/front-agent"]]) for (const rel of fs.readdirSync(path.join(w.project, bundle), { recursive: true }).filter((r) => fs.statSync(path.join(w.project, bundle, r)).isFile())) {
     fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
-    fs.writeFileSync(path.join(dir, rel), `// an older version of ${rel}\n${fs.readFileSync(path.join(w.project, bundle, rel), "utf8")}`, { mode: 0o644 });
+    const text = fs.readFileSync(path.join(w.project, bundle, rel), "utf8");
+    fs.writeFileSync(path.join(dir, rel), rel === "factory.config.json" ? JSON.stringify({ ...JSON.parse(text), olderKey: true }, null, 2) : `// an older version of ${rel}\n${text}`, { mode: 0o644 });
   }
   let r = w.run("update");
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.doesNotMatch(r.stdout, /keep\s+\S*(controller-demo|front-agent)/, "nothing is kept");
+  const keptLines = (out) => out.split("\n").filter((l) => /^\s+keep\s+\S*(controller-demo|front-agent)/.test(l) && !/factory\.config\.json/.test(l));
+  assert.deepEqual(keptLines(r.stdout), [], "nothing is kept but the configs");
   r = w.run("start");
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.doesNotMatch(r.stdout, /keep\s+\S*(controller-demo|front-agent)/, "nothing is kept");
-  assert.match(r.stdout, /WARNING: \S*controller-demo: CONTROLLER\.md, factory\.config\.json were replaced by the new version/, "the handbook and the config are named, with their copies");
+  assert.deepEqual(keptLines(r.stdout), [], "nothing is kept but the configs");
+  assert.match(r.stdout, /WARNING: \S*controller-demo: CONTROLLER\.md was replaced by the new version/, "the handbook and the config are named, with their copies");
   assert.match(r.stdout, /NOTE: \S*controller-demo: \d+ script\/code file\(s\) were replaced by the new version[\s\S]*lib\.mjs → lib\.mjs\.backup-\d{4}-\d\d-\d\d/, "every replaced script is listed");
   for (const [dir, bundle] of [[w.ctl, ".factory/controller"], [w.fa, ".factory/front-agent"]]) {
     for (const rel of codeFiles(path.join(w.project, bundle))) assert.ok(same(path.join(dir, rel), path.join(w.project, bundle, rel)), `${rel} is the new version`);
     assert.ok(fs.readdirSync(dir).some((f) => /^lib\.mjs\.backup-|^hosts\.mjs\.backup-/.test(f)), "the old copies are saved beside");
-    assert.equal(fs.readdirSync(dir).filter((f) => f.endsWith(".new")).length, 0, "no .new: nothing was kept");
+    assert.equal(fs.readdirSync(dir).filter((f) => f.endsWith(".new") && f !== "factory.config.json.new").length, 0, "no .new but the config's: the config is never replaced");
   }
   assert.match(fs.readFileSync(path.join(w.ctl, "lib.mjs.backup-" + new Date().toISOString().slice(0, 10)), "utf8"), /^\/\/ an older version of lib\.mjs/);
   assert.ok(fs.statSync(path.join(w.ctl, "gate")).mode & 0o100, "the gate is executable");
@@ -419,5 +421,51 @@ test("start restores a lost executable bit, and doctor says the installation is 
   assert.equal(w.run("start").status, 0);
   assert.ok(fs.statSync(path.join(w.ctl, "gate")).mode & 0o100, "executable again");
   assert.equal(w.run("doctor").status, 0);
+  w.done();
+});
+
+test("the evidence's case: an installation without any record keeps a Controller config that differs in controllerArgs, role models and caps, byte for byte, and lists every difference", () => {
+  const w = world();
+  assert.equal(w.run("update").status, 0);
+  const own = path.join(w.ctl, "factory.config.json");
+  const tuned = w.readConfig();
+  tuned.agents.controllerArgs = "--model some-model --thinking high";
+  tuned.agents.piRoleModels = { architect: "model-a", reviewer: "model-b" };
+  tuned.agents.apiToken = "sk-should-never-be-printed";
+  tuned.hosts.workers[0].capacity = { suiteWorkersMax: 10, readOnlyWorkersMax: 10, calibration: { foreignOnlyFloor: 8 } };
+  tuned.hosts.workers[0].sshPassword = "hunter2-should-never-be-printed";
+  fs.mkdirSync(w.ctl, { recursive: true });
+  fs.writeFileSync(own, JSON.stringify(tuned, null, 4) + "\n");   // its own formatting: byte-identical afterwards
+  const before = fs.readFileSync(own);
+  assert.equal(fs.existsSync(path.join(w.ctl, ".factory-installed.json")), false, "no record: the case of every installation made by 0.1.13 or older");
+  for (const cmd of ["update", "start"]) {
+    const r = w.run(cmd);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /keep\s+\S*controller-demo\/factory\.config\.json \(it differs from the project's copy, so it stays as it is/);
+    for (const key of ["agents.controllerArgs (there \"--model some-model --thinking high\"", "agents.piRoleModels.architect (there \"model-a\"", "agents.piRoleModels.reviewer (there \"model-b\"", "hosts.workers[server].capacity.suiteWorkersMax (there 10", "hosts.workers[server].capacity.calibration (there {\"foreignOnlyFloor\":8}"]) assert.ok(r.stdout.includes(key), `${cmd}: ${key}`);
+    assert.match(r.stdout, /agents\.apiToken \(there \(hidden\), project \(absent\)\)/, "a value that can hold a secret is masked");
+    assert.match(r.stdout, /hosts\.workers\[server\]\.sshPassword \(there \(hidden\)/);
+    assert.doesNotMatch(r.stdout, /should-never-be-printed/);
+    assert.ok(fs.readFileSync(own).equals(before), `${cmd}: the Controller's copy is byte-identical`);
+  }
+  assert.equal(JSON.parse(fs.readFileSync(`${own}.new`, "utf8")).project.name, "demo", "the project's copy lies beside it");
+  assert.equal(fs.readdirSync(w.ctl).filter((f) => /^factory\.config\.json\.backup-/.test(f)).length, 0, "nothing replaced, so nothing to back up");
+  assert.ok(fs.existsSync(path.join(w.ctl, ".factory-installed.json")), "start wrote the record of the rest");
+  assert.ok(fs.readFileSync(own).equals(before), "also with a record now");
+  w.done();
+});
+
+test("a Controller config without a key the scripts cannot run without stops start before anything is installed or started, and is not replaced", () => {
+  const w = world();
+  assert.equal(w.run("update").status, 0);
+  fs.mkdirSync(w.ctl, { recursive: true });
+  const broken = JSON.stringify({ agents: { default: "claude" } });
+  fs.writeFileSync(path.join(w.ctl, "factory.config.json"), broken);
+  const r = w.run("start");
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /STOPPED: \S*controller-demo\/factory\.config\.json has no project\.name, hosts, which the scripts cannot run without/);
+  assert.equal(fs.readFileSync(path.join(w.ctl, "factory.config.json"), "utf8"), broken);
+  assert.equal(fs.existsSync(path.join(w.ctl, "heartbeat.mjs")), false, "nothing was installed");
+  assert.equal(w.calls("orca").some((l) => l.startsWith("terminal create")), false, "no Controller was started");
   w.done();
 });

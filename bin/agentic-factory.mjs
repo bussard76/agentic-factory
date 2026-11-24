@@ -11,7 +11,7 @@ import { controllerPlaces, controllerSession, createArgs, createdHandle, locateC
 import { heartbeatCronCheckScript, heartbeatCronScript, heartbeatLabel, heartbeatPlist, statusWatchCronScript, statusWatchLabel, statusWatchPlist } from "./heartbeat-cron.mjs";
 import { hostName, isThisMachine, machineId, markerFile, ownEntry, readMarker, sshUser, staleLimit } from "../front-agent/hosts.mjs";
 import { patchJson } from "./json-patch.mjs";
-import { RECORD, diffKeys, hash16, isEditable, planPlacement, probeSource } from "./placement.mjs";
+import { RECORD, diffKeys, hash16, isConfig, isEditable, missingKeys, planPlacement, probeSource } from "./placement.mjs";
 import { applyReadGrants } from "./read-grants.mjs";
 import { copyTreeAtomic, withLock, writeFileAtomic } from "./safe-write.mjs";
 
@@ -735,6 +735,8 @@ function placeBundle({ host, dir, bundle, only, apply, read = [] }) {
   const probe = probeDest(host, dir, [...files.keys()], read);
   if (!probe) return { unreachable: true };
   const plan = { ...planPlacement({ files, execs, probe, manifest: manifestNow(), bundle }), texts: probe.texts, files, dirExists: probe.dirExists, bundleDir: bundle };
+  plan.missing = plan.kept.some((k) => isConfig(k.rel)) ? missingKeys(bundle, probe.texts?.["factory.config.json"] ?? "") : [];
+  if (apply && plan.missing.length) { plan.error = `the config there lacks ${plan.missing.join(", ")}, which the scripts cannot run without`; return plan; }
   const date = backupDate();
   if (!apply) { plan.backedUp = plan.backups.map((b) => ({ ...b, name: `${b.rel}.backup-${date}` })); return plan; }
   const run = (script) => (host.kind === "local" ? spawnSync("sh", ["-c", script], { encoding: "utf8" }) : spawnSync("ssh", [...sshArgsFor(host), script], { encoding: "utf8" }));
@@ -770,6 +772,13 @@ function placeBundle({ host, dir, bundle, only, apply, read = [] }) {
   return plan;
 }
 const placeWhere = (host, dir) => (host.kind === "local" ? dir : `${host.name}:${dir}`);
+// A kept config that lacks a key the scripts read without a default cannot run them: say which, and stop before anything runs with it.
+function stopIfBroken(plan, host, dir) {
+  if (!plan?.missing?.length) return;
+  const at = placeWhere(host, dir);
+  say(`\nSTOPPED: ${at}/factory.config.json has no ${plan.missing.join(", ")}, which the scripts cannot run without. It was not replaced and nothing was installed or started. Add the key (the project's copy is ${plan.bundleDir}/factory.config.json in the project), or take the project's copy: cp ${plan.bundleDir}/factory.config.json ${at.replace(/^[^:]*:/, "")}/factory.config.json`);
+  process.exit(1);
+}
 // The lines for what was kept and what was replaced with a copy saved. beside: start did it (the new version lies beside the kept file, the copies
 // exist); otherwise update says what start will do.
 function sayKept(plan, host, dir, beside) {
@@ -785,7 +794,7 @@ function sayKept(plan, host, dir, beside) {
     if (k.rel !== "factory.config.json") { say(`  keep   ${at}/${k.rel} (changed there since the template installed it)${beside ? ` → new version beside it: ${at}/${k.rel}.new` : ""}; also in .factory/new/${plan.bundleDir}/${k.rel}`); continue; }
     // The Controller's own config is whole its own: tuned there (models, caps, calibration), so it is neither replaced nor merged.
     const diff = diffOf(k.rel, plan.texts["factory.config.json"]);
-    say(`  keep   ${at}/factory.config.json (its own copy was changed there, so it stays whole; nothing is merged)${diff.length ? `. It differs from the project's in these ${diff.length} keys:${keys(diff)}` : ""}`);
+    say(`  keep   ${at}/factory.config.json (it differs from the project's copy, so it stays as it is: a config is never replaced once it differs, and nothing is merged)${diff.length ? `. It differs from the project's in these ${diff.length} keys:${keys(diff)}` : ""}`);
     say(`         To use the project's copy instead: cp ${here}/factory.config.json.new ${here}/factory.config.json${host.kind === "local" ? "" : ` (on ${host.name})`}${beside ? "" : "; start writes it beside the kept file"}`);
   }
   const done = beside ? plan.backedUp : plan.backups.map((b) => ({ ...b, name: `${b.rel}.backup-${backupDate()}` }));
@@ -1635,6 +1644,7 @@ async function start() {
   let failed = 0;
   // statuswatch and botwatch run from here on a schedule: whole files only. A file changed in this directory stays, the new one lands beside it.
   const front = placeBundle({ host: { kind: "local", name: "local" }, dir: fa, bundle: ".factory/front-agent", apply: true, read: ["factory.config.json"] });
+  stopIfBroken(front, { kind: "local" }, fa.replace(os.homedir(), "~"));
   say(`\nFront agent bundle: ${fa.replace(os.homedir(), "~")}`);
   if (front.unreachable || front.error) { failed++; say(`  could not place the Front agent bundle (${front.error ?? "its directory could not be read"}); the status watch below runs what is there.`); }
   else { front.bundleDir = ".factory/front-agent"; sayKept(front, { kind: "local" }, fa.replace(os.homedir(), "~"), true); }
@@ -1658,6 +1668,7 @@ async function start() {
     const d = expandHome(dir);
     fs.mkdirSync(d, { recursive: true });
     const placed = placeBundle({ host: ctl, dir, bundle: ".factory/controller", apply: true, read: ["CONTROLLER.md", "factory.config.json"] });
+    stopIfBroken(placed, ctl, dir);
     placed.bundleDir = ".factory/controller";
     if (placed.unreachable || placed.error) { failed++; say(`Controller bundle: could not place it in ${dir} (${placed.error ?? "the directory could not be read"}). Nothing else was changed there.`); }
     else {
@@ -1680,6 +1691,7 @@ async function start() {
     // passed (started as "bash loadlog.sh" in this directory, writing untagged lines) is stopped, found by its working directory (Linux).
     const remoteDir = dir, remoteLoadlog = `${dir.replace(/^~(?=\/|$)/, "$HOME")}/loadlog.sh`, quoted = `'${c.project.name.replace(/'/g, "'\\''")}'`;
     const placed = placeBundle({ host: ctl, dir: remoteDir, bundle: ".factory/controller", apply: true, read: ["CONTROLLER.md", "factory.config.json"] });
+    stopIfBroken(placed, ctl, remoteDir);
     placed.bundleDir = ".factory/controller";
     if (placed.unreachable) { failed++; say(`Controller bundle: copy to ${ctl.name} failed: could not look at ${remoteDir} there (no answer over ssh, or no node), so nothing was copied.${selfHint(ctl, c)}`); }
     else if (placed.error) { failed++; say(`Controller bundle: copy to ${ctl.name} failed: ${placed.error}`); }
@@ -1697,6 +1709,7 @@ async function start() {
   for (const h of hostsOf(c).filter((h) => (h.kind === "remote" || h.here) && h.name !== c.hosts.controller.host)) {
     const mk = h.here ? { status: 0 } : spawnSync("ssh", [...sshArgsFor(h), `mkdir -p ${dir}`], { encoding: "utf8" });
     const gate = mk.status === 0 ? placeBundle({ host: h, dir, bundle: ".factory/controller", only: ["gate", "gate.mjs", "factory.config.json"], apply: true, read: ["factory.config.json"] }) : { error: (mk.stderr || "").trim().slice(0, 200) };
+    stopIfBroken(gate, h, dir);
     gate.bundleDir = ".factory/controller";
     if (!gate.unreachable && !gate.error) { say(`Gate on ${h.name}: ${dir}/gate (this project's own)`); sayKept(gate, h, dir, true); }
     else { failed++; say(`Gate on ${h.name}: could not copy it to ${dir} (${gate.error ?? "no answer"}). Gates run there too, so this start failed.`); }
