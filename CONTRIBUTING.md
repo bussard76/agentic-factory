@@ -32,5 +32,8 @@ This applies on every remote, before anything is accepted, whoever or whatever w
 Every new state of `main` is released, so a project can always stay on a tagged version that has all fixes.
 
 1. **Set the version** in `package.json`, `factory.config.example.json` and `README.md`, and bring `site/index.html` up to date: the version it names, the link to the release notes (it carries the version tag, `releases/tag/v…`), the "Stand" and the block of changes on `main` that are not released yet (move what this release contains out of it).
+   **Write the release notes** in `releases/v<version>.md`: what changed, how to update and what has not run for real. The file is part of the release commit, so every remote has it, and `npm test` fails while the version in `package.json` has no notes file.
 2. **Tag it and push `main` and the tag to every remote.** There is no mirroring, so a merge on one remote does not reach the other.
-3. **Publish the release on every remote,** with what changed, how to update and what has not run for real.
+3. **Publish the release on every remote,** always from that one notes file:
+   - **GitHub:** `gh release create v<version> --verify-tag --title v<version> --notes-file releases/v<version>.md` (`--verify-tag` stops it from creating a tag that was not pushed).
+   - **GitLab:** nothing to do by hand. The tag pipeline's `gitlab-release` job creates the release from the same file, with the job's own token. It leaves a release that already exists as it is, and fails when the notes file is missing. Check that the job is green. Tags pushed before the job existed get their release by starting `gitlab-release-backfill` by hand in a pipeline of the default branch; it creates only what is missing and can be run again.
