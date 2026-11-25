@@ -312,7 +312,7 @@ test("break it 3: a waiver is for one commit; the branch moving past it stops th
 });
 
 test("break it 4: a waiver names its findings: none, a wildcard, an unknown id or a missing blocker or major is refused; an unclassed review is not waivable at all", () => {
-  const two = (s) => FILE(s, { findings: [["F1", "blocker", "process"], ["F2", "major", "style"], ["F3", "minor", "functional"]] });
+  const two = (s) => FILE(s, { findings: [["F1", "blocker", "process"], ["F2", "major", "style"], ["F3", "minor", "style"]] });
   const { p, b } = scene({ text: two });
   try {
     record(b); const rsha = p.tip("agents/t1-review-1");
@@ -561,7 +561,12 @@ test("review finding 1: the Front agent waives only process and style; a functio
   try { record(m.b); const r = waive(m.b, m.p.tip("agents/t1-review-1")); assert.equal(r.status, 3); assert.match(r.stdout, /Front agent may waive only/); } finally { m.b.cleanup(); }
   // style and process stay the Front agent's (the PR's own case), also named together with a minor functional finding
   const st = scene({ text: (sha) => FILE(sha, { findings: [["F1", "blocker", "style"], ["F2", "minor", "functional"]] }) });
-  try { record(st.b); assert.equal(waive(st.b, st.p.tip("agents/t1-review-1"), { findings: "F1" }).status, 0, "a minor finding of another class that is not named is no blocker"); assert.match(waive(st.b, st.p.tip("agents/t1-review-1"), { findings: "F1,F2" }).stdout, /already waived/); } finally { st.b.cleanup(); }
+  try {
+    record(st.b); const rs = st.p.tip("agents/t1-review-1");
+    // round 2 of the review: the Front agent may waive only a review whose findings are ALL process or style, named or not (an unnamed minor functional one too); the owner still may
+    for (const findings of ["F1", "F1,F2"]) { const r = waive(st.b, rs, { findings }); assert.equal(r.status, 3, findings); assert.match(r.stdout, /F2 \(functional\)[\s\S]*named or not/); }
+    assert.equal(waiverEvents(st.b).length, 0); assert.equal(waive(st.b, rs, { findings: "F1", decider: "owner", words: "the owner takes the minor one too" }).status, 0);
+  } finally { st.b.cleanup(); }
   // a re-evaluation file with the classification table of the earlier findings: references to F1 are no finding and the file stays readable (and waivable by the owner)
   const reeval = FILE(A, { gates: "", body: `${heading("F1", "blocker", "functional", "The export drops rows")}\n| Earlier finding | Class |\n|---|---|\n| F1 | functional defect |\n| F2 | debt candidate |\nF2 - round 1 said this is debt\n` });
   assert.equal(parseFindings(reeval).ok, true, "a table row or line that only names F1 or F2 is not a finding");
@@ -697,4 +702,46 @@ test("review finding 8: the docs say plainly what the code does not check, next 
   assert.match(read("docs/workflow.md"), /The class never changes what fails a review/);
   assert.match(read("debt.md"), /F55[^\n]*the class of a finding is the reviewer's own claim[^\n]*WAVE_WAIVED[^\n]*hand-made value[^\n]*--decider owner/);
   assert.doesNotMatch(read("controller/integ-wave.sh"), /nothing from the host's environment counts|as recorded in the Controller's journal/);
+});
+
+// --- PR #76 re-check (round 2) ---------------------------------------------------------------------------------------------------------
+test("re-check N1: journal.mjs cannot write a record that carries trust, by type or by a type=/by=/task=/ts= key; a forged taskref or claim decides no level", () => {
+  const { p, b } = scene({ extra: { steering: { mode: "github-issues" } } });
+  try {
+    record(b); const rsha = p.tip("agents/t1-review-1"), before = b.events().length;
+    const attempts = [
+      ["decision", "T1", "type=taskref", "ref=#5", "by=mkspec.mjs"],   // the reviewer's A3d
+      ["decision", "5", "type=claim", "level=1"],
+      ["decision", "T1", "by=waiver.mjs"], ["decision", "T1", "task=T9"], ["decision", "T1", "ts=2020-01-01T00:00:00Z"],
+      ["taskref", "T1", "ref=#5", "by=mkspec.mjs"], ["claim", "5", "level=1"], ["waiver", "T1", "head=x"],
+      ["review", "T1", "type=waiver", "by=waiver.mjs"],
+    ];
+    for (const a of attempts) { const r = b.raw("journal.mjs", a); assert.notEqual(r.status, 0, a.join(" ")); assert.match(r.stderr, /journal\.mjs|cannot be given/, a.join(" ")); }
+    assert.equal(b.events().length, before, "nothing was written");
+    assert.equal(b.raw("journal.mjs", ["decision", "T1", "note=x"]).status, 0, "an ordinary event still goes through");
+    assert.match(waive(b, rsha, { followUp: "#9" }).stdout, /its level cannot be read/, "no binding came out of it: the Front agent is refused");
+  } finally { b.cleanup(); }
+});
+
+test("re-check N1: a second, different issue for the task id is recorded as a conflict with a warning, and the level is then the owner's", () => {
+  const { p, b } = scene({ extra: { steering: { mode: "github-issues" } } });
+  try {
+    record(b);
+    const dev = (ref) => b.raw("templates/mkspec.mjs", ["dev", "T1", ref, "agents/t1"]);
+    assert.equal(dev("#5").stderr.includes("WARNING"), false, "the first binding is no conflict");
+    const second = dev("#7"); assert.equal(second.status, 0); assert.match(second.stderr, /WARNING: T1 is already bound to #5 and this call names #7[\s\S]*only the owner decides a waiver/);
+    fs.appendFileSync(path.join(b.ctl, "journal.ndjson"), [{ type: "claim", task: "5", level: 1 }, { type: "claim", task: "7", level: 1 }].map((e) => JSON.stringify(e)).join("\n") + "\n");
+    const rsha = p.tip("agents/t1-review-1"); assert.match(waive(b, rsha, { followUp: "#9" }).stdout, /its level cannot be read/);
+    assert.equal(waive(b, rsha, { followUp: "#9", decider: "owner", words: "the owner decides this one" }).status, 0);
+  } finally { b.cleanup(); }
+});
+
+test("re-check N2: the follow-up is not the waived task's own ticket, whatever form it takes", () => {
+  const { p, b } = scene();
+  try {
+    record(b); const rsha = p.tip("agents/t1-review-1");
+    for (const id of ["T1", "t1", "T1-x", "t1-x"]) { const r = waive(b, rsha, { followUp: id }); assert.equal(r.status, 3, id); assert.match(r.stdout, /not the task that is waived|is not a ticket file/, id); }
+    assert.equal(waiverEvents(b).length, 0);
+    assert.equal(waive(b, rsha, { followUp: "T2-follow" }).status, 0, "another ticket, in its slug form, is fine");
+  } finally { b.cleanup(); }
 });

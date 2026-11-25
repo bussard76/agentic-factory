@@ -91,9 +91,9 @@ export function waivable(parsed, named, path) {
 /** May the FRONT AGENT (not the owner) decide this waiver on its class? Only findings of FRONT_AGENT_WAIVABLE: any named finding of another class
  *  (a functional defect above all) is the owner's. The class is the reviewer's claim (see the top of this file). Call it after `waivable` said ok. */
 export function frontAgentMayWaive(parsed, named) {
-  const outside = parsed.findings.filter((f) => named.includes(f.id) && !FRONT_AGENT_WAIVABLE.includes(f.cls));
+  const outside = parsed.findings.filter((f) => !FRONT_AGENT_WAIVABLE.includes(f.cls));   // every finding of the file, named or not (a minor one of another class too)
   if (!outside.length) return { ok: true };
-  return { ok: false, why: `${outside.map((f) => `${f.id} (${f.cls})`).join(", ")}: the Front agent may waive only findings classed ${FRONT_AGENT_WAIVABLE.join(" or ")}; a finding of another class is the owner's decision (--decider owner, with their words verbatim)` };
+  return { ok: false, why: `${outside.map((f) => `${f.id} (${f.cls})`).join(", ")}: the Front agent may waive only findings classed ${FRONT_AGENT_WAIVABLE.join(" or ")}; a review holding a finding of another class, named or not, is the owner's decision (--decider owner, with their words verbatim)` };
 }
 
 /** For reviewed.mjs after it recorded a fail: why no waiver could ever cover this review, or "" when none is ruled out. It never says a

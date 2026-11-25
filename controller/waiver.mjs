@@ -138,7 +138,7 @@ function followUpProblem(id) {
   const dir = (config.steering?.tasksDir ?? "docs/tasks").replace(/\/$/, "");
   const wanted = id.toLowerCase();
   if (/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id) && /\d/.test(id)) {
-    const isTicket = (f) => { const n = f.slice(dir.length + 1).toLowerCase(); return n.endsWith(".md") && n !== "readme.md" && !/^[a-z]?0+-template\b/.test(n) && (n === `${wanted}.md` || n.startsWith(`${wanted}-`)); };
+    const isTicket = (f) => { const n = f.slice(dir.length + 1).toLowerCase(); return n.endsWith(".md") && n !== "readme.md" && !/^[a-z]?0+-template\b/.test(n) && !(n === `${key}.md` || n.startsWith(`${key}-`)) && (n === `${wanted}.md` || n.startsWith(`${wanted}-`)); };
     if (git("ls-tree", "--name-only", `refs/remotes/origin/${MAIN}`, `${dir}/`).stdout.split("\n").some(isTicket)) return "";
     const debt = show(`refs/remotes/origin/${MAIN}`, "docs/debt.md");
     if (debt.status === 0) {

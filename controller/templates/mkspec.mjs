@@ -213,7 +213,11 @@ if (STEERING === "github-issues" && /^#\d+$/.test(specRef ?? "") && pos[0]) {
   let known = ""; try { known = fs.readFileSync(file("journal.ndjson"), "utf8"); } catch { /* no journal yet */ }
   // (not imported from reviewrecord.mjs: this file is also run alone; recordedIssues there reads the same lines)
   const bound = known.split("\n").some((l) => { try { const e = JSON.parse(l); return e.type === "taskref" && e.by === "mkspec.mjs" && String(e.task).toLowerCase() === pos[0].toLowerCase() && e.ref === specRef; } catch { return false; } });
-  if (!bound) journal("taskref", pos[0], { ref: specRef, by: "mkspec.mjs" });
+  if (!bound) {
+    const other = known.split("\n").flatMap((l) => { try { const e = JSON.parse(l); return e.type === "taskref" && e.by === "mkspec.mjs" && String(e.task).toLowerCase() === pos[0].toLowerCase() ? [e.ref] : []; } catch { return []; } });
+    if (other.length) console.error(`WARNING: ${pos[0]} is already bound to ${other.join(", ")} and this call names ${specRef}: the conflict is recorded, and from now on the ticket level of ${pos[0]} is unknown, so only the owner decides a waiver for it.`);
+    journal("taskref", pos[0], { ref: specRef, by: "mkspec.mjs" });
+  }
 }
 fs.mkdirSync(file("specs"), { recursive: true });
 const key = `${(pos[0] ?? role).toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${role}${pos[1] && /^\d+$/.test(pos[1]) ? pos[1] : ""}`;
