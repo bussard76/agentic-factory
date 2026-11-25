@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fakeController } from "./fake-controller.mjs";
+import { scaled } from "./support/wait.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = path.join(ROOT, "bin/agentic-factory.mjs");
@@ -405,7 +406,7 @@ test("a hooks path that is git's own directory does not make a hook call itself"
   const h = adopted({ before: (project) => { spawnSync("git", ["config", "core.hooksPath", ".git/hooks"], { cwd: project }); } });
   assert.doesNotMatch(fs.readFileSync(path.join(h.project, ".git/hooks/pre-commit"), "utf8"), /"\.git\/hooks\/pre-commit"/);
   fs.writeFileSync(path.join(h.project, "a.txt"), "a\n"); h.ok(h.project, "add", "a.txt");
-  const r = spawnSync("git", ["commit", "-qm", "a"], { cwd: h.project, encoding: "utf8", env: h.env, timeout: 20000 });
+  const r = spawnSync("git", ["commit", "-qm", "a"], { cwd: h.project, encoding: "utf8", env: h.env, timeout: scaled(120_000) });   // a hook that calls itself never ends: this bound only says "broken"
   assert.equal(r.status, 0, r.stderr);
   h.done();
 });
