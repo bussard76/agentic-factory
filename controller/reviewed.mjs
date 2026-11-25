@@ -9,7 +9,8 @@
 // `Reviewed commit:` line, and refuses unless that commit is on the task's branch (origin/<prefix><task in lower case>), the review
 // branch was made from it, and it is not older than the head already recorded for the task. The record is a `review` event with `head`
 // and `reviewSha` (the commit it read); the wave binds the review branch to that commit. A fail is recorded too, and it is final for
-// that commit; only a later passing re-evaluation (-review-final) undoes a failed Tester round of the same commit (reviewrecord.mjs, SUPERSEDES). The head is as trustworthy as the review branch was when it was read: a worker who can push that branch name before
+// that commit; only a later passing re-evaluation (-review-final) undoes a failed Tester round of the same commit (reviewrecord.mjs, SUPERSEDES),
+// or a waiver (waiver.mjs) records the decision of the Front agent or the owner that it holds no blocker (the review stays a fail). The head is as trustworthy as the review branch was when it was read: a worker who can push that branch name before
 // this runs is not stopped here (debt F54, the push gate's own limit).
 // --architect <task>: an Architect branch (<prefix>architecture-baseline or <prefix>stewardship-*, which no Tester reviews) is
 // recorded at its tip if, against its merge base with the main branch, it only adds or changes ARCHITECTURE.md, docs/debt.md and
@@ -20,6 +21,7 @@ import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import { BRANCH_PREFIX, MAIN, PROJECT_DIR, config, file, journal } from "./lib.mjs";
 import { isSha, lastHead, failedTesterRounds } from "./reviewrecord.mjs";
+import { waivableNote } from "./findings.mjs";
 
 const args = process.argv.slice(2);
 const architect = args[0] === "--architect";
@@ -90,4 +92,5 @@ const before = lastHead(journalText(), task);
 if (before && before !== head && git("merge-base", "--is-ancestor", head, before).status === 0) refuse(`${head} is older than ${before}, the head already recorded for ${task}: nothing is recorded for an older review.`);
 journal("review", task, { verdict, path, head, branch: rb, reviewSha: rbSha, file: findings, tip, by: "reviewed.mjs" });
 console.log(`recorded: ${task} ${path} review says ${verdict} for ${head} (findings ${findings} on origin/${rb} at ${rbSha}).`);
+if (verdict === "fail") console.log(`waiver: ${waivableNote(text, path)}. (A waiver is the Front agent's or the owner's decision, recorded with node waiver.mjs; the Controller never proposes one.)`);
 if (tip !== head) console.log(`note: origin/${taskBranch} is at ${tip}, not at the reviewed commit. A wave merges ${head} only if the branch has moved by clean merges of the main branch alone; otherwise it stops and the task goes back to review.`);

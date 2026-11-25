@@ -12,6 +12,13 @@
 const SHA = /^[0-9a-f]{40}$/;
 export const isSha = (s) => typeof s === "string" && SHA.test(s);
 export const TRUSTED = new Set(["reviewed.mjs", "docsonly.mjs"]);
+/** A waiver is the record of a decision of the Front agent or the owner that a failed review holds no blocker (waiver.mjs); the
+ *  Controller never decides one. `by` stays the trust marker (only waiver.mjs writes a waiver event); who decided is `decider`. */
+export const WAIVER_BY = "waiver.mjs";
+export const DECIDERS = new Set(["front-agent", "owner"]);
+const reviewKey = (e) => `${e.branch}@${e.reviewSha}`;
+const validWaiver = (w) => isSha(w.head) && isSha(w.reviewSha) && DECIDERS.has(w.decider) && typeof w.branch === "string" && typeof w.file === "string" && typeof w.path === "string"
+  && Array.isArray(w.findings) && w.findings.length > 0 && w.findings.every((f) => typeof f === "string") && ["words", "reason", "followUp"].every((k) => typeof w[k] === "string" && w[k].trim());
 const PRIMARY = new Set(["tester", "final", "docs-only", "architect"]);
 
 const events = (text, key) => {
@@ -26,6 +33,7 @@ const events = (text, key) => {
       continue;
     }
     if (e.type === "review" && String(e.task).toLowerCase() === want && isSha(e.head) && TRUSTED.has(e.by)) out.push(e);
+    else if (e.type === "waiver" && String(e.task).toLowerCase() === want && e.by === WAIVER_BY && validWaiver(e)) out.push(e);
   }
   return { list: out };
 };
@@ -48,6 +56,13 @@ export const SUPERSEDES = { final: new Set(["tester"]) };   // a passing event o
  *                                         and no failed review of that commit is left standing (see SUPERSEDES); `covers` maps
  *                                         each review branch with a passing record for that commit to its event
  *  { state: "failed", head, event }       the latest primary review failed, or a failed review of the commit still stands
+ *  { state: "waived", head, event, covers, failures, waivers }
+ *                                         as "failed", but every failed review that still stands for the commit has its own `waiver`
+ *                                         event (waiver.mjs: written by the Controller after the Front agent or the owner decided;
+ *                                         it names that review's branch, review commit, findings file and kind, and the reviewed
+ *                                         commit, and comes after the failure in the journal). The review stays a fail; a waiver
+ *                                         never covers another commit or another review, so any new failed review (a second round,
+ *                                         a failed re-evaluation or conformance review) is `failed` again until it has its own.
  *  { state: "none" }                      no usable event names the task (a task reviewed before this record existed)
  *  { state: "unreadable", why }           the journal cannot be read, or a line that mentions the task cannot be parsed
  *  A conformance review never binds a head by itself, it can only fail one. `text` is the journal's text, or an Error
@@ -59,11 +74,18 @@ export function latestReview(text, key, maxRounds) {
   const limit = Number.isInteger(maxRounds) && maxRounds >= 1 ? maxRounds : Infinity;   // unknown limit: a re-evaluation supersedes nothing
   const failedRounds = new Set();
   const standing = new Map();   // head -> the failed events that still stand
+  const failByKey = new Map(), waivedBy = new Map();   // review (branch@reviewSha) -> its failed event / the waiver recorded for it AFTER that failure
   let last = null;
   for (const e of r.list) {
+    if (e.type === "waiver") {
+      // A waiver covers exactly one failed review: the very review (branch, the commit of the review branch, file, kind) of the very reviewed commit, recorded earlier.
+      const f = failByKey.get(reviewKey(e));
+      if (f && f.head === e.head && f.file === e.file && f.path === e.path) waivedBy.set(reviewKey(e), e);
+      continue;
+    }
     const conformance = e.path === "conformance";
     if (!conformance && !PRIMARY.has(e.path)) return { state: "unreadable", why: `a review event of ${key} has the path ${JSON.stringify(e.path)}` };
-    if (e.verdict === "fail") { if (e.path === "tester") failedRounds.add(e.branch ?? e.ts); standing.set(e.head, [...(standing.get(e.head) ?? []), e]); if (!conformance || last?.event.head === e.head) last = { ok: false, event: e }; }
+    if (e.verdict === "fail") { if (e.path === "tester") failedRounds.add(e.branch ?? e.ts); if (isSha(e.reviewSha) && e.branch) failByKey.set(reviewKey(e), e); standing.set(e.head, [...(standing.get(e.head) ?? []), e]); if (!conformance || last?.event.head === e.head) last = { ok: false, event: e }; }
     else if (e.verdict === "pass" || e.verdict === "docs-only") {
       if (conformance) continue;
       const undone = failedRounds.size >= limit ? SUPERSEDES[e.path] : undefined;
@@ -71,11 +93,21 @@ export function latestReview(text, key, maxRounds) {
       last = { ok: true, event: e };
     } else return { state: "unreadable", why: `the review event of ${key} has the verdict ${JSON.stringify(e.verdict)}` };
   }
-  if (!last) { const any = [...standing.values()].flat().at(-1); return any ? { state: "failed", head: any.head, event: any } : { state: "none" }; }
-  const head = last.event.head, left = standing.get(head) ?? [];
-  if (!last.ok || left.length) return { state: "failed", head, event: left.at(-1) ?? last.event };
+  const any = last ? null : [...standing.values()].flat().at(-1);
+  if (!last && !any) return { state: "none" };
+  const head = last ? last.event.head : any.head, left = standing.get(head) ?? [];
+  if (!last || !last.ok || left.length) {
+    // Failed. It is waived only when EVERY failed review that still stands for this commit has its own waiver; the review stays a fail.
+    const waivers = left.map((f) => waivedBy.get(reviewKey(f)));
+    if (left.length && waivers.every(Boolean)) {
+      const covers = new Map();
+      for (const e of r.list) if (e.type !== "waiver" && e.head === head && (e.verdict === "pass" || e.verdict === "docs-only" || left.includes(e)) && e.branch && isSha(e.reviewSha)) covers.set(e.branch, e);
+      return { state: "waived", head, event: last ? last.event : any, covers, failures: left, waivers };
+    }
+    return { state: "failed", head, event: left.at(-1) ?? last.event, standing: left, waived: waivers.filter(Boolean) };
+  }
   const covers = new Map();
-  for (const e of r.list) if (e.head === head && (e.verdict === "pass" || e.verdict === "docs-only") && e.branch && isSha(e.reviewSha)) covers.set(e.branch, e);
+  for (const e of r.list) if (e.type !== "waiver" && e.head === head && (e.verdict === "pass" || e.verdict === "docs-only") && e.branch && isSha(e.reviewSha)) covers.set(e.branch, e);
   return { state: "ok", head, event: last.event, covers };
 }
 
@@ -83,7 +115,7 @@ export function latestReview(text, key, maxRounds) {
 export function lastHead(text, key) {
   if (text instanceof Error) return "";
   const r = events(text, key);
-  return r.list?.at(-1)?.head ?? "";
+  return r.list?.filter((e) => e.type !== "waiver").at(-1)?.head ?? "";
 }
 
 // The branches a task makes besides its own: the Tester's review branches, the re-evaluation, the conformance review.
@@ -110,7 +142,7 @@ export function classify(branch, prefix = "") {
  *  { args } or { problems: [text] }. */
 export function bindBranches(branches, { prefix, read }) {
   const parsed = branches.map((b) => ({ b, ...classify(b, prefix) }));
-  const problems = [], records = new Map(), once = new Set(), args = [];
+  const problems = [], records = new Map(), once = new Set(), args = [], waived = [];
   for (const p of parsed) {
     if (p.kind === "foreign") { problems.push(`${p.b}: not a branch under the prefix ${JSON.stringify(prefix)} and not status-wave-<n>: a wave merges only task branches whose review is recorded.`); continue; }
     if (p.kind === "status") { args.push(p.b); continue; }
@@ -119,7 +151,13 @@ export function bindBranches(branches, { prefix, read }) {
     once.add(p.b);
     if (!records.has(p.key)) records.set(p.key, read(p.key));
     const r = records.get(p.key);
-    if (r.state === "ok") {
+    if (r.state === "ok" || r.state === "waived") {
+      if (r.state === "waived" && p.kind === "task" && !waived.some((w) => w.task === p.key)) {
+        // The failed review stays in the record and reaches the main branch as a file: its review branch must be in the wave.
+        const missing = r.failures.filter((f) => !parsed.some((x) => x.name === f.branch));
+        if (missing.length) { problems.push(`${p.b}: the review of ${p.key} at ${r.head} failed and is waived (waiver.mjs); its failed review stays a fail and its findings file goes to the main branch with the wave: add ${missing.map((f) => `origin/${f.branch}`).join(" ")} to the wave.`); continue; }
+        waived.push({ task: p.key, head: r.head, files: r.failures.map((f, i) => ({ file: f.file, branch: f.branch, decider: r.waivers[i].decider, followUp: r.waivers[i].followUp, at: r.waivers[i].ts })) });
+      }
       if (p.kind === "task") { args.push(`${p.b}@${r.head}`); continue; }
       const cov = r.covers.get(p.name);
       if (cov && cov.file) args.push(`${p.b}~${r.head}:${cov.reviewSha}=${cov.file}`);
@@ -128,7 +166,9 @@ export function bindBranches(branches, { prefix, read }) {
     }
     // A review branch of a task is judged with the task: one message per task, from its own branch if it is in the wave.
     if (p.kind === "process" && parsed.some((x) => x.kind === "task" && x.key === p.key)) continue;
-    if (r.state === "failed") problems.push(`${p.b}: the review of ${p.key} says fail (head ${r.head}). Nothing is merged for it. Send the task back (rework, then a new review round); the wave takes the head of the review that passes.`);
+    if (r.state === "failed") problems.push(`${p.b}: the review of ${p.key} says fail (head ${r.head}). Nothing is merged for it. Send the task back (rework, then a new review round); the wave takes the head of the review that passes.\n`
+      + `    Only if the Front agent (the owner, for a level 3 ticket) has decided, in their own words, that what the review found is no blocker and a follow-up exists: record that decision with node waiver.mjs (CONTROLLER.md, "A waiver"). It covers exactly this review of this commit, never a security, data-corruption, input-loss or gate finding, and never a later commit.`
+      + (r.waived?.length ? ` (${r.waived.length} of ${r.standing.length} failed reviews standing for ${r.head} have a waiver; each one needs its own.)` : ""));
     else if (r.state === "unreadable") problems.push(`${p.b}: the Controller's journal gives no usable review record for ${p.key} (${r.why}). Nothing is merged for it. Repair the journal line or send the task back to review.`);
     else problems.push(`${p.b}: the Controller's journal has no record of a passing review of ${p.key}, so there is no commit to merge. Nothing is merged for it.\n`
       + `    Either the verdict was not recorded: then run, with the review branch and the full SHA from the reviewer's worker_done,\n`
@@ -138,7 +178,7 @@ export function bindBranches(branches, { prefix, read }) {
       + `    No Tester review: a docs-only task is recorded by node docsonly.mjs; an Architect branch (architecture-baseline, stewardship-*) by node reviewed.mjs --architect <task>.`);
   }
   if (problems.length) return { problems };
-  return { args, tasks: [...new Set(parsed.filter((p) => p.kind === "task").map((p) => p.key))] };
+  return { args, tasks: [...new Set(parsed.filter((p) => p.kind === "task").map((p) => p.key))], waived };
 }
 
 /** How many Tester rounds (distinct review branches) of a task are recorded as failed. */

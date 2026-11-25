@@ -5,7 +5,9 @@
 // The wave merges exactly the commit that was reviewed, not the branch tip: for each task branch it takes that commit from the
 // Controller's own journal (reviewed.mjs and docsonly.mjs write it; the latest review event of the task counts) and hands
 // integ-wave.sh `origin/<branch>@<sha>`; a task's review branches go as `origin/<branch>~<sha>`. A task without a usable record
-// is not started: the wave prints why and what to do, launches nothing and journals nothing. integ-wave.sh then compares
+// is not started: the wave prints why and what to do, launches nothing and journals nothing. That includes a task whose last review
+// failed, unless every failed review that stands for that commit has a waiver (waiver.mjs, the decision of the Front agent or the owner):
+// then the wave starts for exactly that commit as for a passed one, still runs the full gate, and the failed review branch goes with it. integ-wave.sh then compares
 // the tip of every branch on origin with its commit, and stops the whole wave, merging nothing, if one has moved.
 import "./cli.mjs";
 import fs from "node:fs";
@@ -34,9 +36,13 @@ if (bound.problems) {
 }
 const bondedBranches = bound.args;
 envs.WAVE_TASKS = bound.tasks.join(" ");   // the tasks of this wave: the only ticket files a status-wave branch may touch
+// A task whose last review failed and was waived (waiver.mjs): `<reviewed commit>=<its failed findings file>` for each waived review, always set
+// (an empty value too), so nothing in the host's environment can stand in for it. integ-wave.sh checks every entry against the branches it binds.
+envs.WAVE_WAIVED = bound.waived.flatMap((w) => w.files.map((f) => `${w.head}=${f.file}`)).join(" ");
+for (const w of bound.waived) console.log(`WAIVED: ${w.task} at ${w.head}: ${w.files.map((f) => `${f.file} (decided by the ${f.decider}, follow-up ${f.followUp})`).join("; ")}. The review stays a fail; the wave still runs the full gate.`);
 const exportLine =Object.entries(envs).map(([k, v]) => `export ${k}=${k === "GATE" ? `"${v}"` : q(v)}`).join("; ");
 const cmd = `clear; T=$(nproc 2>/dev/null || sysctl -n hw.ncpu); while [ "$(cut -d. -f1 /proc/loadavg 2>/dev/null || echo 0)" -ge "$T" ]; do sleep 15; done; ${exportLine}; echo ${b64} | base64 -d > /tmp/${PROJECT}-integ-wave.sh; WAVE_LOG_DIR=/tmp/${PROJECT}-wave bash /tmp/${PROJECT}-integ-wave.sh ${q(title)} ${q(summary)} ${bondedBranches.join(" ")} 2>&1 | tee /tmp/${PROJECT}-wave.out; echo WAVE-END`;
-journal("wave", title, { host: host.name, note: bondedBranches.join(" ") });
+journal("wave", title, { host: host.name, note: bondedBranches.join(" "), ...(bound.waived.length ? { waived: bound.waived } : {}) });
 if (RUNNER === "orca") {
   const j = JSON.parse(sh(ORCA, ["terminal", "create", "--worktree", worktreeRefOn(host, "coordinator-integration"), "--title", `${PROJECT} · Integration · ${title.slice(0, 40)}`, "--command", cmd, ...orcaEnvArgsOn(host), "--json"]));
   const h = j.result?.terminal?.handle ?? j.result?.handle;

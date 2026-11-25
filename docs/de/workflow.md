@@ -145,6 +145,8 @@ Regeln, die das sicher machen:
 
 **Push-Sperre:** Git lehnt jeden Push nach `main` ab, der nicht durch ein bestandenes unabhängiges Review gedeckt ist. Architekturänderungen brauchen zusätzlich ihre Freigabe. {{HOOK_ENFORCEMENT}}
 
+**Ein Waiver, ein entschiedener Nicht-Blocker:** Ein gescheitertes Review hält die Wave an. Entscheidet der Front-Agent (bei einem Ticket der Stufe 3 der Eigentümer) ausdrücklich, dass das Gefundene kein Blocker ist und es einen Folgeauftrag gibt, hält der Controller diese Entscheidung mit `waiver.mjs` fest und zitiert sie; er entscheidet nie selbst. Ein Waiver gilt für ein Review eines Commits, nennt jeden Blocker und jedes Major-Finding, deckt nie ein Finding der Klasse Sicherheit, Datenverfälschung, Eingabeverlust oder Gate und nie ein rotes Gate; die Wave führt weiter das volle Gate aus und merged genau diesen Commit, das Review bleibt ein Fail. Er regelt einen entschiedenen Folgeauftrag und ist kein Weg um ein Review herum: [reviews.md](../reviews.md#a-waiver-a-decided-non-blocker-with-a-follow-up) (englisch).
+
 **Realistische Testdaten:** Die Demo-Daten bilden die *Formen* der echten Daten mit erfundenen Inhalten nach. Fehler, die erst beim Menschen auffallen, hatten fast immer zu ordentliche Testdaten als Ursache.
 
 ## Wo was läuft

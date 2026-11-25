@@ -965,6 +965,16 @@ const controllerTerminal = (c) => {
 };
 const hasControllerTerminal = (c) => Boolean(controllerTerminal(c)?.terminal);
 
+// The waivers in the Controller's journal (controller/waiver.mjs: the recorded decision of the Front agent or the owner that a failed review holds no blocker). Same host rules as status.md.
+function controllerWaivers(c) {
+  const ctl = c.hosts.workers.find((h) => h.name === c.hosts.controller.host);
+  const file = `${c.hosts.controller.controllerDir ?? "~/controller"}/journal.ndjson`;
+  let text = "";
+  try { text = !ctl || ctl.kind === "local" ? (fs.existsSync(expandHome(file)) ? fs.readFileSync(expandHome(file), "utf8") : "") : sh("ssh", [...sshArgsFor(ctl), `f=${file}; grep -a '"type":"waiver"' "$f" 2>/dev/null`]); } catch { /* no journal: no waivers */ }
+  const list = text.split("\n").flatMap((l) => { try { const e = JSON.parse(l); return e.type === "waiver" && e.by === "waiver.mjs" ? [{ task: e.task, commit: e.head, decider: e.decider, followUp: e.followUp, findings: e.findings, at: e.ts }] : []; } catch { return []; } });
+  return { count: list.length, list };
+}
+
 // Reads the Controller's status.md (local file or over ssh): age in minutes and the open "Needs <human>" items.
 function controllerStatus(c) {
   const ctl = c.hosts.workers.find((h) => h.name === c.hosts.controller.host);
@@ -1037,7 +1047,7 @@ function collectStatus() {
   const adrs = fs.existsSync("docs/adr") ? fs.readdirSync("docs/adr").filter((f) => /\.md$/.test(f) && !/0000-template/.test(f)).length : 0;
   // The template's example row (placeholders in angle brackets) is not debt.
   const debtOpen = fs.existsSync("docs/debt.md") ? fs.readFileSync("docs/debt.md", "utf8").split("\n").filter((l) => /\|\s*open\s*\|/.test(l) && !/<[a-z][^>]*>/.test(l)).length : 0;
-  s.work = { designedFeatures: features, tickets, adrs, architecture: fs.existsSync("ARCHITECTURE.md"), glossary: ["GLOSSARY.md", "CONTEXT.md", "docs/glossary.md"].some((f) => fs.existsSync(f)), debtOpen, needsHuman: ctl.needs };
+  s.work = { designedFeatures: features, tickets, adrs, architecture: fs.existsSync("ARCHITECTURE.md"), glossary: ["GLOSSARY.md", "CONTEXT.md", "docs/glossary.md"].some((f) => fs.existsSync(f)), debtOpen, needsHuman: ctl.needs, waivers: controllerWaivers(c) };
   // The phase is a hint for the Front agent's next question, derived from what is in the repo; the human decides.
   const setupMissing = !s.setup.hooksArmed || !s.setup.userSkills || !s.setup.frontAgentBundle || !s.setup.controller.running;
   if (!prerequisites.every((p) => p.ok)) [s.phase, s.next] = ["prerequisites", "fix the missing prerequisites (they need the human)"];
@@ -1087,6 +1097,7 @@ function status() {
     say(`Tickets: ${w.tickets.total ? Object.entries(w.tickets.byStatus).map(([k, v]) => `${v} ${k}`).join(", ") : w.tickets.unavailable ?? "none"}`);
     say(`ADRs: ${w.adrs} · ARCHITECTURE.md: ${w.architecture ? "yes" : "no"} · glossary: ${w.glossary ? "yes" : "no"} · open debt: ${w.debtOpen}`);
     if (w.needsHuman.length) say(`Needs the human:\n  ${w.needsHuman.join("\n  ")}`);
+    if (w.waivers.count) say(`Waivers (a failed review decided to hold no blocker, ${w.waivers.count}):\n  ${w.waivers.list.map((x) => `${x.task} ${String(x.commit).slice(0, 10)} by the ${x.decider}, follow-up ${x.followUp}`).join("\n  ")}`);
   }
   say(`\nPhase: ${s.phase}\nNext:  ${s.next}`);
   for (const h of s.hints ?? []) say(`Hint:  ${h}`);

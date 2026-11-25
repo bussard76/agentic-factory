@@ -54,7 +54,7 @@ The template hooks (`templates/.githooks`, `templates/tools/factory-guardrails.m
 
 - **pre-commit:** the project's formatter on the staged files, when `commands.formatStaged` is set ([testing.md](testing.md#formatter-on-staged-files)); test count must not drop; no whitespace errors or conflict markers; a staged-secret scan; the project's static checks
 - **commit-msg:** protected files (`AGENTS.md`, `ARCHITECTURE.md`, `docs/adr/**`, the hooks, the guardrail script) change only when the message references an accepted `ADR-NNNN` that carries a `Decided by:` line; new dependencies are a level-2 decision of the Architect's spec review, not hook-protected
-- **pre-push to `main`:** every non-documentation commit must be covered by a findings file under `docs/reviews/` with `Verdict: pass` and a `Reviewed commit:` SHA that is an ancestor of the pushed tip; after the reviewed commit only `docs/reviews/` may change
+- **pre-push to `main`:** every non-documentation commit must be covered by a findings file under `docs/reviews/` with `Verdict: pass` and a `Reviewed commit:` SHA that is an ancestor of the pushed tip; after the reviewed commit only `docs/reviews/` may change. The one other way in is the Controller's wave carrying a waived failed review (see [A waiver](#a-waiver-a-decided-non-blocker-with-a-follow-up)): nothing else changes
 
 `--no-verify` is forbidden everywhere. The hook checks recorded coverage; the Controller remains responsible for the reviewer's independence.
 
@@ -67,14 +67,14 @@ The template hooks (`templates/.githooks`, `templates/tools/factory-guardrails.m
 
 Verdict: pass | fail
 Reviewed commit: <40-character SHA>
-Gates: verify <result>, e2e <result>
+Gates: verify pass|fail, e2e pass|fail|none
 Ponytail: <ponytail-review result on the full task diff>
 
 ## Spec checklist
 | # | Requirement | Code | Test | Status |
 
 ## Findings
-### [blocker|major|minor] <short title>
+### F<n> [blocker|major|minor] [<class>] <short title>
 - Where: `path:line`
 - Problem / Violates / Fix / Proving test
 
@@ -83,3 +83,18 @@ Ponytail: <ponytail-review result on the full task diff>
 ```
 
 `blocker`: functional defect, broken invariant or data rule, failing gate, a possible change to a real external system. `major`: a spec requirement missing or wrong. `minor`: quality. A `pass` needs zero blockers and zero majors; under functional-only rules, test and quality gaps are debt candidates rather than majors.
+
+**Class, one per finding, in the heading** (every review that lists findings: the Tester in every round, the re-evaluation, the Architect's spec and conformance reviews): `security`, `data-corruption`, `input-loss` and `gate` can never be waived; `functional`, `process` and `style` may be. The ids (`F1`, `F2`, ...) are unique in the file. The Controller's code reads the heading strictly; a finding without a class, with an unknown one or in any other form makes the file unreadable for a waiver. The `Gates:` line of a Tester round is read the same way.
+
+## A waiver: a decided non-blocker with a follow-up
+
+A failed review stops the wave and sends the task back. Sometimes what failed it is real but not a blocker: a documentation ticket whose content is fine and whose full gate is green, failed only for a missing proof of the process (an approval given after the build). Then the Front agent, or the owner, **decides** that it is a follow-up and the Controller **records** that decision with `node waiver.mjs`. The Controller never decides a waiver; it writes down the decision that was given, with the words quoted, in its own journal (a `waiver` event only `waiver.mjs` can write, outside every worktree, like the review records).
+
+What a waiver is for: a finding that was decided to be a non-blocker, with a follow-up that exists (a ticket, a debt entry or an issue). What it is not: a way around a review. In code, not in wording:
+
+- **It names what it covers:** the task, the failed review (branch, commit of the review branch, findings file), the reviewed commit (full SHA) and each finding by id. Every `blocker` and `major` must be named; naming none, naming a finding the file does not have, or `all` is refused. Minor findings and debt candidates are not blockers.
+- **It never covers** a finding classed `security`, `data-corruption`, `input-loss` or `gate` (in any severity), a red `Gates:` line, a review without classes (written before them) or in another format (a new review with the current template is needed), and not the wave's own full gate: the wave still runs `commands.verify` (and `commands.e2e`) on the merged candidate, never the docs-only path, and pushes only if it is green.
+- **Who decides:** for a ticket of level 3 only the owner (their words verbatim), for levels 1 and 2 the Front agent may. The level is the one on the ticket on the main branch (and where the work started), never the task branch's; a level that cannot be read counts as 3. With GitHub issues it is the one the Controller recorded when it took the issue.
+- **One review of one commit.** A new commit needs a new review (a waiver of the old one does not cover it), a branch that moved stops the wave, a review that was never recorded or a passed one cannot be waived, and a second failed review of the same commit (a failed re-evaluation after the round limit, a failed conformance review) needs its own waiver. After the round limit a waiver of the last failed round does not replace the re-evaluation (`mkspec reeval`); either may be taken.
+- **The review stays a fail.** Its findings file reaches the main branch as written; the pre-push hook takes the waived commit as reviewed only for the wave's own push (`FACTORY_WAIVED`, set by `integ-wave.sh` after it checked that the wave merges that commit and that very findings file) and only if the pushed tree holds the failed file with its one `Verdict: fail` and one `Reviewed commit:` line. For everything else the hook is unchanged. Like every check in the hook it is local: a process that can set the variable can also push with `--no-verify` (debt F01, F54). A project whose hook is older than this change rejects the push of a waived wave; `agentic-factory update` brings the new one.
+- **Visible:** `status --json` (`work.waivers`: count and list with task, commit, who decided, follow-up) and the human `status`; the `waiver` event and the wave's `waived` note are in the journal.

@@ -142,6 +142,8 @@ Rules that make this safe:
 
 **Push lock:** Git rejects every push to `main` not covered by a passing independent review. Architecture changes additionally need their approval. {{HOOK_ENFORCEMENT}}
 
+**A waiver, a decided non-blocker:** a failed review stops the wave. If the Front agent (the owner, for a level-3 ticket) decides in so many words that what failed it is no blocker and a follow-up exists, the Controller records that decision with `waiver.mjs` and quotes it; it never decides one. The waiver covers one review of one commit, names every blocker and major finding, never covers a finding classed security, data corruption, loss of input or gate, nor a red gate, and the wave still runs the full gate and merges exactly that commit; the review stays a fail. It is a way to settle a decided follow-up, not a way around a review: [reviews.md](reviews.md#a-waiver-a-decided-non-blocker-with-a-follow-up).
+
 **Realistic test data:** the demo data reproduces the *shapes* of the real data with invented content, because defects found only by the human usually came from test data that was too tidy.
 
 ## Where things run

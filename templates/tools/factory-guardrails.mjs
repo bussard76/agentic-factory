@@ -5,7 +5,8 @@
 //   staged-safety    whitespace and conflict markers, a staged-secret scan, no .env
 //   static-checks    the project's typecheck and lint (factory.config.json → commands), skipped for docs-only commits
 //   protected-files  protected paths change only with an ADR-NNNN reference in the commit message
-//   review-gate      pushes to the main branch need review coverage under docs/reviews/
+//   review-gate      pushes to the main branch need review coverage under docs/reviews/ (a passed review; or, for the Controller's wave only,
+//                    a failed one that a waiver covers: FACTORY_WAIVED, set by integ-wave.sh for its one push)
 //   format-staged    the project's formatter on the fully staged files (commands.formatStaged); off when not configured
 //   format-staged --finish <status>   after the other pre-commit steps: takes the formatting back if one failed
 //   docs-only [<base>..<head> [--ticket <id> [--issue <n> --ticket-text <file>]] | --staged] [--base <ref>] [--json]
@@ -505,7 +506,7 @@ function reviewGate() {
     const range = /^0+$/.test(remoteSha) ? localSha : `${remoteSha}..${localSha}`;
     const commits = tryGit("rev-list", "--no-merges", range).trim().split("\n").filter(Boolean);
     const merges = tryGit("rev-list", "--merges", range).trim().split("\n").filter(Boolean);
-    const reviews = parseReviews(localSha);
+    const reviews = [...parseReviews(localSha), ...waivedReviews(localSha)];
     const docsCfg = docsConfigBefore(remoteSha);
     const uncovered = [];
     for (const sha of [...commits, ...merges]) {
@@ -541,6 +542,21 @@ function docsConfigBefore(remoteSha) {
 }
 function commitIsDocsByConfig(sha, isMerge, ctx) {
   try { const entries = commitEntries(sha); return entries !== null && classify(entries, ctx).verdict === "docs-only"; } catch { return false; }
+}
+// A waived review (the Controller's wave only, controller/waiver.mjs and integ-wave.sh): a failed review that the Front agent or the owner decided holds no
+// blocker. The wave names each one as FACTORY_WAIVED="<reviewed commit>=<findings file> ...", for its one push, after it checked that it merges that commit and
+// that file. It covers the commit like a pass would, and only if the pushed tree holds that file with ONE `Verdict: fail` and ONE `Reviewed commit:` line naming
+// the commit: the failed review stays a fail on main and nothing else is covered. Without the variable nothing changes. Like every check in this file it is
+// local: a process that can set the variable can also push with --no-verify (debt F01, F54).
+function waivedReviews(tip) {
+  const out = [];
+  for (const entry of (process.env.FACTORY_WAIVED ?? "").split(/\s+/).filter(Boolean)) {
+    const at = entry.indexOf("="), sha = entry.slice(0, at), file = entry.slice(at + 1);
+    if (at < 0 || !/^[0-9a-f]{40}$/.test(sha) || !/^docs\/reviews\/[A-Za-z0-9._-]+\.md$/.test(file)) continue;
+    const lines = tryGit("show", `${tip}:${file}`).split("\n"), verdicts = lines.filter((l) => /^Verdict:/.test(l)), commits = lines.filter((l) => /^Reviewed commit:/.test(l));
+    if (verdicts.length === 1 && /^Verdict:\s*fail\s*$/.test(verdicts[0]) && commits.length === 1 && new RegExp(`^Reviewed commit:\\s*\`?${sha}\`?\\s*$`).test(commits[0])) out.push({ pass: true, sha });
+  }
+  return out;
 }
 function parseReviews(tip) {
   const files = tryGit("ls-tree", "-r", "--name-only", tip, "docs/reviews/").trim().split("\n").filter(Boolean);
