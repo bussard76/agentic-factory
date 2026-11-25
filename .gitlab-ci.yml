@@ -22,7 +22,9 @@ pages:
 # Creates the GitLab release page for a version tag from releases/<tag>.md, with the job's own token (CI_JOB_TOKEN, no secret variables).
 # A release that already exists, such as a hand-written one, is left alone. A tag without a notes file fails the job.
 # Shared runners on this instance run tagged jobs only, and the CLI image must be one your runners can pull: adjust the tag and image to your instance.
-# The script uses `glab release`, not the `release:` keyword, because that keyword fails the job when the release exists.
+# The script uses `glab release create`, not the `release:` keyword, because that keyword fails the job when the release exists.
+# Needs a GitLab version whose job token may use the Releases API; GitLab's documentation names no version for that, so the first run proves it.
+# Only tags like v1.2.3 get a release (no pre-release suffixes).
 .gitlab-release:
   stage: deploy
   tags:
@@ -37,7 +39,9 @@ gitlab-release:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
 # Backfill: tag pipelines do not run again for old tags. Start this job by hand in a pipeline of the default branch to create the
-# release for every releases/<tag>.md whose tag is on the remote and has no release yet. It can be run again at any time.
+# release for every releases/<tag>.md whose tag is on the remote and has no release yet, dated like the tag. It can be run again at any time.
+# allow_failure is true because a manual job in rules would otherwise block the pipeline until someone starts it. A failed run therefore
+# shows as an orange warning, not a red pipeline: open the job's log, which ends with a "BACKFILL FAILED for:" line.
 gitlab-release-backfill:
   extends: .gitlab-release
   script:
