@@ -182,7 +182,7 @@ else if (a[0] === "automations" && a[1] === "create") {
 `, { mode: 0o755 });
   fs.copyFileSync(path.join(bin, "orca"), path.join(bin, "orca-ide"));   // on Linux outside an Orca terminal the CLI runs `orca-ide`, so the stand-in has both names
   const env = { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, GIT_CONFIG_NOSYSTEM: "1", FACTORY_SCHEDULER: "cron" };
-  delete env.ORCA_TERMINAL_HANDLE; delete env.ORCA_CLI_COMMAND; delete env.ORCA_CLI_BIN_DIR;
+  delete env.ORCA_TERMINAL; delete env.ORCA_TERMINAL_HANDLE; delete env.ORCA_CLI_COMMAND; delete env.ORCA_CLI_BIN_DIR;
   const project = (name, front) => {
     const dir = path.join(base, name);
     fs.mkdirSync(dir);

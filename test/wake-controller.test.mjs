@@ -298,7 +298,7 @@ else if (a[0] === "terminal" && a[1] === "create") { s.terminals.push({ handle: 
 else out({ terminals: [], repos: [] });\n`, { mode: 0o755 });
   fs.copyFileSync(path.join(bin, "orca"), path.join(bin, "orca-ide"));   // on Linux outside an Orca terminal the CLI runs `orca-ide`, so the stand-in has both names
   const env = { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, GIT_CONFIG_NOSYSTEM: "1", FACTORY_SCHEDULER: "launchd" };
-  delete env.ORCA_TERMINAL_HANDLE; delete env.ORCA_CLI_COMMAND; delete env.ORCA_ENVIRONMENT;
+  delete env.ORCA_TERMINAL; delete env.ORCA_TERMINAL_HANDLE; delete env.ORCA_CLI_COMMAND; delete env.ORCA_ENVIRONMENT;
   const git = (...a) => { const r = spawnSync("git", a, { cwd: project, encoding: "utf8", env }); assert.equal(r.status, 0, r.stderr); };
   const cli = (args, over = {}) => { const r = spawnSync("node", [CLI, ...args], { cwd: project, encoding: "utf8", env: { ...env, ...over } }); stopBackground(path.join(home, "controller")); return r; };
   git("init", "-q", "-b", "main"); git("config", "user.name", "T"); git("config", "user.email", "t@example.invalid");

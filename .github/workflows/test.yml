@@ -10,16 +10,16 @@ on:
 permissions:
   contents: read
 
-# A newer commit on the same pull request (or branch) replaces the run of the older one.
+# A newer commit on the same pull request replaces the run of the older one. Runs on main are never cancelled: every merge gets its verdict.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
     name: npm test (${{ matrix.os }}, Node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
