@@ -56,6 +56,9 @@ export const questionBlock = (runner = RUNNER) => `Questions: ${NO_HUMAN_RULE} $
 // removed reliably afterwards). An args list must not end in a variadic option (it would swallow the prompt that follows).
 // Only entries checked against the real CLI belong here. agents.askOff in factory.config.json adds or replaces one entry per
 // agent name (null removes it), for a project on another CLI or version. Nothing here touches a user's global settings.
+// pi has no default on purpose: with the terminal runner it runs as `pi -p` (print mode, no UI), where the ask extensions already refuse,
+// and a pi that does not know `--exclude-tools` (older than 0.77.0) may exit with "Unknown option" instead of starting. A project on a
+// pi that has the flag can set agents.askOff.pi itself (docs/orca.md); that entry replaces, it does not extend.
 const ASK_OFF_DEFAULTS = {
   claude: { args: ["--disallowedTools", "AskUserQuestion"] },
 };

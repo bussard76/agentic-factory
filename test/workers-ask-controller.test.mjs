@@ -104,6 +104,15 @@ test("agents.askOff overrides the table for one agent, and null switches the def
   fs.mkdirSync(path.join(rig.ws, "t1"));
   assert.equal(rig.run().out.askOff, "args");
   assert.match(await rig.waitFor(rig.agentLog), /pi --no-ask-tool -p /);
+  // pi has no default entry: without one it starts exactly as before; a project's own entry goes right after the executable.
+  rig = startRig({ runner: "terminal", default: "pi" });
+  fs.mkdirSync(path.join(rig.ws, "t1"));
+  assert.equal(rig.run().out.askOff, "none");
+  assert.match(await rig.waitFor(rig.agentLog), /pi -p /);
+  rig = startRig({ runner: "terminal", default: "pi", askOff: { pi: { args: ["--exclude-tools", "ask_user_question,question"] } } });
+  fs.mkdirSync(path.join(rig.ws, "t1"));
+  assert.equal(rig.run().out.askOff, "args");
+  assert.match(await rig.waitFor(rig.agentLog), /pi --exclude-tools ask_user_question,question -p /);
   rig = startRig({ runner: "terminal", default: "claude", askOff: { claude: null } });
   fs.mkdirSync(path.join(rig.ws, "t1"));
   assert.equal(rig.run().out.askOff, "none");

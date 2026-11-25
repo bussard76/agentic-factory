@@ -127,7 +127,7 @@
       "quotaThresholdPercent": 10
     },
     "askOff": {},
-    "$askOff": "Optional, per agent CLI: how a worker starts with its ask-the-user tool off with the terminal runner, e.g. { \"claude\": { \"args\": [\"--disallowedTools\", \"AskUserQuestion\"] } }. The args go right after the executable and must not end in a variadic option. An entry replaces the built-in one of that agent; null removes it. Built in: claude only. Under the orca runner nothing can be passed to the agent, so this has no effect there.",
+    "$askOff": "Optional, per agent CLI: how a worker starts with its ask-the-user tool off with the terminal runner, e.g. { \"claude\": { \"args\": [\"--disallowedTools\", \"AskUserQuestion\"] } }. The args go right after the executable and must not end in a variadic option. An entry replaces the built-in one of that agent; null removes it. Built in: claude only. Under the orca runner nothing can be passed to the agent, so this has no effect there. For pi there is no built-in entry: with the terminal runner pi runs without a UI, where ask extensions already refuse. A project on pi 0.77.0 or later may set { \"pi\": { \"args\": [\"--exclude-tools\", \"ask_user_question,question,questionnaire\"] } }; the entry replaces, it does not extend, so repeat every name you want off. A pi that does not know the flag may exit with an unknown-option error instead of starting: set it only when every worker host has the flag. See docs/orca.md.",
     "askPatterns": [],
     "$askPatterns": "Optional regular expressions (case-insensitive, per line) matched against the last 8 lines of a worker's screen by stallwatch.mjs; a match on an idle prompt skips the 90 s idle wait. Off by default.",
     "piRoleModels": {},
