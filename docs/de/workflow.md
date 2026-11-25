@@ -52,7 +52,7 @@ Neue Funktionen entstehen **von außen nach innen**. Gebaut wird erst, wenn Ober
 | **1. Oberfläche** | grafische Entwürfe im Design-Werkzeug (Figma per MCP oder Pencil), dann ein **Frontend-Fake**: durchklickbar, erfundene Daten, ein paar Dummy-Aktionen, keine echte Logik | Design-MCP, `prototype` | So sieht es aus und so bedient es sich |
 | **2. Schnittstellen** | welche Daten rein- und rausgehen: Quellen, Werkzeuge, Felder, Zustände (leer, mehrdeutig, Fehler), was das System schreibt | am Fake sichtbar gemacht | Diese Daten fließen hier |
 | **3. Logik** | der Ablauf in Worten und als **Ablaufdiagramm** (Mermaid) | `grilling` / `grill-with-docs` für einzelne Fragen; `prototype` (Logik-Zweig) für Verhalten, das auf Papier schwer zu beurteilen ist; `wayfinder` für größere Vorhaben über mehrere Sitzungen | So denkt und handelt das System |
-| **4. Bauen** | Spec aus Stufe 1–3, Tickets, dann Architekt, Developer, Tester, Wave | `to-spec`, `to-tickets`, Controller | Abnahme auf dem Preview gegen den Fake |
+| **4. Bauen** | Spec aus Stufe 1–3, Tickets, jedes Ticket **geschärft** und als fertig markiert ([unten](#das-ticket-schärfen)), dann Architekt, Developer, Tester, Wave | `to-spec`, `to-tickets`, `grill-with-docs`, Controller | die Antworten auf offene Fragen; Abnahme auf dem Preview gegen den Fake |
 
 - Die Stufen 1–3 erarbeitet der Front-Agent tagsüber mit dem Menschen. Der Controller baut nur, was alle drei Stufen durchlaufen hat.
 - **Fehler an bereits abgestimmtem Verhalten** gehen weiter direkt als Ticket in den Bau.
@@ -60,6 +60,36 @@ Neue Funktionen entstehen **von außen nach innen**. Gebaut wird erst, wenn Ober
 - **`wayfinder`** plant ein großes Vorhaben als Karte von Entscheidungstickets und löst sie Sitzung für Sitzung. Er plant nur, er baut nicht.
 - **Grund:** Die Live-Fehler, die zu dieser Regel führten, waren fast alle Missverständnisse über Daten und Logik. Sie wären in Stufe 2 oder 3 vor dem Bau aufgefallen.
 - **Design-Spur:** Wenn der Mensch darum bittet, formt der Front-Agent eine Oberfläche direkt auf einem Branch, während der Mensch auf einem eigenen Port prüft. Erst das Aussehen; Tests, Review und Gate folgen als Härtungs-Ticket für den Controller, und nur über sie kommt der Branch nach `main`. Details: [outside-in.md](../outside-in.md#the-design-lane-shaping-the-real-surface-together).
+
+## Das Ticket schärfen
+
+Ein Ticket wird nur durch die Bewertung des Front-Agenten `ready`. Viele Projekte beginnen mit einer groben Gesamtspezifikation und einem daraus abgeleiteten Backlog (im Repo, in GitHub-Issues oder aus einem fremden Tracker kopiert); der Weg für neue Funktionen oben gilt für sie nicht, und eine Lücke in so einem Ticket zeigt sich sonst spät und teuer: beim Architekten (`change-spec`), beim Developer (Halt mit Rückfrage), in Review-Runden oder als „Needs human“-Frage in der unbeaufsichtigten Nacht, obwohl sie tagsüber im Gespräch hätte geklärt werden können. Bevor ein Ticket als fertig markiert wird, geht der Front-Agent es deshalb mit `grill-with-docs` durch, gegen die Gesamtspezifikation, den Code und `GLOSSARY.md`/ADRs.
+
+**Jede Herkunft.** Die Fabrik hat keine Verbindung zu fremden Trackern: sie liest keinen und schreibt in keinen. Ein Ticket aus einem fremden Tracker bringt der Front-Agent zuerst in die Ticketform des Projekts: der Mensch gibt ihm den Text (Einfügen oder Export), der Front-Agent schreibt daraus ein Ticket des Projekts (`docs/tasks/T<n>-*.md` oder ein GitHub-Issue), nennt die Herkunft in `Origin:` und behält den Originalwortlaut unter „References“. Es wird nichts zurücksynchronisiert; die fremde Kopie pflegt der Mensch. Danach wird das Ticket wie jedes andere geschärft.
+
+**Die Bewertung** beantwortet drei Fragen und endet in genau einem Ergebnis:
+
+1. *Ist das Ticket so scharf genug?* Gemessen an dem, was Developer und Tester brauchen: ist jedes Abnahmekriterium prüfbar, sind die Grenzen und die Schnittstellen mit ihren Zuständen (leer, mehrdeutig, Fehler) genannt, ist ein Begriff gegen das Glossar mehrdeutig, widerspricht das Ticket der Gesamtspezifikation oder einem anderen Ticket.
+2. *Welche Lücken schließt der Front-Agent selbst, aus dem Kontext?* Aus den Orten, die das Projekt unter `context.sources` in `factory.config.json` nennt (Gesamtspezifikation, weitere Dokumente, Material eines Vorgängerprojekts oder früheren Systems; die Fabrik unterstellt kein Layout, das Projekt sagt es einmal), aus `GLOSSARY.md`, den ADRs und dem Code. Was er so schließt, schreibt er mit der Quelle ins Ticket. Was er erschlossen statt gelesen hat, ist eine `Assumption:` (Regel aus `docs/coordinator.md`). Allein annehmen darf er, wenn die Quellen nur eine Lesart lassen und es um Präzision geht (ein Feldname, den die Spezifikation nahelegt, der Standard, den der Code schon nutzt, die Reihenfolge einer Liste, Wortlaut). Nie allein, wenn es eine Produktentscheidung, ein Kostenpunkt, eine Architekturfrage der Stufe 3, ein Schritt an einem echten externen System oder an den echten Daten des Menschen ist, oder wenn es einer Quelle widerspricht oder zwei Quellen sich widersprechen: das ist eine Frage.
+3. *Was muss wirklich geklärt werden?* Nur das geht an den Menschen: eine Frage nach der anderen, Mehrfachauswahl, die empfohlene Option zuerst; beim Bot-Front-Agenten als „Needs you“ auf einem Eintrag. Was Spezifikation oder Code schon beantworten, wird nicht gefragt.
+
+| Ergebnis | Status des Tickets | Was folgt |
+|---|---|---|
+| fertig zum Codieren, so wie es ist | `ready` | der Controller darf es nehmen |
+| fertig zum Codieren, nachdem der Agent Lücken aus dem Kontext geschlossen hat | `ready` | dasselbe; Quellen und Annahmen stehen im Ticket |
+| braucht Klärung | `needs-info` (bei GitHub-Issues das Label `needs-info`) | nichts wird gebaut; die offenen Fragen stehen im Ticket und auf der Liste des Front-Agenten, die Statustabelle zeigt das Ticket unter „Wartet auf dich“ |
+
+`ready` ist der bestehende Zustand des Projekts, jetzt mit strengerer Bedeutung („fertig zum Codieren“); `needs-info` ist der vorhandene Label-Name des Issue-Modus, in beiden Modi genutzt; `draft` bleibt „noch nicht bewertet“. Kein zweites Vokabular.
+
+**Das Ergebnis steht im Ticket**, nicht im Gespräch: die Zeile `Assessed: <Ergebnis>, <Datum>` (damit später sichtbar ist, warum ein Ticket fertig hieß), das Ziel, Abnahmekriterien als nummerierte Liste, die Grenzen (`Out of scope`), die Schnittstellen mit Zuständen, die Stufe, die Annahmen mit `Assumption:` bis der Mensch sie bestätigt, die offenen Fragen (jede als blockierend oder nicht markiert) und die benutzten Quellen. Neue Begriffe gehen ins `GLOSSARY.md`, schwer umkehrbare Entscheidungen in ein ADR (`domain-modeling`), wie der Skill es tut; Entscheidungen, die keins von beiden sind, bleiben im Ticket, wo der nächste Leser sie findet.
+
+**Verhältnismäßig.** Kurz ist der Schritt bei: einer kleinen Korrektur der Stufe 1, einem Dokumentationsticket und einem Befund aus Abnahme oder Live-Test, der schon sagt, was gesehen und was erwartet wurde. Dort prüft der Front-Agent nur die Form und schreibt `Assessed: ready as written, <Datum>`; Fragen entstehen nur, wenn sich etwas zeigt. Es wird nie zum Ritual und nie ganz ausgelassen: die Zeile ist das, was der Controller liest. Stufe 2 und 3, alles, was Schnittstelle, Daten oder Zustand hinzufügt, und jedes aus einem fremden Tracker übernommene Ticket bekommen den vollen Schritt.
+
+**Ein Backlog** wird in der Reihenfolge geschärft, in der gebaut wird, nicht auf einmal: die nächsten Tickets, die der Controller nähme (kritischer Pfad zuerst), einige auf einmal. Spätere Tickets bleiben `draft`; sie ändern sich mit dem, was davor gebaut wird, und die Antworten zu früheren klären oft ihre.
+
+**Was Code prüft und was nicht.** Der Controller nimmt ein Ticket nur, wenn es `ready` ist und die Form stimmt: eine `Assessed:`-Zeile mit einem „fertig“-Ergebnis, ein Ziel, Abnahmekriterien als Liste, die Grenzen, die Architekturstufe und keine unbeantwortete blockierende offene Frage (`controller/ticket.mjs`; es läuft in `steering/tasks.mjs` und `steering/issues.mjs`, bevor das Ticket gelistet oder übernommen wird, und in `mkspec.mjs` vor der ersten Developer- oder Architekten-Spec). Es sieht die Form, nicht die Qualität: ein gutes Abnahmekriterium kann es nicht von einem vagen unterscheiden, und die Bewertung ist ein Urteil, das falsch sein kann. Spec-Review des Architekten, Tester und Review-Protokoll prüfen weiter gegen die Spezifikation.
+
+**Bestehende Projekte.** `steering.readyCheck` ist `warn`, solange das Projekt nicht `enforce` setzt (neue Projekte starten mit `enforce`); `update` ändert es nie. Mit `warn` wird ein nicht fertiges Ticket weiter genommen, mit einer Meldung, was fehlt und dass der Schärfen-Schritt es füllt, und `agentic-factory status` führt solche Tickets als Hinweis. Ein Ticket in Arbeit (Status `building` oder später, ein Issue mit `in-progress`, eine früher erzeugte Spec) wird nie angehalten, egal wie die Einstellung steht. Tickets, die nach alter Bedeutung `ready` waren, schärft der Front-Agent in der Reihenfolge, in der sie gebaut würden; ist die Liste leer, wird `enforce` gesetzt.
 
 ## Der Ablauf einer Aufgabe
 
@@ -94,7 +124,7 @@ Jedes Ticket, ob GitHub-Issue oder Task-Datei, wird zu genau einem Branch und ei
 
 | Schritt | Wer | Wo | Was passiert |
 |---|---|---|---|
-| 1. Ticket ist `ready` | Front-Agent | Issue `#12` oder `docs/tasks/T12-<slug>.md` | Ziel, Outside-in-Nachweise, Stufe, Abnahme; auf Konflikte mit den Projektregeln geprüft; eine Zeile in `inbox.md` |
+| 1. Ticket ist `ready` | Front-Agent | Issue `#12` oder `docs/tasks/T12-<slug>.md` | Ziel, Outside-in-Nachweise, Stufe, Abnahme, Grenzen, eine `Assessed:`-Zeile aus dem [Schärfen-Schritt](#das-ticket-schärfen); auf Konflikte mit den Projektregeln geprüft; eine Zeile in `inbox.md` |
 | 2. Spec-Review | Architekt (nur lesend) | Branch `agents/t12-specreview` von `main` | committet nur `docs/reviews/T12-architecture-spec.md`; `Verdict: pass` |
 | 3. Bauen | Developer | **neuer Worktree** `<workspaces>/<projekt>/t12/` auf **neuem Branch** `agents/t12` von `origin/main` | Checkliste aller Abnahmepunkte im Bericht; Punkt für Punkt: fehlschlagender Test, Umsetzung, Commit, **Push nach jedem Punkt**; nur gezielte Prüfungen; Selbst-Review gegen die Spec; am Ende `origin/main` hereinmergen; Bericht `docs/reports/T12-….md`; `worker_done` mit Branch und SHA |
 | 4. Review Runde 1 | Tester (frischer Kontext, nur lesend) | temporärer Branch vom geprüften SHA mit hereingemergtem `origin/main`; Befund auf `agents/t12-review-1` | lässt die vollen Gates selbst über das Gate des Projekts (`<controllerDir>/gate`) laufen; prüft die Abläufe; committet nur `docs/reviews/T12-review-1.md` mit `Reviewed commit: <SHA>` und `Verdict` |
@@ -246,7 +276,7 @@ Ein Zyklus pro Weckruf, ohne eigenen Takt. Einen untätigen Controller weckt der
 
 | Skill | Wofür | Wer |
 |---|---|---|
-| `grilling`, `grill-with-docs`, `domain-modeling`, `wayfinder`, `to-spec`, `to-tickets`, `prototype` | klären, Begriffe, planen, zuschneiden, Fake bauen | Front-Agent mit dem Menschen |
+| `grilling`, `grill-with-docs`, `domain-modeling`, `wayfinder`, `to-spec`, `to-tickets`, `prototype` | klären, Begriffe, planen, zuschneiden, Fake bauen; `grill-with-docs` schärft außerdem jedes Ticket, bevor es fertig ist | Front-Agent mit dem Menschen |
 | `tdd`, `diagnosing-bugs`, `ponytail` | testgetrieben und schlank bauen, Fehler nachstellen | Developer |
 | `ponytail-review`, `code-review` | unabhängig prüfen | Tester |
 | `ponytail-audit` | Architektur-Check | Architekt |

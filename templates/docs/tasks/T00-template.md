@@ -1,14 +1,14 @@
 # T00: <short title>
 
-Status: draft | ready | building | review | passed | integrated | paused
+Status: draft | needs-info | ready | building | review | passed | integrated | paused
 Decided by: <human>, <date>
-Origin: <wish, live-test finding, audit, retro, debt item>
+Origin: <wish, live-test finding, audit, retro, debt item, a ticket brought over from an outside tracker>
 Depends on: <tasks or shared interfaces that must exist first, or "nothing">
-<!-- Documentation only: yes -- add this line (and `Level: 1` below) ONLY when the result is Markdown or images and nothing else. It is what lets a docs-only task skip its Tester (docsOnly.enabled); it must be there when the work starts and still when the check runs (read from the ticket on the main branch, never from the task branch), as shown, once, outside code blocks and comments: this comment itself does not count. Leave it out otherwise: absent means the full path. A ticket that asks for code, an export, a dependency or a route never carries it, whatever its level. -->
+Assessed: <ready as written | ready after gaps closed from context | needs clarification>, <YYYY-MM-DD>
 
 ## Goal
 
-One paragraph from the user's perspective: what works afterwards that does not work now.
+<!-- One paragraph from the user's perspective: what works afterwards that does not work now. -->
 
 ## Outside-in evidence
 
@@ -27,11 +27,23 @@ Numbered, observable statements of what the system does.
 
 ## Observable acceptance
 
-Numbered checks a Tester can run and a human can try on the preview, each with the sentence to try.
+<!-- Numbered checks a Tester can run and a human can try on the preview, each with the sentence to try. -->
 
 ## Out of scope
 
-What this task deliberately does not do, and where that goes instead.
+<!-- What this task deliberately does not do, and where that goes instead. -->
+
+## Assessment
+
+<!-- Written by the Front agent's "sharpen the ticket" step, with the `Assessed:` line above. Outcome and why. What the specification, the code, the glossary or an ADR already answered, each with its source (file and section). Every `Assumption:` the agent made, marked until the human confirms it. New terms (GLOSSARY.md) and decisions that are hard to reverse (ADR) that came out of it. -->
+
+## Open questions
+
+<!-- One list item per question. Mark it `(blocking)` when the ticket cannot be built without the answer, `(not blocking)` otherwise. An answer is written on the item as `Answer: …` (decided by the human, date). A ticket with an unanswered blocking question is not ready to code. -->
+
+## References
+
+<!-- The sources used: the overall specification (section), the code (files), the glossary terms, ADRs, the original ticket if it came from an outside tracker. -->
 
 ## Notes for the Developer
 
@@ -39,4 +51,6 @@ Binding instructions from the Architect's spec review, shared decisions, known f
 
 ## Ready check
 
-Before this ticket becomes `ready`: its requirements and evidence do not conflict with the project's rules or with the Controller's hard rules, for example a required screenshot in git where binaries are forbidden. A conflict found here costs minutes; found at the wave, it can block everything behind it. A task that runs in parallel names each shared interface with exact fields. Demo data shows the normal case: most items look like real use, and special states stay on a few.
+Before this ticket becomes `ready`, the Front agent has sharpened it (docs/dev-workflow.md, "Sharpen the ticket") and recorded the outcome in the `Assessed:` line; the Controller takes only a ticket in `ready`. Its requirements and evidence do not conflict with the project's rules or with the Controller's hard rules, for example a required screenshot in git where binaries are forbidden. A conflict found here costs minutes; found at the wave, it can block everything behind it. A task that runs in parallel names each shared interface with exact fields. Demo data shows the normal case: most items look like real use, and special states stay on a few.
+
+Code checks the form only: an assessment, a goal, acceptance criteria as a list, the limits, the level, no unanswered blocking question. It cannot tell a good criterion from a vague one; the Architect, the Tester and the review check against the spec.

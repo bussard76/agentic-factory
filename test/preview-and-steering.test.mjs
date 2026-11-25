@@ -153,7 +153,7 @@ function steering(script, config = {}) {
   const dir = tempDir("af-steering-");
   const ctl = path.join(dir, "ctl"), project = path.join(dir, "p"), bin = path.join(dir, "bin");
   for (const d of [path.join(ctl, "steering"), path.join(project, "docs/tasks"), bin]) fs.mkdirSync(d, { recursive: true });
-  for (const f of ["lib.mjs", "cli.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
+  for (const f of ["lib.mjs", "cli.mjs", "ticket.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
   fs.copyFileSync(path.join(ROOT, "controller/steering", script), path.join(ctl, "steering", script));
   fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca" }, commands: {}, steering: config, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local", projectDir: project }] } }));
   const run = (...args) => spawnSync("node", [path.join(ctl, "steering", script), ...args], { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });

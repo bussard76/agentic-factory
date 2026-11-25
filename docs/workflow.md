@@ -50,11 +50,41 @@ New features are built **from the outside in**. Nothing is built until the surfa
 | **1. Surface** | design drafts, then a clickable **front-end fake** with invented data and dummy actions | design MCP, `prototype` | how it looks and behaves |
 | **2. Interfaces** | the data in and out, made visible on the fake | the fake | which data flows where |
 | **3. Logic** | the flow in words and as a diagram | `grilling`, `wayfinder` | how the system decides |
-| **4. Build** | spec, tickets, then Architect, Developer, Tester, wave | `to-spec`, `to-tickets`, Controller | acceptance on the preview |
+| **4. Build** | spec, tickets, each ticket **sharpened** and marked ready ([below](#sharpen-the-ticket)), then Architect, Developer, Tester, wave | `to-spec`, `to-tickets`, `grill-with-docs`, Controller | the answers to open questions; acceptance on the preview |
 
 Stages 1–3 happen with the human during the day; the Controller builds only what is signed off. Defects in already agreed behaviour go straight to the build. Design exports land in `design/<feature>/` in the repo so workers never need the design tool.
 
 **Design lane:** when the human asks for it, the Front agent shapes one surface directly on a branch while the human reviews on a separate port. Look first; tests, review and gate follow as a hardening ticket for the Controller, and the branch reaches `main` only through them. Details: [outside-in.md](outside-in.md#the-design-lane-shaping-the-real-surface-together).
+
+## Sharpen the ticket
+
+A ticket reaches `ready` only through the Front agent's assessment. Many projects start with a coarse overall specification and a backlog derived from it (in the repo, in GitHub issues, or copied from an outside tracker); the new-feature path above does not apply to them, and a gap in such a ticket would otherwise surface late and expensively: at the Architect (`change-spec`), at the Developer (a stop with a question), in review rounds, or as a "Needs human" question in the unattended night, when it could have been settled by day in conversation. So before a ticket is marked ready, the Front agent goes through it with `grill-with-docs` against the overall specification, the code and `GLOSSARY.md`/ADRs.
+
+**Any origin.** The factory has no connection to outside trackers: it neither reads nor writes one. A ticket that lives in an outside tracker is brought into the project's ticket form first: the human gives the Front agent its text (a paste or an export), the Front agent writes it as a ticket of the project (`docs/tasks/T<n>-*.md` or a GitHub issue), names the origin in `Origin:` and keeps the original wording under References. Nothing is synchronised back; the outside copy is the human's to update. From then on it is sharpened like any other ticket.
+
+**The assessment** answers three questions and ends in exactly one outcome:
+
+1. *Is the ticket sharp enough as written?* Judged by what a Developer and a Tester need: can each acceptance criterion be checked, are the limits and the interfaces with their states (empty, ambiguous, error) stated, is a term ambiguous against the glossary, does the ticket contradict the overall specification or another ticket.
+2. *Which gaps can the Front agent close itself, from context?* From the places the project names under `context.sources` in `factory.config.json` (the overall specification, other documents, material of a predecessor project or earlier system; the factory assumes no layout, the project states it once), from `GLOSSARY.md`, the ADRs and the code. What it closes this way it writes into the ticket with the source. Whatever it inferred rather than read is an `Assumption:` (the rule of `docs/coordinator.md`). It may make an assumption alone when the sources leave one reading and the question is one of precision (a field name the specification implies, the default the code already uses, the order of a list, wording). It never makes one alone when it is a product decision, a cost, a level-3 architecture question, a step that touches a real external system or the human's real data, or when it contradicts a source or two sources contradict each other: that is a question.
+3. *What really has to be clarified?* Only that goes to the human: one question at a time, multiple choice, the recommended option first; for a bot Front agent as "Needs you" on an item. What the specification or the code already answers is not asked.
+
+| Outcome | Status of the ticket | What follows |
+|---|---|---|
+| ready to code as it is | `ready` | the Controller may take it |
+| ready to code after the agent closed gaps from context | `ready` | the same; the sources and assumptions are in the ticket |
+| needs clarification | `needs-info` (with GitHub issues the label `needs-info`) | nothing builds; the open questions are in the ticket and on the Front agent's list, and the status table shows the ticket under "Waiting for you" |
+
+`ready` is the project's existing state, now with a stricter meaning ("ready to code"); `needs-info` is the existing label name of the issue mode, used in both modes; `draft` stays "not assessed yet". No parallel vocabulary.
+
+**The result is written into the ticket**, not left in the conversation: the `Assessed: <outcome>, <date>` line (so it can be seen later why a ticket was called ready), the goal, acceptance criteria as a numbered list, the limits (`Out of scope`), the interfaces with states, the level, the assumptions marked `Assumption:` until the human confirms them, the open questions (each marked blocking or not), and the references used. New terms go to `GLOSSARY.md`, a decision that is hard to reverse to an ADR (`domain-modeling`), as the skill does; decisions that are neither stay in the ticket, where the next reader finds them.
+
+**Proportion.** The step is short for: a small level-1 fix, a documentation ticket, and a finding from acceptance or a live test that already states what was seen and what was expected. For these the Front agent only checks the form and writes `Assessed: ready as written, <date>`; questions come up only if something does. It is never a ritual and never left out entirely: the line is what the Controller reads. Level 2 and 3, anything that adds an interface, data or a state, and every ticket brought over from an outside tracker get the full step.
+
+**A backlog** is sharpened in the order it will be built, not all at once: the next tickets the Controller would take (the critical path first), a few at a time. Later tickets stay `draft`; they change with what is built before them, and the answers to earlier ones often settle theirs.
+
+**What code checks, and what it cannot.** The Controller takes a ticket only when it is `ready` and the form holds: an `Assessed:` line with a ready outcome, a goal, acceptance criteria as a list, the limits, the architecture level, and no unanswered blocking open question (`controller/ticket.mjs`; it runs in `steering/tasks.mjs` and `steering/issues.mjs` before the ticket is listed or claimed, and in `mkspec.mjs` before the first Developer or Architect spec). It sees form, not quality: it cannot tell a good acceptance criterion from a vague one, and the assessment is a judgement that can be wrong. The Architect's spec review, the Tester and the review protocol still check against the specification.
+
+**Existing projects.** `steering.readyCheck` is `warn` unless the project sets `enforce` (new projects start with `enforce`); `update` never changes it. With `warn`, a ticket that is not ready to code is still taken, with one message that says what is missing and that the sharpening step fills it, and `agentic-factory status` lists such tickets as a hint. A ticket already in progress (Status `building` or later, an issue labelled `in-progress`, a spec that was made before) is never stopped, whatever the setting. Tickets that were `ready` under the old meaning are sharpened by the Front agent in the order they would be built; when the list is clear, set `enforce`.
 
 ## The life of a task
 
@@ -89,7 +119,7 @@ Every ticket, whether a GitHub issue or a task file, becomes exactly one branch 
 
 | Step | Who | Where | What happens |
 |---|---|---|---|
-| 1. Ticket is `ready` | Front agent | issue `#12` or `docs/tasks/T12-<slug>.md` | goal, outside-in evidence, level, acceptance; checked for conflicts with the project's rules; a line in `inbox.md` |
+| 1. Ticket is `ready` | Front agent | issue `#12` or `docs/tasks/T12-<slug>.md` | goal, outside-in evidence, level, acceptance, limits, an `Assessed:` line from the [sharpening step](#sharpen-the-ticket); checked for conflicts with the project's rules; a line in `inbox.md` |
 | 2. Spec review | Architect (read-only) | branch `agents/t12-specreview` from `main` | commits only `docs/reviews/T12-architecture-spec.md`; `Verdict: pass` |
 | 3. Build | Developer | **new worktree** `<workspaces>/<project>/t12/` on **new branch** `agents/t12` from `origin/main` | checklist of every acceptance item in the report; one item at a time: failing test, implementation, commit, **push after each item**; targeted checks only; self-review against the spec; merge `origin/main` at the end; report `docs/reports/T12-….md`; `worker_done` with branch and SHA |
 | 4. Review round 1 | Tester (fresh context, read-only) | temporary branch from the reviewed SHA with `origin/main` merged in; findings on `agents/t12-review-1` | runs the full gates itself through the project's gate (`<controllerDir>/gate`); checks the flows; commits only `docs/reviews/T12-review-1.md` with `Reviewed commit: <SHA>` and `Verdict` |
@@ -238,7 +268,7 @@ A journal of every event, a nightly **Pipeline Auditor**, a **retro** per hard a
 
 | Skill | For | Who |
 |---|---|---|
-| `grilling`, `grill-with-docs`, `domain-modeling`, `wayfinder`, `to-spec`, `to-tickets`, `prototype` | clarify, name things, plan, slice, fake | Front agent with the human |
+| `grilling`, `grill-with-docs`, `domain-modeling`, `wayfinder`, `to-spec`, `to-tickets`, `prototype` | clarify, name things, plan, slice, fake; `grill-with-docs` also sharpens each ticket before it is ready | Front agent with the human |
 | `tdd`, `diagnosing-bugs`, `ponytail` | build test-first and lean, reproduce bugs | Developer |
 | `ponytail-review`, `code-review` | review independently | Tester |
 | `ponytail-audit` | architecture health | Architect |

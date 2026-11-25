@@ -610,7 +610,7 @@ function docsController(r) {
   const ctl = fs.mkdtempSync(path.join(r.base, "ctl-docsonly-"));
   for (const f of ["lib.mjs", "cli.mjs", "docsonly.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
   fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "demo", mainBranch: "main" }, hosts: { controller: { host: "local", controllerDir: ctl }, workers: [{ name: "local", kind: "local", projectDir: r.dir }] } }));
-  fs.mkdirSync(path.join(ctl, "steering")); fs.copyFileSync(path.join(ROOT, "controller/steering/issues.mjs"), path.join(ctl, "steering/issues.mjs"));
+  fs.copyFileSync(path.join(ROOT, "controller/ticket.mjs"), path.join(ctl, "ticket.mjs")); fs.mkdirSync(path.join(ctl, "steering")); fs.copyFileSync(path.join(ROOT, "controller/steering/issues.mjs"), path.join(ctl, "steering/issues.mjs"));
   const env = () => ({ ...process.env, FACTORY_CONFIG: "", ...(r.env ?? {}) });
   const run = (...a) => spawnSync("node", [path.join(ctl, "docsonly.mjs"), ...a], { encoding: "utf8", env: env() });
   // `steering/issues.mjs claim <n>` as the Controller runs it (the fake gh answers); or a record written by hand.
@@ -830,7 +830,7 @@ test("the file names the check expects are the ones mkspec tells the Architect a
   for (const [mode, task, ref, branchName, issueArgs] of [["orca-tasks", "T03", "docs/tasks/T03-document-api.md", "agents/t03", []], ["github-issues", "I12", "#12", "agents/i12", ["--issue", "12"]]]) {
     const ctl = tempDir("af-mkspec-names-");
     fs.mkdirSync(path.join(ctl, "templates"));
-    for (const f of ["cli.mjs", "lib.mjs", "templates/mkspec.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
+    for (const f of ["cli.mjs", "lib.mjs", "templates/mkspec.mjs", "ticket.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
     fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main", humanName: "Alex" }, steering: { mode }, agents: { runner: "orca" }, commands: { verify: "npm run verify" }, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local" }] } }));
     const spec = (...a) => fs.readFileSync(spawnSync("node", ["templates/mkspec.mjs", ...a], { cwd: ctl, encoding: "utf8", env: { ...process.env, FACTORY_CONFIG: "" } }).stdout.trim(), "utf8");
     const review = spec("specreview", task, ref, branchName).match(/docs\/reviews\/[^\s,;)]+\.md/)[0];

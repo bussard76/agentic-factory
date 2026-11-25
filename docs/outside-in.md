@@ -8,8 +8,8 @@ New features are built **from the outside in**. Nothing is built until the human
 |---|---|---|---|
 | **1. Surface** | graphic drafts in a design tool (Figma via its MCP server, or Pencil), then a **front-end fake**: clickable, invented data, a few dummy actions, no real logic | design MCP, the `prototype` skill (UI branch: several structurally different variants on one route, switchable) | "this is how it looks and behaves" |
 | **2. Interfaces** | the data in and out, made visible on the fake: sources, tools, fields, states (empty, ambiguous, error), what the system writes | the fake plus a short table in the spec | "this data flows here" |
-| **3. Logic** | the flow in words and as a Mermaid diagram: how the system decides in every case | `grilling` / `grill-with-docs` for single questions; `prototype` (logic branch: a one-file state-machine demo) for behaviour that is hard to reason about on paper; `wayfinder` for efforts that span several sessions | "this is how it thinks and acts" |
-| **4. Build** | a spec from stages 1–3 (`to-spec`), tickets (`to-tickets`), then the normal flow: Architect, Developer, Tester, wave | the Controller | acceptance on the preview against the fake |
+| **3. Logic** | the flow in words and as a Mermaid diagram: how the system decides in every case | `grilling` / `grill-with-docs` for single questions of the flow (a whole ticket goes through `grill-with-docs` in stage 4); `prototype` (logic branch: a one-file state-machine demo) for behaviour that is hard to reason about on paper; `wayfinder` for efforts that span several sessions | "this is how it thinks and acts" |
+| **4. Build** | a spec from stages 1–3 (`to-spec`), tickets (`to-tickets`), each ticket sharpened by the Front agent and marked ready ([Sharpen the ticket](workflow.md#sharpen-the-ticket)), then the normal flow: Architect, Developer, Tester, wave | `grill-with-docs`, the Controller | the answers to open questions; acceptance on the preview against the fake |
 
 ## Who does what
 

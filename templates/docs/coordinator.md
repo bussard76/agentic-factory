@@ -4,7 +4,7 @@ These rules bind whichever agent coordinates work in this repo: the Front agent 
 
 `docs/dev-workflow.md` explains this workflow to people. {{WORKFLOW_SYNC}}
 
-**Only {{HUMAN}} decides for {{HUMAN}}:** "Decided by {{HUMAN}}" needs {{HUMAN}}'s quoted statement with a date. Anything an agent chose is written as `Assumption:` until {{HUMAN}} confirms it, and no reviewer holds work to an assumption as if it were a decision. The sections marked "decided by" below were confirmed at adoption.
+**Only {{HUMAN}} decides for {{HUMAN}}:** "Decided by {{HUMAN}}" needs {{HUMAN}}'s quoted statement with a date. Anything an agent chose is written as `Assumption:` until {{HUMAN}} confirms it, and no reviewer holds work to an assumption as if it were a decision. When the Front agent sharpens a ticket it may assume alone only a matter of precision that the specification, the code or the glossary leave one reading for; a product decision, a cost, a level-3 architecture question, a step at a real external system or on {{HUMAN}}'s real data, and anything that contradicts a source are {{HUMAN}}'s. The sections marked "decided by" below were confirmed at adoption.
 
 **Process decisions go into the docs immediately:** whenever {{HUMAN}} and a coordinator decide something about the way of working, the coordinator updates {{COORDINATOR_UPDATES}} in the same turn, marked "decided by {{HUMAN}}, <date>". An agent's private memory is never the only record.
 

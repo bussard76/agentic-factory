@@ -43,7 +43,7 @@ Start every later session with the same sentence; the agent then reads `~/front-
 
 ## 3. The first feature, outside-in
 
-Tell the Front agent what you want. It leads you through the surface (a design or clickable fake), the data going in and out, and the logic in words and a diagram. Once you agree, it writes a ready ticket and tells the Controller. Keep the first feature small: one visible behaviour and one or two acceptance sentences.
+Tell the Front agent what you want. It leads you through the surface (a design or clickable fake), the data going in and out, and the logic in words and a diagram. Once you agree, it writes the ticket, sharpens it (it checks the ticket against your specification, the code and the glossary, closes what those already answer and asks you only the real gaps, one at a time), marks it ready and tells the Controller. Keep the first feature small: one visible behaviour and one or two acceptance sentences.
 
 The Controller arranges the architecture review, build, independent test and integration wave. The [branch and worktree mechanics](workflow.md#branches-and-worktrees-the-mechanics-of-one-ticket) explain the details.
 

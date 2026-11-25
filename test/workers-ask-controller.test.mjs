@@ -15,7 +15,7 @@ const COMMON = { project: { name: "p", mainBranch: "main", humanName: "Alex" }, 
 function ctlDir(config, files) {
   const dir = tempDir("af-askctl-"), ctl = path.join(dir, "ctl");
   fs.mkdirSync(path.join(ctl, "templates"), { recursive: true });
-  for (const f of ["cli.mjs", "lib.mjs", ...files]) fs.copyFileSync(path.join(CTL, f), path.join(ctl, f));
+  for (const f of ["cli.mjs", "lib.mjs", "ticket.mjs", ...files]) fs.copyFileSync(path.join(CTL, f), path.join(ctl, f));
   fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ ...COMMON, ...config }));
   return { dir, ctl };
 }

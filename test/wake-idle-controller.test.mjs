@@ -10,7 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
-const FILES = ["heartbeat.mjs", "cycle.mjs", "cli.mjs", "controller-terminal.mjs", "front-notice.mjs", "inbox.mjs", "restart.mjs", "lib.mjs", "steering/tasks.mjs"];
+const FILES = ["heartbeat.mjs", "cycle.mjs", "cli.mjs", "controller-terminal.mjs", "front-notice.mjs", "inbox.mjs", "restart.mjs", "lib.mjs", "steering/tasks.mjs", "ticket.mjs"];
 const worker = JSON.stringify({ t1: { name: "T1 · Worker Developer", host: "local", terminal: "term_w", worktree: "/w/t1" } });
 const doneMsg = { id: "m1", type: "worker_done", from: "term_w", subject: "done" };
 // A run at a tenth minute is the full check (ready tickets, running workers). The minute is injected (FACTORY_MINUTE, pinned to 5
