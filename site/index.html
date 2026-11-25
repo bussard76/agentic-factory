@@ -15,9 +15,9 @@ This license is copied below, and is also available with a FAQ at:
 https://scripts.sil.org/OFL
 
 
-- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+-----------------------------------------------------------
 SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
-- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+-----------------------------------------------------------
 
 PREAMBLE
 The goals of the Open Font License (OFL) are to stimulate worldwide
@@ -47,7 +47,7 @@ copyright statement(s).
 distributed by the Copyright Holder(s).
 
 "Modified Version" refers to any derivative made by adding to, deleting,
-or substituting - - in part or in whole - - any of the components of the
+or substituting -- in part or in whole -- any of the components of the
 Original Version, by changing formats or by porting the Font Software to a
 new environment.
 
@@ -125,9 +125,9 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
   a{color:inherit}
   .wrap{max-width:var(--max);margin:0 auto;padding:0 16px}
   header{position:sticky;top:0;z-index:10;background:color-mix(in srgb,var(--surface) 88%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--border-soft)}
-  header .wrap{display:flex;align-items:center;justify-content:space-between;height:60px;gap:16px}
-  .brand{font-family:var(--font-display);font-weight:800;letter-spacing:-.01em;text-transform:uppercase;font-size:15px}
-  nav{display:flex;gap:18px;font-size:14px;overflow-x:auto} nav a{text-decoration:none;color:var(--text-soft);white-space:nowrap} nav a:hover{color:var(--text)}
+  header .wrap{display:flex;align-items:center;justify-content:space-between;min-height:60px;gap:16px}
+  .brand{white-space:nowrap;font-family:var(--font-display);font-weight:800;letter-spacing:-.01em;text-transform:uppercase;font-size:15px}
+  nav{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:14px} nav a{text-decoration:none;color:var(--text-soft);white-space:nowrap} nav a:hover{color:var(--text)}
   .ticker{overflow:hidden;border-bottom:1px solid var(--border-soft);background:var(--surface-inset)}
   .ticker div{display:inline-block;white-space:nowrap;padding:10px 0;font-family:var(--font-display);font-weight:800;text-transform:uppercase;letter-spacing:.08em;font-size:12px;color:var(--text-muted);animation:slide 40s linear infinite}
   @keyframes slide{from{transform:translateX(0)}to{transform:translateX(-50%)}}
@@ -155,22 +155,24 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
   .step h3{margin:0 0 4px;font-size:17px} .step p{margin:0;color:var(--text-soft);font-size:15px}
   .step .sign{margin-top:8px;font-size:13px;color:var(--ok);font-weight:700}
   figure{margin:0;background:var(--surface-inset);border:1px solid var(--border-soft);border-radius:var(--radius);padding:18px;overflow:auto}
-  figure svg{display:block;width:100%;height:auto;min-width:640px}
+  figure svg{display:block;width:100%;height:auto} .dia-m{display:none;max-width:360px;margin:0 auto} @media (max-width:700px){.dia-d{display:none}.dia-m{display:block}} pre:focus-visible,figure:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
   figcaption{font-size:13px;color:var(--text-muted);margin-top:10px}
   .rules{display:grid;gap:10px;align-content:start;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
   .rule{display:flex;gap:12px;align-items:flex-start;padding:14px 16px;border-left:3px solid var(--signal);background:var(--surface-inset);border-radius:0 var(--radius) var(--radius) 0;font-size:15px}
   .rule b{display:block;margin-bottom:2px}
-  code,pre{font-family:var(--font-mono);font-size:13.5px} pre{background:var(--surface-inset);border:1px solid var(--border-soft);border-radius:var(--radius);padding:16px;overflow:auto;margin:0}
+  code,pre{font-family:var(--font-mono);font-size:13.5px} code{overflow-wrap:anywhere} pre{background:var(--surface-inset);border:1px solid var(--border-soft);border-radius:var(--radius);padding:16px;overflow:auto;margin:0}
   .two{display:grid;gap:24px;grid-template-columns:1fr 1fr} .two>*{min-width:0} @media (max-width:820px){.two{grid-template-columns:1fr}}
   footer{padding:40px 0 60px;color:var(--text-muted);font-size:14px;border-top:1px solid var(--border-soft)}
+  @media (max-width:900px){header{position:static} header .wrap{flex-wrap:wrap;padding-top:10px;padding-bottom:10px} nav{order:3;width:100%} .brand{flex:1}}
   .toggle{border:1px solid var(--border);background:transparent;color:var(--text);border-radius:999px;padding:6px 10px;font-size:12px;cursor:pointer}
+  @media (prefers-reduced-motion: reduce){.ticker div{animation:none} html{scroll-behavior:auto}}
   .quiet{color:var(--text-muted);font-size:14px}
 </style>
 </head>
 <body>
 <header><div class="wrap">
   <div class="brand">Agentic Factory</div>
-  <nav><a href="#wie">Wie es funktioniert</a><a href="#rollen">Rollen</a><a href="#aussen">Von außen nach innen</a><a href="#qualitaet">Qualität</a><a href="#kapazitaet">Kapazität</a><a href="#lernen">Lernen</a><a href="#unbeaufsichtigt">Unbeaufsichtigt</a><a href="#erprobt">Erprobt?</a><a href="#start">Start</a><a href="#projekt">Im Projekt</a></nav>
+  <nav><a href="#wie">Überblick</a><a href="#rollen">Rollen</a><a href="#aussen">Außen nach innen</a><a href="#qualitaet">Qualität</a><a href="#kapazitaet">Kapazität</a><a href="#lernen">Lernen</a><a href="#unbeaufsichtigt">Unbeaufsichtigt</a><a href="#erprobt">Erprobt</a><a href="#start">Start</a><a href="#projekt">Projekt</a></nav>
   <button class="toggle" id="theme" aria-label="Farbschema umschalten">◐</button>
 </div></header>
 <div class="ticker" aria-hidden="true"><div>Front-Agent · Controller · Developer · Tester · Architekt · Auditor · Retro · Outside-in · Functional first · Measured capacity · Waves · Hardening · &nbsp; Front-Agent · Controller · Developer · Tester · Architekt · Auditor · Retro · Outside-in · Functional first · Measured capacity · Waves · Hardening · &nbsp;</div></div>
@@ -188,7 +190,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     <h2>Wie es funktioniert</h2>
     <p class="sub">Der Mensch spricht mit genau einem Agenten. Alles andere passiert dahinter: auf dem eigenen Rechner, auf einem oder mehreren Servern, oder beides.</p>
     <figure>
-      <svg viewBox="0 0 960 300" role="img" aria-label="Ablauf: Mensch, Front-Agent, Controller, Worker, main, Preview">
+      <svg class="dia-d" viewBox="0 0 960 300" role="img" aria-label="Ablauf: Mensch, Front-Agent, Controller, Worker, main, Preview">
         <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
         <g fill="none" stroke="currentColor" stroke-width="1.5" color="var(--text-soft)">
           <rect x="20" y="110" width="130" height="64" rx="10"/><rect x="220" y="110" width="150" height="64" rx="10"/><rect x="440" y="110" width="150" height="64" rx="10"/>
@@ -211,12 +213,32 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text x="480" y="268" font-size="12" fill="var(--text-muted)">Preview auf dem eigenen Rechner folgt main automatisch</text>
         </g>
       </svg>
+      <svg class="dia-m" viewBox="0 0 340 530" role="img" aria-label="Ablauf von oben nach unten: Mensch, Front-Agent, Controller, Worker, main, Preview">
+        <defs><marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g fill="none" stroke="currentColor" stroke-width="1.5" color="var(--text-soft)">
+          <rect x="70" y="10" width="200" height="56" rx="10"/><rect x="70" y="100" width="200" height="56" rx="10"/><rect x="70" y="190" width="200" height="56" rx="10"/>
+          <rect x="70" y="290" width="200" height="112" rx="10"/><rect x="95" y="432" width="150" height="44" rx="22"/>
+          <path d="M150 68V98" marker-end="url(#b)"/><path d="M190 98V68" marker-end="url(#b)"/>
+          <path d="M150 158V188" marker-end="url(#b)"/><path d="M190 188V158" marker-end="url(#b)"/>
+          <path d="M170 248V288" marker-end="url(#b)"/><path d="M170 404V430" marker-end="url(#b)"/>
+        </g>
+        <g font-family="Sen, sans-serif" font-size="14" fill="currentColor" text-anchor="middle" color="var(--text)">
+          <text x="170" y="34" font-weight="700">Mensch</text><text x="170" y="54" font-size="12" fill="var(--text-muted)">entscheidet, testet</text>
+          <text x="170" y="124" font-weight="700">Front-Agent</text><text x="170" y="144" font-size="12" fill="var(--text-muted)">eigener Rechner</text>
+          <text x="170" y="214" font-weight="700">Controller</text><text x="170" y="234" font-size="12" fill="var(--text-muted)">unbeaufsichtigt</text>
+          <text x="170" y="316">Developer</text><text x="170" y="339">Tester</text><text x="170" y="362">Architekt</text><text x="170" y="385">Auditor / Retro</text>
+          <text x="170" y="460" font-weight="700">main</text>
+          <text x="142" y="88" font-size="12" fill="var(--text-muted)" text-anchor="end">Aufträge</text><text x="198" y="88" font-size="12" fill="var(--text-muted)" text-anchor="start">Status</text>
+          <text x="142" y="178" font-size="12" fill="var(--text-muted)" text-anchor="end">inbox.md</text><text x="198" y="178" font-size="12" fill="var(--text-muted)" text-anchor="start">status.md</text>
+          <text x="170" y="502" font-size="12" fill="var(--text-muted)">Preview auf dem eigenen Rechner</text><text x="170" y="520" font-size="12" fill="var(--text-muted)">folgt main automatisch</text>
+        </g>
+      </svg>
       <figcaption>Der Mensch sieht eine Statustabelle und bekommt Fragen mit Optionen. Das Hin und Her der Worker sieht er nie.</figcaption>
     </figure>
     <div class="grid" style="margin-top:24px">
       <div class="stat card"><span class="big">1</span><small>Ansprechpartner für den Menschen</small></div>
       <div class="stat card"><span class="big">0</span><small>Pushes nach main ohne bestandenes Review. Die Git-Hooks lehnen sie ab.</small></div>
-      <div class="stat card"><span class="big">2</span><small>Review-Runden (Standard, einstellbar), dann wird integriert. Der Rest wird Schuld mit Kategorie.</small></div>
+      <div class="stat card"><span class="big">2</span><small>Review-Runden (Standard, einstellbar), dann entscheidet eine letzte Funktionsprüfung: Läuft die Funktion, wird integriert, der Rest wird Schuld mit Kategorie.</small></div>
       <div class="stat card"><span class="big">24/7</span><small>optional: Nachts bauen, tags planen. Oder durchgehend. Der Rhythmus ist eine Einstellung.</small></div>
     </div>
   </section>
@@ -226,8 +248,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     <h2>Rollen mit klaren Grenzen</h2>
     <p class="sub">Jede Rolle hat ein „macht nie“. Daraus entsteht der Gegendruck, der Qualität erzeugt: Niemand nimmt seine eigene Arbeit ab.</p>
     <div class="grid">
-      <div class="card"><h3>Mensch</h3><p>Ziele, Prioritäten, Abnahme auf dem Preview in der eigenen Umgebung (automatisierte Tests nutzen nie echte Daten), Entscheidungen auf Stufe 3 und alles, was echte externe Systeme oder echte Daten berührt.</p></div>
-      <div class="card"><h3>Front-Agent</h3><p>Einzige Ansprechstelle. Wünsche und Befunde werden Tickets und Specs, Entscheidungen werden als eine Frage mit Optionen gestellt, der Stand kommt als Tabelle. Ein Agent in einem Orca-Terminal oder ein Orca-Bot, den Orca weckt, wenn der Controller etwas zu melden hat.</p><p class="never"><b>Macht nie:</b> Worker steuern.</p></div>
+      <div class="card"><h3>Mensch</h3><p>Ziele, Prioritäten, Abnahme auf dem Preview in der eigenen Umgebung (automatisierte Tests nutzen nie echte Daten), Entscheidungen auf Stufe 3 (neue Verträge, Zuständigkeiten, Datenflüsse oder Technik) und alles, was echte externe Systeme oder echte Daten berührt.</p></div>
+      <div class="card"><h3>Front-Agent</h3><p>Einzige Ansprechstelle. Wünsche und Befunde werden Tickets und Specs, Entscheidungen werden als eine Frage mit Optionen gestellt, der Stand kommt als Tabelle. Ein Agent in einem Orca-Terminal oder ein Orca-Bot, den Orca weckt, wenn der Controller etwas zu melden hat.</p><p class="never"><b>Macht nie:</b> Worker steuern. Produktcode schreibt er nur in der Design-Spur, wenn der Mensch sie verlangt.</p></div>
       <div class="card"><h3>Controller</h3><p>Startet und taktet Worker, Tests, Reviews und Waves. Erkennt Hänger, räumt fertige Worker auf, schreibt nach jedem Zyklus den Status. Ein Heartbeat weckt ihn von außen, sobald es etwas zu tun gibt, und meldet dem Front-Agenten, wenn er hängt (ein automatischer Neustart ist möglich, aber standardmäßig aus). Ist sein Kontext zu voll, startet er sich frisch. Läuft auf dem eigenen Rechner oder einem Server.</p><p class="never"><b>Macht nie:</b> mit dem Menschen sprechen, Stufe 3 entscheiden.</p></div>
       <div class="card"><h3>Developer</h3><p>Baut genau einen Auftrag testgetrieben auf eigenem Branch, mit Checkliste und Selbst-Review gegen die Spec.</p><p class="never"><b>Macht nie:</b> nach main pushen, Tests abschwächen.</p></div>
       <div class="card"><h3>Tester</h3><p>Prüft unabhängig mit frischem Kontext, lässt die vollen Testläufe selbst laufen, schreibt Befund und Urteil.</p><p class="never"><b>Macht nie:</b> Code ändern.</p></div>
@@ -254,7 +276,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     <h2>Erst muss es funktionieren</h2>
     <div class="two">
       <div>
-        <p class="sub">Ein Review scheitert nur an echten Funktionsfehlern: Ein Ablauf aus der Spec läuft nicht, Daten gehen verloren, oder eine Änderung würde ein echtes externes System erreichen. Alles andere wird Schuld mit Kategorie und blockiert nichts.</p>
+        <p class="sub">Ein Review scheitert nur an echten Funktionsfehlern oder einem Architekturverstoß: Ein Ablauf aus der Spec läuft nicht, Daten gehen verloren, oder eine Änderung würde ein echtes externes System erreichen. Alles andere wird Schuld mit Kategorie und blockiert nichts.</p>
         <div class="rules">
           <div class="rule"><div><b>Immer dabei: Code-Qualität und Architektur</b>werden in jedem Review geprüft. Ein Architekturverstoß blockiert, Qualitätsbefunde werden behoben oder Schuld.</div></div>
           <div class="rule"><div><b>Nicht im Alltag: Last und Sicherheit</b>Sie bremsen die Entwicklung, darum laufen sie in der Härtungsphase und vor jedem Release, zwingend: keine Freigabe, solange eine dieser Schulden offen ist.</div></div>
@@ -266,7 +288,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         </div>
       </div>
       <div>
-        <pre># &lt;task&gt; review, round 1
+        <pre tabindex="0"># &lt;task&gt; review, round 1
 
 Verdict: pass
 Reviewed commit: 3f9c…e21a
@@ -318,9 +340,9 @@ Ponytail: 2 findings merged
     <div class="grid">
       <div class="card"><h3>Front-Agent: Terminal oder Bot</h3><p>Standard ist eine Agenten-Sitzung in einem Orca-Terminal. Alternativ ein Orca-Bot mit eigenem Chat und Gedächtnis: Orca prüft alle 5 Minuten den Status und weckt ihn nur bei Neuigkeiten, ein ruhiges Projekt kostet keine Modellzeit. Den Bot legst du vorher selbst in Orca an. Er schreibt keinen Produktcode.</p></div>
       <div class="card"><h3>Heartbeat</h3><p>Ein Job auf dem Rechner des Controllers (launchd auf macOS, sonst cron, jede Minute) weckt ihn bei einer neuen Worker-Nachricht, einer fertigen Welle oder einer neuen Zeile in <code>inbox.md</code>, ein Projekt ohne Neuigkeiten höchstens alle 30 Minuten. Lässt er sich nicht einplanen, schlägt <code>start</code> fehl und sagt, warum.</p></div>
-      <div class="card"><h3>Hänger</h3><p>Ist der Controller beschäftigt, aber Status und Journal sind 25 Minuten unverändert (<code>hosts.controller.hung.minutes</code>), erfährt es der Front-Agent. Der automatische Neustart bleibt aus, bis <code>hosts.controller.hung.restart</code> auf <code>true</code> steht. Nach einer Welle oder im Leerlauf startet sich der Controller bei über 50 % Kontext von selbst frisch.</p></div>
+      <div class="card"><h3>Hänger</h3><p>Ist der Controller beschäftigt, sein Terminal verändert sich noch, aber Status und Journal sind 25 Minuten unverändert (<code>hosts.controller.hung.minutes</code>), erfährt es der Front-Agent. Ein ruhiger, nur als beschäftigt gelesener Controller wird dadurch nicht erfasst. Der automatische Neustart bleibt aus, bis <code>hosts.controller.hung.restart</code> auf <code>true</code> steht, und gilt nur einmal, ein zweiter Hänger wird gemeldet. Nach einer Welle oder im Leerlauf startet sich der Controller bei über 50 % Kontext von selbst frisch; das beendet seine laufende Sitzung, und dass die Worker das überstehen, ist nicht belegt.</p></div>
       <div class="card"><h3>Aufräumen</h3><p>Ein Worker gilt als fertig nach seinem Dispatch-Status in Orca, auch wenn sein Agent noch am Prompt sitzt. Entfernt wird er nur, wenn sein Worktree sauber und sein Branch gemergt oder gepusht ist. <code>node cleanup.mjs</code> löscht nichts ohne <code>--apply</code>, sondern listet nur auf. <code>node keep.mjs &lt;key&gt;</code> behält einen Worker.</p></div>
-      <div class="card"><h3>Mehrere Projekte, ein Rechner</h3><p>Jedes Projekt hat ein eigenes Controller-Verzeichnis mit eigenem Gate (<code>init</code> schlägt <code>~/controller-&lt;projekt&gt;</code> vor). Zwei Fabriken stören sich nicht. Geteilt sind nur die Skills, das Lastprotokoll und die Leseliste für lean-ctx.</p></div>
+      <div class="card"><h3>Mehrere Projekte, ein Rechner</h3><p>Mehrere Fabriken auf einem Rechner sind vorgesehen: Jedes Projekt hat ein eigenes Controller-Verzeichnis mit eigenem Gate (<code>init</code> schlägt <code>~/controller-&lt;projekt&gt;</code> vor, wenn <code>~/controller</code> schon einem anderen Projekt gehört). Das ist bisher nur gegen Attrappen getestet. Bekannte Grenzen: Der Controller liest das gemeinsame Orca-Postfach und sieht die Betreffzeilen anderer Projekte, und die Wave-Logs liegen unter festen Namen in <code>/tmp</code>, zwei Controller auf einem Host überschreiben sie (F17).</p></div>
     </div>
   </section>
 
@@ -329,42 +351,42 @@ Ponytail: 2 findings merged
     <h2>Was wirklich gelaufen ist</h2>
     <p class="sub">Die Fabrik ist ein Anfang, kein Endzustand. Hier steht, was in einem echten Lauf war, was nur gegen Attrappen getestet wurde und was offen ist. Stand: Release v0.1.13.</p>
     <div class="grid">
-      <div class="card"><h3>Echt gelaufen</h3><p>Dreimal Ende zu Ende auf macOS in Wegwerf-Projekten, mit einem Claude-Code-Controller und einem Orca-Bot als Front-Agent. Im letzten Lauf kamen vier Tickets nach main, zwei davon über den Dokumentationspfad. Jede Welle ließ das volle Gate für Code laufen, eine Welle stoppte, weil nach dem Review noch ein Commit gepusht wurde, und das Aufräumen entfernte die fertigen Worker mit <code>--apply</code>.</p></div>
-      <div class="card"><h3>Nicht echt gelaufen</h3><p>Ein Controller auf einem anderen Rechner, ein Controller mit einer anderen Agenten-CLI als Claude Code, eine Dokumentations-Welle auf einem entfernten Worker-Host und der automatische Neustart eines hängenden Controllers (aus, solange du ihn nicht einschaltest).</p></div>
+      <div class="card"><h3>Echt gelaufen</h3><p>Dreimal Ende zu Ende auf macOS in Wegwerf-Projekten, mit einem Claude-Code-Controller und einem Orca-Bot als Front-Agent. Der letzte Lauf lief auf dem Stand von v0.1.13 ohne dessen letzte kleine Korrektur (#70). Es kamen vier Tickets nach main, zwei davon über den Dokumentationspfad. Jede Welle ließ das volle Gate für Code laufen, eine Welle stoppte, weil nach dem Review noch ein Commit gepusht wurde, und das Aufräumen entfernte die fertigen Worker mit <code>--apply</code>.</p></div>
+      <div class="card"><h3>Nicht echt gelaufen</h3><p>Ein Controller auf einem anderen Rechner, ein Controller mit einer anderen Agenten-CLI als Claude Code, eine Dokumentations-Welle auf einem entfernten Worker-Host, der automatische Neustart eines hängenden Controllers (aus, solange du ihn nicht einschaltest) und überhaupt ein Neustart des Controllers, auch der bei hoher Kontextauslastung: Dass die Worker das Schließen seines Terminals überleben, ist nicht belegt.</p></div>
       <div class="card"><h3>Nur gegen Attrappen</h3><p>Die Tests ersetzen Orca, ssh, <code>launchctl</code>, <code>crontab</code> und <code>gh</code> durch Attrappen, die ihre Aufrufe aufzeichnen. So sind Heartbeat, Wecken, Aufräumen, Kapazität, die Bot-Überwachung und die Regeln für eine zweite Fabrik geprüft. Der Formatierer für gestagte Dateien lief nur mit einem Ersatz, nicht mit <code>prettier</code>.</p></div>
-      <div class="card"><h3>Offen</h3><p>Orca hält einen Claude-Code-Controller, dessen <code>wait.mjs</code> im Hintergrund läuft, für beschäftigt. Im letzten echten Lauf musste er einmal von Hand geweckt werden, nach 12 Minuten. Die Ursache ist nicht verstanden. Wer unbeaufsichtigt arbeitet, sollte darauf achten.</p></div>
+      <div class="card"><h3>Offen</h3><p>Orca hat einen Claude-Code-Controller, dessen <code>wait.mjs</code> im Hintergrund lief, in einem Lauf als beschäftigt gelesen und in einem anderen nicht. Dass <code>wait.mjs</code> der Grund ist, ist wahrscheinlich, nicht bewiesen. Im letzten echten Lauf musste er einmal von Hand geweckt werden, nach 12 Minuten. Die Ursache ist nicht verstanden. Wer unbeaufsichtigt arbeitet, sollte darauf achten.</p></div>
     </div>
     <h3 style="margin:28px 0 8px;font-family:var(--font-display);text-transform:uppercase;font-size:18px">Seit v0.1.13 auf main, noch nicht veröffentlicht</h3>
     <p class="sub" style="margin-bottom:12px">Dies steht in keinem Release und ist in keinem echten Lauf bestätigt; die Tests laufen gegen Attrappen.</p>
     <div class="rules">
-      <div class="rule"><div><b>Worker fragen den Controller, nie den Menschen</b>Die Spec sagt es, und ein Worker, der auf die Antwort eines Menschen wartet, wird erkannt und dem Controller gemeldet.</div></div>
+      <div class="rule"><div><b>Worker fragen den Controller, nie den Menschen</b>Die Spec sagt es, und ein Worker, der auf die Antwort eines Menschen wartet, wird erkannt und dem Controller gemeldet, wo Orca es meldet.</div></div>
       <div class="rule"><div><b>Der Controller sagt dem Heartbeat, wann er fertig ist</b>Damit wird auch ein Controller geweckt, den Orca als beschäftigt liest. Das ist die Antwort auf das offene Problem oben und noch durch keinen echten Lauf bestätigt.</div></div>
-      <div class="rule"><div><b>Neustart ohne Orca-Option <code>--keep-open</code></b><code>restart.mjs</code> läuft auch auf Orca-Versionen ohne sie und meldet, wenn danach zwei oder gar kein Controller läuft.</div></div>
+      <div class="rule"><div><b>Neustart ohne Orca-Option <code>--keep-open</code></b><code>restart.mjs</code> läuft auch auf Orca-Versionen ohne sie (dass das neue Terminal überlebt, wurde einmal auf einer Orca-Version beobachtet, nicht aus einer Option abgeleitet) und meldet, wenn danach zwei oder gar kein Controller läuft.</div></div>
     </div>
   </section>
 
   <section id="start">
     <p class="kicker">Loslegen</p>
-    <h2>In zehn Minuten eingerichtet</h2>
+    <h2>So fängst du an</h2>
     <div class="two">
       <div>
-        <p class="sub">Voraussetzungen: macOS oder Linux (Windows: WSL 2), Orca (der Runner) läuft, eine angemeldete Agenten-CLI (Claude Code, Codex oder Pi), Node 22 und git mit Name und E-Mail. Danach führt dich der Front-Agent in Orca durch das Onboarding, fragt unter anderem, ob du mit ihm im Terminal oder mit einem Orca-Bot sprichst und wo die Dateien des Controllers liegen, richtet Handbücher, Hooks und Skills ein und startet die Fabrik.</p>
+        <p class="sub">Voraussetzungen: macOS oder Linux (Windows: WSL 2), Orca (der Runner) läuft, eine angemeldete Agenten-CLI (Claude Code, Codex oder Pi), Node 22 oder neuer und git mit Name und E-Mail. Danach führt dich der Front-Agent in Orca durch das Onboarding, fragt unter anderem, ob du mit ihm im Terminal oder mit einem Orca-Bot sprichst und wo die Dateien des Controllers liegen, richtet Handbücher, Hooks und Skills ein und startet die Fabrik.</p>
         <p class="sub"><b>Der kurze Weg: ein Prompt.</b> Öffne dein Projekt in einem beliebigen Agenten (wenn möglich in Orca) und gib ihm diesen Satz. Er prüft die Voraussetzungen, nennt, was fehlt, und zieht bei Bedarf selbst in ein Orca-Terminal um.</p>
-        <pre style="white-space:pre-wrap">Set up the agentic factory for this project. If ~/agentic-factory does not exist, clone https://github.com/bussard76/agentic-factory.git into it; otherwise update it with git -C ~/agentic-factory pull --ff-only. Then read ~/agentic-factory/START.md and follow it: check the prerequisites, move into Orca if needed, and guide me through the onboarding.</pre>
+        <pre tabindex="0" style="white-space:pre-wrap">Set up the agentic factory for this project. If ~/agentic-factory does not exist, clone https://github.com/bussard76/agentic-factory.git into it; otherwise update it with git -C ~/agentic-factory pull --ff-only. Then read ~/agentic-factory/START.md and follow it: check the prerequisites, move into Orca if needed, and guide me through the onboarding.</pre>
         <p class="sub" style="margin-top:18px"><b>Dasselbe von Hand.</b> Kopiere die Befehle in ein Terminal:</p>
-        <pre># 1. Die Fabrik holen
+        <pre tabindex="0"># 1. Die Fabrik holen (gibt es sie schon: git -C ~/agentic-factory pull --ff-only)
 git clone https://github.com/bussard76/agentic-factory.git ~/agentic-factory
 
 # 2. Ins Projekt wechseln (neues Projekt: mkdir my-app &amp;&amp; cd my-app &amp;&amp; git init -b main &amp;&amp; git commit --allow-empty -m "Initial commit")
 cd ~/pfad/zu/deinem-projekt
 
 # 3. Projekt in Orca registrieren und den Front-Agenten in einem Orca-Terminal starten
-ORCA="${ORCA_CLI_COMMAND:-orca}"
+ORCA="${ORCA_CLI_COMMAND:-orca}"   # Linux außerhalb von Orcas Terminals: ORCA=orca-ide
 $ORCA repo add --path "$PWD"
 $ORCA agent launch --agent claude --worktree "path:$PWD" --surface terminal --focus \
   --prompt "Read ~/agentic-factory/START.md and set up this project."</pre>
         <p class="quiet" style="margin-top:12px">Statt <code>claude</code> geht <code>codex</code> oder <code>pi</code>. <b>Windows:</b> WSL 2 installieren (<code>wsl --install -d Ubuntu</code> in einer Admin-PowerShell), Orcas Terminal auf WSL laufen lassen, Node, git und die Agenten-CLI in WSL installieren, das Projekt unter <code>~/</code> ablegen; die Befehle bleiben gleich.</p>
-        <p class="quiet" style="margin-top:12px">Für ein bestehendes Projekt gibt es einen eigenen Prompt in der <a href="https://github.com/bussard76/agentic-factory#readme">README</a>. Die Schritt-für-Schritt-Anleitung bis zur ersten Wave: <a href="https://github.com/bussard76/agentic-factory/blob/main/docs/de/erste-schritte.md">Erste Schritte</a> · <a href="https://github.com/bussard76/agentic-factory/blob/main/docs/getting-started.md">Getting started</a>.</p>
+        <p class="quiet" style="margin-top:12px">Für ein bestehendes Projekt gibt es einen eigenen Prompt in der <a href="https://github.com/bussard76/agentic-factory#readme">README</a>. Bekannte Grenzen stehen in den <a href="https://github.com/bussard76/agentic-factory/releases/tag/v0.1.13">Release-Notes</a> (Known limits) und in <a href="https://github.com/bussard76/agentic-factory/blob/main/debt.md">debt.md</a>. Zwei triffst du früh: Für die erste Welle legt nichts das Integrations-Worktree an (im letzten Lauf tat es der Controller selbst, #28), und beim ersten Start fragt Claude Code einmal, ob es dem Ordner des Controllers vertraut; das beantwortet <code>start</code> nicht für dich (#23). Die Schritt-für-Schritt-Anleitung bis zur ersten Wave: <a href="https://github.com/bussard76/agentic-factory/blob/main/docs/de/erste-schritte.md">Erste Schritte</a> · <a href="https://github.com/bussard76/agentic-factory/blob/main/docs/getting-started.md">Getting started</a>.</p>
       </div>
       <div class="rules">
         <div class="rule"><div><b>Teilbar</b>Keine Spur eines konkreten Projekts im Repo. Alles Spezifische steht in einer Konfigurationsdatei.</div></div>
@@ -378,14 +400,14 @@ $ORCA agent launch --agent claude --worktree "path:$PWD" --surface terminal --fo
     <h2>So viel Standard wie möglich, so viel Eigenes wie nötig</h2>
     <p class="sub">Jedes Projekt passt seine Kopie an, und die Fabrik entwickelt sich weiter. Beides geht zusammen, weil ein Update nichts überschreibt, was das Projekt geändert hat.</p>
     <div class="grid">
-      <div class="card"><h3>Aktualisieren</h3><p>Das Update überschreibt nur unveränderte Dateien. Geänderte bleiben, ihre neue Fassung landet in <code>.factory/new/</code> zum Zusammenführen, danach folgt <code>start</code>. Ein geänderter Controller-Leitfaden <code>CONTROLLER.md</code> zuerst: ein älterer räumt nichts auf. <code>update</code>, <code>start</code> und <code>doctor</code> warnen davor. Den Prompt dafür enthält die <a href="https://github.com/bussard76/agentic-factory#readme">README</a>.</p></div>
+      <div class="card"><h3>Aktualisieren</h3><p>Das Update überschreibt nur unveränderte Dateien. Geänderte bleiben, ihre neue Fassung landet in <code>.factory/new/</code> zum Zusammenführen, danach folgt <code>start</code>. Ein geänderter Controller-Leitfaden <code>CONTROLLER.md</code> zuerst: Bis er zusammengeführt ist, stoppt jede Welle (<code>WAVE-NOT-STARTED</code>), nichts wird aufgeräumt, und jede Inbox-Zeile weckt den Controller. <code>update</code>, <code>start</code> und <code>doctor</code> warnen davor. Den Prompt dafür enthält die <a href="https://github.com/bussard76/agentic-factory#readme">README</a>.</p></div>
       <div class="card"><h3>Was auf deinem Rechner landet</h3><p>Außerhalb des Projekts schreibt <code>start</code> die Skills, <code>~/front-agent/&lt;projekt&gt;/</code>, das Controller-Verzeichnis mit dem Gate des Projekts, <code>~/load.log</code>, den Heartbeat und die Statusüberwachung. <a href="https://github.com/bussard76/agentic-factory/blob/main/docs/getting-started.md#what-start-writes-on-your-machine">Die Liste samt Entfernen</a> steht in Getting started.</p></div>
       <div class="card"><h3>Zurückgeben</h3><p>Was sich im Projekt bewährt und anderen hilft, kommt als Pull Request zurück. Jede Änderung wird einzeln geprüft: in den Standard, als Mechanismus mit dem Wert im Projekt, oder sie bleibt im Projekt.</p></div>
       <div class="card"><h3>Vorschau: Standard außerhalb der Historie</h3><p>Mit <code>init --untracked-standard</code> checkt ein Projekt nur noch ein, was ihm gehört. Wer den Code anders bearbeitet, trägt den Stack nicht mit. Das lief noch in keinem echten Projekt. <a href="https://github.com/bussard76/agentic-factory/blob/main/docs/untracked-standard.md">Details</a></p></div>
     </div>
   </section>
 </main>
-<footer><div class="wrap">Agentic Factory · MIT-Lizenz · Vendored Skills unter ihren eigenen Lizenzen (Ponytail, Matt Pococks Engineering-Skills) · Orca als Runner (Voraussetzung) · Schrift Sen unter der SIL Open Font License 1.1 · Beschreibt Release v0.1.13</div></footer>
+<footer><div class="wrap">Agentic Factory · MIT-Lizenz · Vendored Skills unter ihren eigenen Lizenzen (Ponytail, Matt Pococks Engineering-Skills) · Orca als Runner (Voraussetzung) · Schrift Sen unter der SIL Open Font License 1.1 · Release v0.1.13; was seither auf main kam, ist als solches markiert</div></footer>
 <script>
   const b=document.getElementById('theme'),r=document.documentElement;
   try{const t=localStorage.getItem('af-theme');if(t)r.dataset.theme=t;}catch{}
