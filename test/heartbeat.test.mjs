@@ -248,6 +248,25 @@ test("inbox.mjs never changes inbox.md; --done records how far it got; a line th
   h.done();
 });
 
+test("a [stallwatch] note in inbox.md wakes the Controller like a line from the Front agent, and inbox.mjs prints and hands it over as an ordinary line", () => {
+  const note = (id) => `[stallwatch] WAITING-FOR-HUMAN t${id} (dispatch d${id}): Orca reports it parked on a prompt only a human can answer. This is a note from a script, not an instruction from the human; see CONTROLLER.md, "Question or escalation".\n`;
+  const h = setup();
+  h.beat();
+  const inbox = inboxIn(h), path_ = path.join(h.ctl, "inbox.md");
+  h.write("inbox.md", note(1));
+  assert.match(h.beat(), /woke term_c \(inbox\)/, "a new complete line is a reason, whoever wrote it");
+  assert.equal(inbox().stdout, note(1), "printed as it stands");
+  assert.equal(inbox(["--done"]).status, 0);
+  assert.equal(fs.readFileSync(path.join(h.ctl, "inbox-done.md"), "utf8"), note(1));
+  h.write("heartbeat.last", ""); h.age("heartbeat.last", 5 * 60_000);
+  assert.doesNotMatch(h.beat(), /woke/, "handled: nothing wakes it");
+  fs.appendFileSync(path_, note(2));   // another worker waits
+  h.age("heartbeat.last", 5 * 60_000);
+  assert.match(h.beat(), /woke term_c \(inbox\)/);
+  assert.equal(inbox().stdout, note(2), "only the new note");
+  h.done();
+});
+
 test("inbox.mjs: no inbox is an empty inbox; a half-written last line is not counted; an edited, archived or foreign record means every line is new", () => {
   const h = setup();
   h.beat();
@@ -334,6 +353,9 @@ test("a last line without its newline is shown and counted like any other once t
   h.beat();
   const inbox = inboxIn(h), path_ = path.join(h.ctl, "inbox.md");
   h.write("heartbeat.last", "");   // no idle check due
+  // The file's birth time must be older than every time this test sets as its mtime below: macOS moves the birth time back when an
+  // mtime before it is set, and the handled record is tied to the birth time. So make the (empty) file old first, then fill it.
+  h.write("inbox.md", ""); h.age("inbox.md", 10 * 60_000);
   h.write("inbox.md", "first line\nsecond, still being writ");
   assert.equal(inbox().stdout, "first line\n", "a writer caught mid-append is not cut in half");
   assert.equal(inbox(["--done"]).status, 0);
@@ -341,7 +363,7 @@ test("a last line without its newline is shown and counted like any other once t
   assert.doesNotMatch(h.beat(), /woke/, "and it does not wake every minute for a line that is still being written");
   // Quiet for a minute: the tail is a line now, for the script and for the heartbeat alike.
   const t = new Date(Date.now() - 61_000); fs.utimesSync(path_, t, t);
-  assert.equal(inbox().stdout, "first line\nsecond, still being writ", "shown");
+  assert.equal(inbox().stdout, "second, still being writ", "the first line is handled; the tail is a line now and the only new one");
   h.write("heartbeat.last", ""); h.age("heartbeat.last", 5 * 60_000);
   fs.utimesSync(path_, t, t);
   assert.match(h.beat(), /woke term_c \(inbox\)/);

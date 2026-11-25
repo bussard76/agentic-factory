@@ -51,7 +51,8 @@
         "minGapMinutes": 30,
         "contextGapMinutes": 120,
         "afterGateMinutes": 15,
-        "contextPercent": 50
+        "contextPercent": 50,
+        "withoutKeepOpen": true
       },
       "$restart": "contextPercent: the Controller starts itself fresh (restart.mjs) after a wave or when idle once its context use is above this share. contextGapMinutes / minGapMinutes: restart.mjs refuses a restart sooner than this after the last (asked by the Controller / any other). afterGateMinutes: no restart this soon after a gate, wave or push."
     },
@@ -63,7 +64,12 @@
         "workspacesDir": "~/orca/workspaces",
         "orcaEnvironment": "",
         "orcaRepoId": "",
-        "capacity": {
+        "stall": {
+    "waitCallSeconds": 8,
+    "waitBudgetSeconds": 30,
+    "$stall": "Optional, for stallwatch.mjs: how long one worker-show call (asking Orca whether a worker waits for a human) may take, and how long all of them may take per host and cycle. The screens are judged first, so these never delay the stall judgement. The values shown are the defaults."
+  },
+  "capacity": {
           "suiteWorkersMax": 2,
           "readOnlyWorkersMax": 2
         }
@@ -120,6 +126,10 @@
       },
       "quotaThresholdPercent": 10
     },
+    "askOff": {},
+    "$askOff": "Optional, per agent CLI: how a worker starts with its ask-the-user tool off with the terminal runner, e.g. { \"claude\": { \"args\": [\"--disallowedTools\", \"AskUserQuestion\"] } }. The args go right after the executable and must not end in a variadic option. An entry replaces the built-in one of that agent; null removes it. Built in: claude only. Under the orca runner nothing can be passed to the agent, so this has no effect there.",
+    "askPatterns": [],
+    "$askPatterns": "Optional regular expressions (case-insensitive, per line) matched against the last 8 lines of a worker's screen by stallwatch.mjs; a match on an idle prompt skips the 90 s idle wait. Off by default.",
     "piRoleModels": {},
     "$piRoleModels": "Optional, e.g. { \"Developer\": \"provider/model-id\" }: a Pi worker of a listed role starts pinned to that provider/model instead of its tier's model. Other roles and other agents keep their tier. An explicit --model still wins.",
     "calibration": "auto",

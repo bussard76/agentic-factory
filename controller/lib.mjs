@@ -41,6 +41,26 @@ export const CMDS = config.commands ?? {};
 export const MODELS = config.agents?.models ?? {};
 export const FALLBACK = config.agents?.fallback ?? {};
 
+// --- workers never ask the human -----------------------------------------------------------------
+// Nobody reads a worker's chat: a question put to the human there (the agent CLI's ask-the-user tool, or a prompt that waits)
+// hangs the worker until somebody notices. Questions go worker -> Controller -> Front agent -> human. This wording is rendered
+// into every spec by templates/mkspec.mjs (and added by start.mjs to a spec that lacks it); templates/AGENTS.md carries
+// NO_HUMAN_RULE verbatim (a test holds them together).
+export const NO_HUMAN_RULE = "Never ask the human: not with your agent CLI's own ask-the-user tool or dialog, and not with a chat prompt that waits for an answer. Nobody reads your chat, so you would wait there until the Controller notices.";
+export const questionBlock = (runner = RUNNER) => `Questions: ${NO_HUMAN_RULE} ${runner === "orca"
+  ? `When a question is open, ask the Controller: orca orchestration ask --question "<one concrete question, with the answer you would pick>" (add --options <a,b,c> for a choice, and the --from handle your Orca worker instructions name, if they name one). It returns at once; go on with everything that does not depend on the answer. A pending question is the one allowed reason to end your turn before you are done: when nothing else is left, end it, and Orca wakes you with the answer as mail. A blocker no answer can remove is an escalation in your reply format, not a question.`
+  : `When a question is open, append "ESCALATE <the question, with the answer you would pick>" to the events file named in your first message, go on with everything that does not depend on the answer, and stop when nothing else is left. Nobody answers you in this session: the Controller answers by starting you again with the answer in your spec.`}`;
+// Per agent CLI: how a worker starts with its ask-the-user tool off. "args" go on the command line, right after the executable, so
+// they apply only where start.mjs builds that command itself (runner: terminal); Orca's worker-start takes no agent arguments, and
+// no file is written into a worktree for it (it could not be kept out of commits, formatters and a person's own settings, nor
+// removed reliably afterwards). An args list must not end in a variadic option (it would swallow the prompt that follows).
+// Only entries checked against the real CLI belong here. agents.askOff in factory.config.json adds or replaces one entry per
+// agent name (null removes it), for a project on another CLI or version. Nothing here touches a user's global settings.
+const ASK_OFF_DEFAULTS = {
+  claude: { args: ["--disallowedTools", "AskUserQuestion"] },
+};
+export const askOffFor = (agent) => { const own = config.agents?.askOff ?? {}; return (Object.hasOwn(own, agent) ? own[agent] : ASK_OFF_DEFAULTS[agent]) ?? null; };
+
 // --- hosts -------------------------------------------------------------------------------------
 // A host's kind is relative to where these scripts run: the Controller runs on hosts.controller.host, so that host is
 // local for the Controller even when the Front agent (on the human's machine) reaches it over ssh.
@@ -97,7 +117,7 @@ export const HUNG = {
   restart: ctl.hung?.restart === true, restartInvalid: ctl.hung?.restart !== undefined && typeof ctl.hung.restart !== "boolean",
   patterns: patternList(ctl.hung?.patterns, []), patternMinutes: positive(ctl.hung?.patternMinutes, 10), resetAfterDays: positive(ctl.hung?.resetAfterDays, 7),
 };
-export const RESTART = { minGapMinutes: positive(ctl.restart?.minGapMinutes, 30), contextGapMinutes: positive(ctl.restart?.contextGapMinutes, 120), afterGateMinutes: positive(ctl.restart?.afterGateMinutes, 15), contextPercent: positive(ctl.restart?.contextPercent, 50) };
+export const RESTART = { minGapMinutes: positive(ctl.restart?.minGapMinutes, 30), contextGapMinutes: positive(ctl.restart?.contextGapMinutes, 120), afterGateMinutes: positive(ctl.restart?.afterGateMinutes, 15), contextPercent: positive(ctl.restart?.contextPercent, 50), withoutKeepOpen: ctl.restart?.withoutKeepOpen !== false };
 
 // --- orca --------------------------------------------------------------------------------------
 export function hasBin(name) { return spawnSync("sh", ["-c", `command -v ${name}`], { stdio: "ignore" }).status === 0; }

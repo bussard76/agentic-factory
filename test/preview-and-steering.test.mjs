@@ -132,11 +132,17 @@ test("a preview without a configured env file starts", () => {
   p.done();
 });
 
-test("the preview's launchd agent keeps what the script left running, and parses", () => {
-  const text = render(fs.readFileSync(path.join(ROOT, "front-agent/preview.plist.template"), "utf8"), { PREVIEW_LABEL: "de.p.preview", PREVIEW_SCRIPT: "/x/preview-update.sh", HOME: "/x", PROJECT: "p" });
+const previewPlist = () => render(fs.readFileSync(path.join(ROOT, "front-agent/preview.plist.template"), "utf8"), { PREVIEW_LABEL: "de.p.preview", PREVIEW_SCRIPT: "/x/preview-update.sh", HOME: "/x", PROJECT: "p" });
+
+test("the preview's launchd agent keeps what the script left running", () => {
+  const text = previewPlist();
   assert.match(text, /<key>AbandonProcessGroup<\/key><true\/>/);
   assert.doesNotMatch(text, /\{\{/);
-  if (process.platform !== "darwin") return;
+});
+
+// `plutil` exists on macOS only; elsewhere the check is a visible skip in the run log, not a silent pass.
+test("the preview's launchd agent parses (plutil -lint)", { skip: process.platform !== "darwin" && "plutil exists on macOS only; the plist is not linted on this platform" }, () => {
+  const text = previewPlist();
   const dir = tempDir("af-plist-"), file = path.join(dir, "p.plist");
   fs.writeFileSync(file, text);
   assert.equal(spawnSync("plutil", ["-lint", file], { encoding: "utf8" }).status, 0);

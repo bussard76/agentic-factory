@@ -41,6 +41,8 @@ flowchart LR
 
 Worker tragen Namen nach Aufgabe und Rolle, zum Beispiel „T22-S5 · Worker Developer“. Alle Namensregeln stehen in [Orca](../orca.md#naming).
 
+**Worker fragen nie den Menschen.** Niemand liest den Chat eines Workers; eine Frage dort (das Frage-Werkzeug der Agenten-CLI oder eine Eingabeaufforderung, die auf Antwort wartet) hält den Worker an, bis es jemand merkt. Jede Spec endet mit demselben Block (`questionBlock` in `controller/lib.mjs`, `mkspec.mjs` setzt ihn in jede Rolle, auch Audit und Retro; `templates/AGENTS.md` sagt es ebenfalls): Fragen gehen mit `orca orchestration ask` an den Controller, der Worker macht mit allem weiter, was nicht von der Antwort abhängt, und der Controller beantwortet sie oder gibt sie an den Front-Agenten weiter. Mit dem Terminal-Runner startet der Worker außerdem ohne das Werkzeug, wo seine CLI einen Schalter dafür hat; unter dem Orca-Runner sind der Block und die Erkennung „wartet auf einen Menschen“ die Schichten (siehe [Orca](../orca.md#workers-never-ask-the-human), englisch).
+
 ## Von außen nach innen
 
 Neue Funktionen entstehen **von außen nach innen**. Gebaut wird erst, wenn Oberfläche, Daten und Logik mit dem Menschen abgestimmt sind.

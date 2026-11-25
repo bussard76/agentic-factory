@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { check } from "../controller/cli.mjs";
-import { controllerPlaces, controllerSession, createArgs, createdHandle, locateController } from "../controller/controller-terminal.mjs";
+import { KEEP_OPEN_FROM, controllerPlaces, controllerSession, createArgs, createdHandle, locateController } from "../controller/controller-terminal.mjs";
 import { heartbeatCronCheckScript, heartbeatCronScript, heartbeatLabel, heartbeatPlist, statusWatchCronScript, statusWatchLabel, statusWatchPlist } from "./heartbeat-cron.mjs";
 import { staleLimit } from "../front-agent/hosts.mjs";
 import { applyReadGrants } from "./read-grants.mjs";
@@ -772,6 +772,7 @@ function doctor() {
     else if (!hb.installed) info("heartbeat not scheduled yet (the Controller is not started: run start)");
     else bad("heartbeat not scheduled: nothing wakes the Controller from outside, so finished workers wait for a person (run start; if that fails it says why)");
   }
+  { const rl = restartLeftoverStatus(c); if (rl.problem) bad(`restart: ${rl.problem}`); }
   { const hb = handbookStatus(c); if (hb.problem) bad(`handbook: ${hb.problem}`); else if (hb.handbookInstalled) ok("handbook: it knows inbox.mjs --done, restart.md and cycle.mjs end"); }
   { const cl = cleanupStatus(c); if (cl.problem) bad(`cleanup: ${cl.problem}`); else if (cl.unknown) info("cleanup: the Controller's host did not answer, so it is not known whether the handbook calls cleanup with --apply"); else if (!cl.handbookInstalled) info("cleanup: not checked, no Controller handbook is installed yet (run start)"); else ok("cleanup: the handbook calls it with --apply and no removable work waits"); }
   if (!heartbeatOn(c) && c.hosts.controller.heartbeat === false) info("heartbeat off (hosts.controller.heartbeat is false): you wake the Controller yourself");
@@ -788,6 +789,7 @@ function doctor() {
   }
   for (const t of [c.agents.default, c.agents.fallback?.agent].filter(Boolean)) has(t) ? ok(`${t} CLI`) : info(`${t} CLI not on this machine`);
   if (c.agents.runner === "orca") has("orca") || has("orca-ide") ? ok("orca CLI") : bad("orca CLI (runner is orca)");
+  if (c.agents.runner === "orca" && process.env.FACTORY_SKIP_ORCA !== "1") orcaRestartNote(c, info);
   // User-level skills: the Controller and Front agent sessions run outside the repo and need these on their host.
   const userSkillDirs = [path.join(os.homedir(), ".claude/skills"), path.join(os.homedir(), ".agents/skills")];
   for (const s of c.agents.runner === "orca" ? ["orchestration", "orca-cli", "writing-for-agents", "retro"] : ["writing-for-agents", "retro"]) userSkillDirs.some((d) => fs.existsSync(path.join(d, s, "SKILL.md"))) ? ok(`user-level skill ${s}`) : bad(`user-level skill ${s} (run: agentic-factory install-skills)`);
@@ -1025,6 +1027,7 @@ function collectStatus() {
     heartbeat: heartbeatStatus(c),
     cleanup: cleanupStatus(c),
     handbook: handbookStatus(c),
+    restartLeftover: restartLeftoverStatus(c),
   };
   // A bot Front agent: the bot and its watch automation instead of the terminal's status watch.
   if (frontKind(c) === "orca-bot") { s.setup.frontAgent = { kind: "orca-bot", ...botWatchStatus(c) }; s.setup.statusWatch = false; }   // a bot is woken by its automation (setup.frontAgent.watchAutomation), not by a status watch
@@ -1091,6 +1094,7 @@ function status() {
     if (st.heartbeat.enabled) say(st.heartbeat.unknown ? "info    heartbeat: the Controller's host did not answer" : st.heartbeat.scheduled ? `${st.heartbeat.problem ? "MISSING" : "OK     "} heartbeat (${st.heartbeat.scheduled})${st.heartbeat.problem ? `: ${st.heartbeat.problem}` : st.heartbeat.lastOkAt ? `, ran fine at ${st.heartbeat.lastOkAt}` : ""}` : st.heartbeat.installed ? "MISSING heartbeat (run start)" : "info    heartbeat not scheduled yet (run start)");
     if (st.cleanup?.problem) say(`MISSING cleanup: ${st.cleanup.problem}`);
     if (st.handbook?.problem) say(`MISSING handbook: ${st.handbook.problem}`);
+    if (st.restartLeftover?.problem) say(`MISSING restart: ${st.restartLeftover.problem}`);
     say(`${st.controller.running ? "OK     " : "MISSING"} Controller on ${st.controller.host}${st.controller.statusAgeMin !== null ? ` (status.md ${st.controller.statusAgeMin} min old)` : ""}${st.controller.terminalProblem ? `: ${st.controller.terminalProblem}` : ""}`);
     const w = s.work;
     say(`\nDesigned features: ${w.designedFeatures.length ? w.designedFeatures.join(", ") : "none"}`);
@@ -1181,6 +1185,29 @@ const CLEANUP_TRAP = "cleanup deletes only with --apply, so this handbook cleans
 const HANDBOOK_NEW = [["inbox\\.mjs --done", "reading the inbox with `node inbox.mjs` and `--done`"], ["restart\\.md", "`restart.md` after a restart"], ["cycle\\.mjs end", "ending a cycle with `node cycle.mjs end` (the marker that lets the heartbeat wake an idle Controller whatever Orca says)"]];
 const handbookMissing = (text) => HANDBOOK_NEW.filter(([re]) => !new RegExp(re).test(text)).map(([, what]) => what);
 const HANDBOOK_NOTE = "an older CONTROLLER.md you edited stays on update and its new version lies in .factory/new/.factory/controller/CONTROLLER.md: merge it, then run start. Until then every non-empty inbox keeps waking the Controller, a Controller restarted by the heartbeat or by itself would not know what restart.md is, and an idle Controller that Orca reads as busy (a background `wait.mjs`) is reached only by the slower pointer";
+// doctor: the Orca on the Controller's host cannot do what a restart needs (`terminal create --keep-open`, controller/restart.mjs).
+// Read from `terminal create --help` there (read-only), on the host where the Controller runs, over ssh when it is a remote one.
+function orcaRestartNote(c, info) {
+  const ctl = controllerHost(c) ?? { kind: "local", name: "local" };
+  const o = ctl.kind === "local" ? JSON.stringify(ORCA_BIN) : '"$(command -v orca || command -v orca-ide)"';
+  const out = onController(ctl, `${o} terminal create --help 2>&1; echo @@; ${o} --version 2>&1`);
+  const [help = "", ver = ""] = String(out.stdout).split("@@\n");
+  if (out.status !== 0 || !help.includes("terminal create")) return;   // not installed there or not answering: other lines say so
+  if (/--keep-open\b/.test(help)) return;
+  const v = ver.match(/\d+(?:\.\d+)+/)?.[0];
+  const asks = [`the Controller's restart at ${c.hosts.controller.restart?.contextPercent ?? 50}% context`, ...(c.hosts.controller.hung?.restart === true ? ["hosts.controller.hung.restart"] : [])].join(" and ");
+  info(`Orca${v ? ` ${v}` : ""} on ${ctl.name} has no \`terminal create --keep-open\` (it has from ${KEEP_OPEN_FROM}): ${asks} make the new terminal without it, and a terminal Orca could not show (surface background) is revealed with \`terminal focus\`. Its help does not say a terminal closes with the session that made it; if a restart's new Controller ever vanishes with the old one, update Orca to ${KEEP_OPEN_FROM} or newer`);
+}
+// restart.pending.json in the Controller directory: a restart made a terminal it could not confirm closed (controller/restart.mjs).
+// It blocks every further restart until a person has looked in Orca and removed the file.
+function restartLeftoverStatus(c) {
+  const ctl = controllerHost(c) ?? { kind: "local", name: "local" };
+  const dir = heartbeatDir(c).replace(/^~(?=\/|$)/, "$HOME");
+  const out = onController(ctl, `f="${dir}/restart.pending.json"; [ -f "$f" ] && { echo present; cat "$f"; }`);
+  if (!String(out.stdout).startsWith("present")) return { problem: null };
+  let handle; try { handle = JSON.parse(String(out.stdout).slice(7)).handle; } catch { /* damaged file */ }
+  return { problem: `a restart left a terminal it could not confirm closed${typeof handle === "string" ? ` (${handle})` : " (no handle known)"}: look in Orca for a second "${c.project.name} · Controller" terminal, close it if it is one, then delete ${heartbeatDir(c)}/restart.pending.json (until then no restart is made)` };
+}
 function handbookStatus(c) {
   const ctl = controllerHost(c) ?? { kind: "local", name: "local" };
   const dir = heartbeatDir(c).replace(/^~(?=\/|$)/, "$HOME");

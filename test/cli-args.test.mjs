@@ -125,7 +125,7 @@ const FOREIGN = {
   "controller/restart.mjs": ["--json", "--terminal", "--worktree", "-C", "--format"],
   "controller/names.mjs": ["--repo", "--limit", "--json", "--worktree", "--display-name", "--terminal", "--title"],
   "controller/runscript.mjs": ["--worktree", "--title", "--command", "--json", "-c"],
-  "controller/stallwatch.mjs": ["--json", "--terminal", "--screen"],
+  "controller/stallwatch.mjs": ["--json", "--terminal", "--screen", "--dispatch", "--full"],
   "controller/start.mjs": ["--task-title", "--spec", "--json", "--repo", "--name", "--base-branch", "--setup", "--dispatch", "--terminal", "--title", "--full-auto", "-m", "--dangerously-skip-permissions", "-p", "-F"],
   "controller/wait.mjs": ["--full", "--wait", "--types", "--timeout-ms", "--ack"],
   "controller/wave.mjs": ["--worktree", "--title", "--command", "--json", "-c"],
