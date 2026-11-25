@@ -360,7 +360,9 @@ test("a last line without its newline is shown and counted like any other once t
   assert.doesNotMatch(h.beat(), /woke/, "and it does not wake every minute for a line that is still being written");
   // Quiet for a minute: the tail is a line now, for the script and for the heartbeat alike.
   const t = new Date(Date.now() - 61_000); fs.utimesSync(path_, t, t);
-  assert.equal(inbox().stdout, "first line\nsecond, still being writ", "shown");
+  // Backdating the file moves its birth time on macOS (not on Linux), and a record made for another birth time is not this file's:
+  // there everything is new again. Elsewhere the handled first line stays handled and only the tail is shown.
+  assert.equal(inbox().stdout, process.platform === "darwin" ? "first line\nsecond, still being writ" : "second, still being writ", "shown");
   h.write("heartbeat.last", ""); h.age("heartbeat.last", 5 * 60_000);
   fs.utimesSync(path_, t, t);
   assert.match(h.beat(), /woke term_c \(inbox\)/);

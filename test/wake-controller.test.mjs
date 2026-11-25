@@ -296,6 +296,7 @@ const out = (result) => console.log(JSON.stringify({ ok: true, result }));
 if (a[0] === "terminal" && a[1] === "list") out({ terminals: s.terminals });
 else if (a[0] === "terminal" && a[1] === "create") { s.terminals.push({ handle: "term_ctl", title: "Demo controller", paneTitle: "demo · Controller", worktreePath: ${JSON.stringify(project)}, agentIdentity: "claude" }); fs.writeFileSync(${JSON.stringify(state)}, JSON.stringify(s)); out({ terminal: { handle: "term_ctl" } }); }
 else out({ terminals: [], repos: [] });\n`, { mode: 0o755 });
+  fs.copyFileSync(path.join(bin, "orca"), path.join(bin, "orca-ide"));   // on Linux outside an Orca terminal the CLI runs `orca-ide`, so the stand-in has both names
   const env = { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, GIT_CONFIG_NOSYSTEM: "1", FACTORY_SCHEDULER: "launchd" };
   delete env.ORCA_TERMINAL_HANDLE; delete env.ORCA_CLI_COMMAND; delete env.ORCA_ENVIRONMENT;
   const git = (...a) => { const r = spawnSync("git", a, { cwd: project, encoding: "utf8", env }); assert.equal(r.status, 0, r.stderr); };
@@ -329,7 +330,7 @@ test("doctor and status show a restart.pending.json and say what to do", () => {
 
 test("doctor says when the Orca on the Controller's host has no `terminal create --keep-open` (1.4.266) and is silent for one that has it (1.4.272)", () => {
   const h = startSetup();
-  const play = (version, keepOpen) => fs.writeFileSync(path.join(h.bin, "orca"), `#!/bin/sh\ncase "$*" in\n  "--version") echo ${version};;\n  "terminal create --help") echo "orca terminal create"; echo "Usage: orca terminal create [--worktree <selector>] [--focus]${keepOpen ? " [--keep-open]" : ""} [--json]";;\n  *) echo '{"ok":true,"result":{"terminals":[],"repos":[]}}';;\nesac\n`, { mode: 0o755 });
+  const play = (version, keepOpen) => ["orca", "orca-ide"].forEach((name) => fs.writeFileSync(path.join(h.bin, name), `#!/bin/sh\ncase "$*" in\n  "--version") echo ${version};;\n  "terminal create --help") echo "orca terminal create"; echo "Usage: orca terminal create [--worktree <selector>] [--focus]${keepOpen ? " [--keep-open]" : ""} [--json]";;\n  *) echo '{"ok":true,"result":{"terminals":[],"repos":[]}}';;\nesac\n`, { mode: 0o755 }));
   play("1.4.266", false);
   assert.match(h.cli(["doctor"]).stdout, /info    Orca 1\.4\.266 on local has no `terminal create --keep-open` \(it has from 1\.4\.272\): the Controller's restart at 50% context make the new terminal without it/);
   h.edit((c) => { c.hosts.controller.hung = { restart: true }; });
