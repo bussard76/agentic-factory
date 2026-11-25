@@ -557,6 +557,46 @@ test("the heartbeat raises RESTART-LEFTOVER from restart.pending.json itself on 
   h.done();
 });
 
+test("a damaged heartbeat.alerts.json loses nothing even in the first two minutes of a pending file; a pending file that cannot be read blocks restart.mjs and is alerted, in agreement", () => {
+  const h = setup();
+  // A young pending file (a restart may be in progress) and an alerts file that cannot be read: what is true is derived at once.
+  fs.writeFileSync(path.join(h.ctl, "restart.pending.json"), JSON.stringify({ handle: "term_new9", before: [], at: Date.now() }));
+  fs.writeFileSync(path.join(h.ctl, "heartbeat.alerts.json"), "{not json");
+  h.beat();
+  assert.match(h.read("heartbeat-health.md"), /POSSIBLE SECOND CONTROLLER: restart\.pending\.json is present.*term_new9/);
+  assert.doesNotThrow(() => JSON.parse(h.read("heartbeat.alerts.json")));
+  fs.rmSync(path.join(h.ctl, "restart.pending.json"));
+  h.beat();
+  assert.doesNotMatch(h.read("heartbeat-health.md") ?? "", /POSSIBLE SECOND CONTROLLER/);
+  // The same for NO-CONTROLLER: restart on an old Orca, its terminal goes, the alerts file is damaged between two runs.
+  const g = setup();
+  g.patch({ oldOrca: true });
+  assert.equal(restart(g).status, 0);
+  g.patch({ terminals: [] });
+  g.beat();
+  assert.match(g.read("heartbeat-health.md"), /NO CONTROLLER/);
+  fs.writeFileSync(path.join(g.ctl, "heartbeat.alerts.json"), "garbage");
+  g.beat();
+  assert.match(g.read("heartbeat-health.md"), /NO CONTROLLER/, "still reported");
+  assert.doesNotThrow(() => JSON.parse(g.read("heartbeat.alerts.json")));
+  g.done();
+  // A pending file that cannot be read: restart.mjs blocks, the heartbeat alerts (no handle known), and deleting it ends both.
+  const p = setup();
+  fs.writeFileSync(path.join(p.ctl, "restart.pending.json"), "{not json");
+  const r = restart(p);
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stdout, /may have left a second Controller.*the record cannot be read.*delete /);
+  assert.equal(p.of("terminal", "create").length, 0, "nothing was made");
+  p.beat();
+  assert.match(p.read("heartbeat-health.md"), /POSSIBLE SECOND CONTROLLER.*no handle known/);
+  fs.rmSync(path.join(p.ctl, "restart.pending.json"));
+  p.beat();
+  assert.doesNotMatch(p.read("heartbeat-health.md") ?? "", /POSSIBLE SECOND CONTROLLER/);
+  assert.equal(restart(p).status, 0, "and a restart works again");
+  p.done();
+  h.done();
+});
+
 test("restart.mjs: restart.pending.json never closes the Controller itself, the caller's own terminal or anything it was not made for", () => {
   for (const [why, pending] of [["names the recorded Controller", { handle: "term_old", before: [] }], ["is not an object", [1]], ["has an odd handle", { handle: 7, before: "x" }]]) {
     const h = setup();

@@ -35,6 +35,10 @@ export function writeHealth(lines) {
 // writes, so a hang check does not erase them; whoever raised one clears it when the problem is gone.
 const ALERTS_FILE = "heartbeat.alerts.json";
 const readAlerts = () => { try { const v = JSON.parse(fs.readFileSync(file(ALERTS_FILE), "utf8")); return v && typeof v === "object" && !Array.isArray(v) ? v : {}; } catch { return {}; } };
+/** The lines now in the health file, without their "- ". */
+export const healthLines = () => { try { return fs.readFileSync(file(HEALTH_FILE), "utf8").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2)); } catch { return []; } };
+/** False when the alerts file exists but cannot be read as an object: what was alerted is then unknown and is derived again. */
+export const alertsReadable = () => { try { const v = JSON.parse(fs.readFileSync(file(ALERTS_FILE), "utf8")); return Boolean(v) && typeof v === "object" && !Array.isArray(v); } catch (e) { return e.code === "ENOENT"; } };
 export const alertLines = () => Object.values(readAlerts()).map(String);
 export const hasAlert = (key) => key in readAlerts();
 export function clearAlert(key) {

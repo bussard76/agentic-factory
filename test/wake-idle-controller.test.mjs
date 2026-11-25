@@ -446,10 +446,12 @@ test("a new reason is never held back by the repeat timer of an older one; when 
   for (let n = 4; n <= 6; n++) { h.unanswered(11); assert.match(h.beat(), /woke term_c \(unanswered wake|woke term_c \(inbox/); assert.equal(h.sent().length, n); }
   assert.equal(events(h).length, 0, "not told while repeats are left");
   h.unanswered(11);
+  fs.writeFileSync(path.join(h.ctl, "restart.pending.json"), JSON.stringify({ handle: "term_new9", before: [], at: 1 }));   // an open RESTART-LEFTOVER alert must survive the UNANSWERED line
   assert.match(h.beat(), /3 repeats are used up.*told the Front agent \(UNANSWERED\)/s);
   assert.equal(h.sent().length, 6);
   assert.equal(events(h).length, 1);
   assert.match(health(h), /UNANSWERED since \d\d:\d\d: the Controller marked itself waiting at \d\d:\d\d, was woken \d+ times/);
+  assert.match(health(h), /POSSIBLE SECOND CONTROLLER: restart\.pending\.json is present/, "both kinds of line are in the file");
   // Nothing more for the same state, and the Front agent is not told again.
   for (let i = 0; i < 3; i++) { h.unanswered(30); h.beat(); }
   assert.equal(h.sent().length, 6);

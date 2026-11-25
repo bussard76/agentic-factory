@@ -16,7 +16,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { controllerPlaces, locateController } from "./controller-terminal.mjs";
 import { HOSTS, HUMAN, HUNG, MAIN, ORCA, PROJECT, PROJECT_DIR, STEERING, WAKE, config, dispatchStates, file, hostNamed, journalQuiet, orcaCall, orcaEnvArgsOn, workerStatus, worktreeRefOn, workspacesOn } from "./lib.mjs";
-import { alertLines, clearAlert, ensureAlert, raiseAlert, tellFront, writeHealth } from "./front-notice.mjs";
+import { alertLines, alertsReadable, clearAlert, ensureAlert, healthLines, raiseAlert, tellFront, writeHealth } from "./front-notice.mjs";
 import { newLines } from "./inbox.mjs";
 import { restartController } from "./restart.mjs";
 
@@ -211,14 +211,16 @@ if (terminal) clearAlert("NO-CONTROLLER");
 // RESTART-LEFTOVER follows the file itself, every run, not what was remembered: restart.pending.json present means a terminal a
 // restart made is not confirmed closed (a crash, a lost or corrupt alerts file and a hand-made file all end up here too).
 if (!fs.existsSync(file("restart.pending.json"))) clearAlert("RESTART-LEFTOVER");
-else if (Date.now() - (Number(readJson("restart.pending.json", {}).at) || 0) > 120_000) {   // a younger one may be a restart in progress
+// A file younger than two minutes may be a restart in progress, unless the alerts file is damaged: then what was alerted is unknown
+// and what is true now is derived at once. A pending file that cannot be read has no "at": it counts as old (restart.mjs blocks on it too).
+else if (Date.now() - (Number(readJson("restart.pending.json", {}).at) || 0) > 120_000 || !alertsReadable()) {
   const pend = readJson("restart.pending.json", {});
   const ph = typeof pend.handle === "string" && pend.handle ? pend.handle : "";
   ensureAlert("RESTART-LEFTOVER", `POSSIBLE SECOND CONTROLLER: restart.pending.json is present: a restart made a terminal for the Controller (${ph || "no handle known"}) that is not confirmed closed, and no restart is made until it is settled. Look in Orca for a second \`${title}\` terminal and close it if it is one, then delete ${file("restart.pending.json")}`, { kind: "TWO-CONTROLLERS" });
 }
 if (!terminal && controllerTerminals !== null) {
   const rs = readJson("heartbeat.restarted.json", {});
-  if (rs.to && !rs.noControllerTold && !controllerTerminals.some((t) => t.handle === rs.to && !t.orphaned)) {
+  if (rs.to && (!rs.noControllerTold || !alertsReadable()) && !controllerTerminals.some((t) => t.handle === rs.to && !t.orphaned)) {
     try { fs.writeFileSync(file("heartbeat.restarted.json"), JSON.stringify({ ...rs, noControllerTold: true }, null, 2)); } catch { /* told again next run */ }
     log(`told the Front agent (NO-CONTROLLER): ${raiseAlert("NO-CONTROLLER", `NO CONTROLLER: the Controller restarted at ${new Date(rs.at ?? 0).toTimeString().slice(0, 5)} (${rs.kind ?? "restart"}) is no longer running: its terminal ${rs.to} is gone and no other terminal is the Controller, so nothing is woken. Run \`agentic-factory start\`. If you stopped it on purpose, ignore this: the line goes away when a Controller runs again`, { type: "question" }).join(", ")}`);
   }
@@ -526,7 +528,8 @@ if (idle && waiting.ok) {
       const what = oneLine((markerWake.sig ?? []).map((t) => t.replace(/:.*$/, "")).filter((t, i, a) => a.indexOf(t) === i).join(", ") || "idle check", 80);
       const state = { markerAt: waiting.at, since: Date.now(), n: markerWake.n ?? 1, what };
       fs.writeFileSync(file("heartbeat.unanswered.json"), JSON.stringify(state));
-      writeHealth([unansweredLine()].filter(Boolean));
+      // The other open lines stay (a hang report, the alerts): this one replaces only the UNANSWERED line.
+      writeHealth([...new Set([...healthLines().filter((l) => !l.startsWith("UNANSWERED")), unansweredLine(), ...alertLines()])].filter(Boolean));
       log(`told the Front agent (UNANSWERED): ${tellFront("UNANSWERED", unansweredLine() ?? "the Controller does not react to wake lines", { type: "question" }).join(", ")}`);
     }
     process.exit(0);

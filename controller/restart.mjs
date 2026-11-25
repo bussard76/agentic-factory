@@ -165,11 +165,12 @@ export function restartController({ reason, kind = "context", lockHeld = false, 
     const how = keepOpen ? "with --keep-open" : `without --keep-open (${installed} has no such option, from ${KEEP_OPEN_FROM} on it has; that the new terminal survives the end of this session rests on this Orca version's behaviour, observed once on 1.4.266, not on an option)`;
     // A terminal an earlier restart made and could not confirm or close again is removed before another is made.
     // Only by a handle an earlier create of ours returned, never by title; with no such handle a person decides.
-    const pending = readJson("restart.pending.json", null);
+    // A pending file that cannot be read blocks too (nobody can tell what it recorded), as the heartbeat's alert says: it reads as one without a handle.
+    const pending = fs.existsSync(file("restart.pending.json")) ? (readJson("restart.pending.json", null) ?? {}) : null;
     if (pending && !dry) {
       const protect = [old.handle, recorded, process.env.ORCA_TERMINAL_HANDLE].filter(Boolean);
       const ph = typeof pending.handle === "string" ? pending.handle : "";
-      if (!ph) return fail(1, `an earlier restart may have left a second Controller: Orca named no handle for the terminal it made, so nothing is closed by guessing. Look in Orca for a second \`${title}\` terminal and close it if it is one, then delete ${file("restart.pending.json")}; nothing was changed`);
+      if (!ph) return fail(1, `an earlier restart may have left a second Controller: Orca named no handle for the terminal it made, or the record cannot be read, so nothing is closed by guessing. Look in Orca for a second \`${title}\` terminal and close it if it is one, then delete ${file("restart.pending.json")}; nothing was changed`);
       // Not listed is no proof that it is gone (a hidden background terminal is not listed): the record stays, and so does the alert,
       // until Orca answers ok to the close of that handle and the list does not show it, or a person removes the file.
       if (protect.includes(ph)) { fs.rmSync(file("restart.pending.json"), { force: true }); clearAlert("RESTART-LEFTOVER"); }   // it became the Controller: nothing is closed
