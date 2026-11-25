@@ -51,7 +51,7 @@ backfill() {
   failed=0
   found=0
   # Oldest version first, so the newest release is created last (sort splits vX.Y.Z on the dots and skips the "v").
-  for tag in $(for f in releases/*.md; do [ -e "$f" ] && basename "$f" .md; done | sort -t. -k1.2n -k2n -k3n); do
+  for tag in $(for f in releases/*.md; do [ -e "$f" ] && basename "$f" .md; done | sort -t. -k1.2,1n -k2,2n -k3,3n); do
     case $tag in
       v[0-9]*.[0-9]*.[0-9]*) ;;
       *) echo "Skipping releases/$tag.md: not named like a version tag."; continue ;;
