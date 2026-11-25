@@ -8,7 +8,7 @@ Pull requests and merge requests come from the projects that use the factory. Th
 
 This applies on every remote, before anything is accepted, whoever or whatever wrote the request.
 
-1. **Check it against the code.** Read the diff and whatever depends on the changed behaviour, not only the description. Run the tests. Say what was not run for real.
+1. **Check it against the code.** Read the diff and whatever depends on the changed behaviour, not only the description. Run the tests. Say what was not run for real. On GitHub, the [Tests workflow](.github/workflows/test.yml) runs `npm test` on every pull request, on Linux and macOS (Node 22); "green" means that check is green. Run a single test file (`node --test test/<file>`) for quick feedback while you work, and leave the full suite to the workflow when the machine you work on is shared with running factories.
 2. **Sort each change, not the request as a whole:**
 
    | The change | What happens |
