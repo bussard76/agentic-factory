@@ -1,0 +1,38 @@
+# Runs the test suite (`npm test`) for every pull request and every push to main, on GitHub's runners.
+# A pull request is checked here, so nobody needs a full run on a machine that also hosts live factories.
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A newer commit on the same pull request (or branch) replaces the run of the older one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: npm test (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: ["22"] # package.json engines: node >=22; the docs name Node 22+
+    steps:
+      # Actions are pinned to a full commit SHA, with the release in the comment: a moved or re-pointed tag cannot change what runs.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node }}
+
+      - run: npm test
