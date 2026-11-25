@@ -31,6 +31,6 @@ This applies on every remote, before anything is accepted, whoever or whatever w
 
 Every new state of `main` is released, so a project can always stay on a tagged version that has all fixes.
 
-1. **Set the version** in `package.json`, `factory.config.example.json` and `README.md`, and bring `site/index.html` up to date: the version it names, the "Stand" and the block of changes on `main` that are not released yet (move what this release contains out of it).
+1. **Set the version** in `package.json`, `factory.config.example.json` and `README.md`, and bring `site/index.html` up to date: the version it names, the link to the release notes (it carries the version tag, `releases/tag/v…`), the "Stand" and the block of changes on `main` that are not released yet (move what this release contains out of it).
 2. **Tag it and push `main` and the tag to every remote.** There is no mirroring, so a merge on one remote does not reach the other.
 3. **Publish the release on every remote,** with what changed, how to update and what has not run for real.
