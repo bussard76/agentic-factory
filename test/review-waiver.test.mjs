@@ -137,7 +137,8 @@ test("bindBranches: a waived task is bound like a passed one, its failed review 
   const lone = bindBranches(["origin/agents/t1"], { prefix: "agents/", read });
   assert.match(lone.problems[0], /failed and is waived[\s\S]*add origin\/agents\/t1-review-1 to the wave/);
   const failed = bindBranches(["origin/agents/t1"], { prefix: "agents/", read: () => ({ state: "failed", head: A, standing: [{}], waived: [] }) });
-  assert.match(failed.problems[0], /says fail[\s\S]*node waiver\.mjs/);
+  assert.match(failed.problems[0], /says fail/); assert.doesNotMatch(failed.problems[0], /waiver/, "a failed review is not shown a way out: a waiver is somebody else's decision");
+  assert.match(bindBranches(["origin/agents/t1"], { prefix: "agents/", read: () => ({ state: "failed", head: A, standing: [{}, {}], waived: [{}] }) }).problems[0], /1 of the 2 failed reviews standing for [0-9a-f]{40} have a waiver \(waiver\.mjs\); each one needs its own/);
   assert.deepEqual(bindBranches(["origin/agents/t1"], { prefix: "agents/", read: () => ({ state: "ok", head: A, covers: new Map() }) }).waived, [], "nothing waived, nothing reported");
 });
 
@@ -218,9 +219,9 @@ test("a decided non-blocker goes through: recorded by the Controller, the wave s
   const { p, b, sha } = scene();
   try {
     const r = record(b); assert.equal(r.status, 0, r.stdout + r.stderr);
-    assert.match(r.stdout, /recorded: T1 tester review says fail for [0-9a-f]{40}/); assert.match(r.stdout, /waiver: waivable by a decision of the Front agent or the owner/);
+    assert.match(r.stdout, /recorded: T1 tester review says fail for [0-9a-f]{40}/); assert.doesNotMatch(r.stdout, /waiver/i, "reviewed.mjs never offers a waiver");
     // nothing starts for a failed review ...
-    const before = b.run("wave.mjs", WAVE); assert.equal(before.status, 1); assert.match(before.stderr, /WAVE-NOT-STARTED/); assert.match(before.stderr, /node waiver\.mjs/); assert.equal(b.events().filter((e) => e.type === "wave").length, 0);
+    const before = b.run("wave.mjs", WAVE); assert.equal(before.status, 1); assert.match(before.stderr, /WAVE-NOT-STARTED/); assert.doesNotMatch(before.stderr, /waiver/i, "nor does the wave that does not start"); assert.equal(b.events().filter((e) => e.type === "wave").length, 0);
     // ... until the decision is recorded
     const w = waive(b, p.tip("agents/t1-review-1")); assert.equal(w.status, 0, w.stdout + w.stderr); assert.match(w.stdout, /still Verdict: fail/);
     const [e] = waiverEvents(b);
@@ -394,12 +395,30 @@ test("break it 7: the round limit and the final re-evaluation: a waiver of round
     // the re-evaluation of c2 fails: a failed review of the same commit that the waiver of round 2 does not name
     p.review("t1", c2, FILE(c2, { gates: "" }).replace("round 1", "final"), { name: "t1-review-final", file: "docs/reviews/T1-review-final.md" });
     const rf = record(b, "final"); assert.equal(rf.status, 0, rf.stdout + rf.stderr);
-    const blocked = b.run("wave.mjs", ["Title", "Summary", "origin/agents/t1", "origin/agents/t1-review-2", "origin/agents/t1-review-final"]); assert.equal(blocked.status, 1); assert.match(blocked.stderr, /WAVE-NOT-STARTED[\s\S]*1 of 2 failed reviews standing/);
+    const blocked = b.run("wave.mjs", ["Title", "Summary", "origin/agents/t1", "origin/agents/t1-review-2", "origin/agents/t1-review-final"]); assert.equal(blocked.status, 1); assert.match(blocked.stderr, /WAVE-NOT-STARTED[\s\S]*1 of the 2 failed reviews standing/);
     // and with its own waiver the wave starts for c2 with both failed findings files
-    assert.equal(waive(b, p.tip("agents/t1-review-final"), { branch: "agents/t1-review-final" }).status, 0);
+    const byFront = waive(b, p.tip("agents/t1-review-final"), { branch: "agents/t1-review-final" }); assert.equal(byFront.status, 3); assert.match(byFront.stdout, /final functional re-evaluation: its failure is the owner's decision, at every level/);
+    assert.equal(waive(b, p.tip("agents/t1-review-final"), { branch: "agents/t1-review-final", decider: "owner", words: "I, the owner, accept this failed re-evaluation" }).status, 0);
     const go = b.run("wave.mjs", ["Title", "Summary", "origin/agents/t1", "origin/agents/t1-review-2", "origin/agents/t1-review-final"]); assert.equal(go.status, 0, go.stdout + go.stderr);
     const log = b.waitEnd(); assert.match(log, new RegExp(`merged origin/agents/t1 at ${c2}`)); assert.match(log, /PUSHED main/);
     assert.notEqual(sha, c2);
+  } finally { b.cleanup(); }
+});
+
+test("github-issues: the level is the Controller's claim record (the first one), read with --ref; a missing level or record means the owner only", () => {
+  const { p, b } = scene({ extra: { steering: { mode: "github-issues" } } });
+  try {
+    record(b); const rsha = p.tip("agents/t1-review-1"), journalFile = path.join(b.ctl, "journal.ndjson");
+    const claims = (...c) => { const rest = b.events().filter((e) => e.type !== "claim"); fs.writeFileSync(journalFile, [...c.map((x) => ({ type: "claim", task: "12", documentation: false, ...x })), ...rest].map((e) => JSON.stringify(e)).join("\n") + "\n"); };
+    const over = { ref: "#12", followUp: "#9" };
+    assert.match(waive(b, rsha, { ...over, ref: undefined }).stdout, /pass the task reference: --ref "#<n>"/, "no --ref");
+    claims(); assert.match(waive(b, rsha, over).stdout, /its level cannot be read[\s\S]*only the owner/, "no claim record");
+    claims({}); assert.match(waive(b, rsha, over).stdout, /its level cannot be read/, "a claim from before the level was recorded");
+    claims({ level: 3 }); assert.match(waive(b, rsha, over).stdout, /its level is 3/, "level 3");
+    claims({ level: 3 }, { level: 1 }); assert.match(waive(b, rsha, over).stdout, /its level is 3/, "the first claim record wins: the issue edited later does not lower it");
+    claims({ level: 2 }); assert.match(waive(b, rsha, { ...over, followUp: "T7" }).stdout, /is not a ticket file in docs\/tasks\/ or a debt entry in docs\/debt\.md on origin\/main, nor an issue as #<n>/, "a follow-up that exists nowhere");
+    assert.equal(waiverEvents(b).length, 0);
+    const ok = waive(b, rsha, over); assert.equal(ok.status, 0, ok.stdout); assert.deepEqual([waiverEvents(b)[0].level, waiverEvents(b)[0].decider, waiverEvents(b)[0].followUp], [2, "front-agent", "#9"]);
   } finally { b.cleanup(); }
 });
 

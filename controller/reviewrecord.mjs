@@ -166,9 +166,9 @@ export function bindBranches(branches, { prefix, read }) {
     }
     // A review branch of a task is judged with the task: one message per task, from its own branch if it is in the wave.
     if (p.kind === "process" && parsed.some((x) => x.kind === "task" && x.key === p.key)) continue;
-    if (r.state === "failed") problems.push(`${p.b}: the review of ${p.key} says fail (head ${r.head}). Nothing is merged for it. Send the task back (rework, then a new review round); the wave takes the head of the review that passes.\n`
-      + `    Only if the Front agent (the owner, for a level 3 ticket) has decided, in their own words, that what the review found is no blocker and a follow-up exists: record that decision with node waiver.mjs (CONTROLLER.md, "A waiver"). It covers exactly this review of this commit, never a security, data-corruption, input-loss or gate finding, and never a later commit.`
-      + (r.waived?.length ? ` (${r.waived.length} of ${r.standing.length} failed reviews standing for ${r.head} have a waiver; each one needs its own.)` : ""));
+    // No hint to a waiver here, unless one exists: a waiver is somebody else's decision, never a way out the Controller is shown for a wave that does not start.
+    if (r.state === "failed") problems.push(`${p.b}: the review of ${p.key} says fail (head ${r.head}). Nothing is merged for it. Send the task back (rework, then a new review round); the wave takes the head of the review that passes.`
+      + (r.waived?.length ? ` ${r.waived.length} of the ${r.standing.length} failed reviews standing for ${r.head} have a waiver (waiver.mjs); each one needs its own.` : ""));
     else if (r.state === "unreadable") problems.push(`${p.b}: the Controller's journal gives no usable review record for ${p.key} (${r.why}). Nothing is merged for it. Repair the journal line or send the task back to review.`);
     else problems.push(`${p.b}: the Controller's journal has no record of a passing review of ${p.key}, so there is no commit to merge. Nothing is merged for it.\n`
       + `    Either the verdict was not recorded: then run, with the review branch and the full SHA from the reviewer's worker_done,\n`

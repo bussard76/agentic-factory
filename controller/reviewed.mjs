@@ -92,5 +92,6 @@ const before = lastHead(journalText(), task);
 if (before && before !== head && git("merge-base", "--is-ancestor", head, before).status === 0) refuse(`${head} is older than ${before}, the head already recorded for ${task}: nothing is recorded for an older review.`);
 journal("review", task, { verdict, path, head, branch: rb, reviewSha: rbSha, file: findings, tip, by: "reviewed.mjs" });
 console.log(`recorded: ${task} ${path} review says ${verdict} for ${head} (findings ${findings} on origin/${rb} at ${rbSha}).`);
-if (verdict === "fail") console.log(`waiver: ${waivableNote(text, path)}. (A waiver is the Front agent's or the owner's decision, recorded with node waiver.mjs; the Controller never proposes one.)`);
+const unwaivable = verdict === "fail" ? waivableNote(text, path) : "";   // only the negative: the Controller never offers a waiver, it is somebody else's decision
+if (unwaivable) console.log(`waiver: ${unwaivable}`);
 if (tip !== head) console.log(`note: origin/${taskBranch} is at ${tip}, not at the reviewed commit. A wave merges ${head} only if the branch has moved by clean merges of the main branch alone; otherwise it stops and the task goes back to review.`);

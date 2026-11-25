@@ -77,10 +77,11 @@ export function waivable(parsed, named, path) {
   return { ok: true };
 }
 
-/** One line for reviewed.mjs after it recorded a fail: could a waiver ever cover this review? */
+/** For reviewed.mjs after it recorded a fail: why no waiver could ever cover this review, or "" when none is ruled out. It never says a
+ *  review IS waivable: that is somebody's decision, and the Controller does not offer it. */
 export function waivableNote(text, path) {
   const p = parseFindings(text);
   if (!p.ok) return `not waivable: ${p.why}. ${NEW_ROUND}`;
   const w = waivable(p, p.findings.filter((f) => f.severity !== "minor").map((f) => f.id), path);
-  return w.ok ? `waivable by a decision of the Front agent or the owner, if every blocker and major (${p.findings.filter((f) => f.severity !== "minor").map((f) => f.id).join(", ")}) is decided to be no blocker` : `not waivable: ${w.why}`;
+  return w.ok ? "" : `not waivable: ${w.why}`;
 }

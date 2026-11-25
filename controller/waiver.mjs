@@ -3,8 +3,8 @@
 // never decides a waiver: it records the one it was given and quotes the words. Run it only after a decision, never to make a wave start.
 // <review-branch> and <review-sha> are those of the failed review as reviewed.mjs recorded it (the branch of the findings file and its full
 // commit id); <task> its ticket id. --findings names every finding the decision covers, by the id the findings file gives it (F1, F2, ...).
-// --decider is who decided: owner (the human), or front-agent; for a ticket of level 3, and for one whose level cannot be read, only the
-// owner. --words is what they said, verbatim, and --reason and --follow-up say why it is no blocker and where the follow-up lives: a
+// --decider is who decided: owner (the human), or front-agent; for a ticket of level 3, for one whose level cannot be read, and for a failed
+// final re-evaluation (-review-final) at any level, only the owner. --words is what they said, verbatim, and --reason and --follow-up say why it is no blocker and where the follow-up lives: a
 // ticket file of origin/<main>, a debt entry of docs/debt.md on origin/<main>, or (with GitHub issues) #<n>. --ref is the task reference
 // of mkspec ("#12"); with GitHub issues the level is the one the Controller recorded when it took the issue.
 // It fetches origin and reads the findings file on the review's own commit, and refuses unless: that review is a recorded failure that still
@@ -52,6 +52,8 @@ const review = standing.find((f) => f.branch === rb && f.reviewSha === reviewSha
 if (!review) refuse(`${rb} at ${reviewSha} is not a failed review that stands for ${task}'s latest reviewed commit ${st.head}${standing.length ? ` (it has: ${standing.map((f) => `${f.branch} at ${f.reviewSha}`).join("; ")})` : ""}. A waiver covers one recorded failed review of that commit, nothing else: a review that was never recorded, an older commit and a superseded round are not covered.`);
 if (st.state === "waived" && st.waivers.some((w) => w.reviewSha === reviewSha && w.branch === rb)) refuse(`this review of ${task} is already waived.`);
 if (!review.file || !review.head || !isSha(review.head)) refuse(`the record of this review has no findings file or reviewed commit.`);
+// A failed re-evaluation is the human's decision at every level (review protocol, "Later rounds"): the Front agent does not decide it.
+if (review.path === "final" && opt["--decider"] !== "owner") refuse(`${rb} is the final functional re-evaluation: its failure is the owner's decision, at every level (--decider owner, with their words verbatim).`);
 // 2. Still what was recorded: the review branch and the task's branch.
 const rbTip = resolve(rb);
 if (rbTip !== reviewSha) refuse(`origin/${rb} is at ${rbTip || "(missing)"}, not at ${reviewSha}: it was pushed to after the review was recorded. Ask for the review again.`);
