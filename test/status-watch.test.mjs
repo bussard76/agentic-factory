@@ -193,8 +193,9 @@ test("start schedules the watch and runs it once; status shows whether it runs, 
   const launchLog = path.join(base, "launchctl.log");
   fs.writeFileSync(path.join(bin, "launchctl"), `#!/bin/sh\necho "$@" >> ${launchLog}\n`, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, "orca"), `#!/usr/bin/env node\nconsole.log(JSON.stringify({ ok: true, result: { terminals: [], repos: [] } }));\n`, { mode: 0o755 });
+  fs.copyFileSync(path.join(bin, "orca"), path.join(bin, "orca-ide"));   // on Linux outside an Orca terminal the CLI runs `orca-ide`, so the stand-in has both names
   const env = { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, GIT_CONFIG_NOSYSTEM: "1", FACTORY_SCHEDULER: "cron" };
-  delete env.ORCA_TERMINAL_HANDLE; delete env.ORCA_CLI_COMMAND;
+  delete env.ORCA_TERMINAL; delete env.ORCA_TERMINAL_HANDLE; delete env.ORCA_CLI_COMMAND;
   const git = (...a) => { const r = spawnSync("git", a, { cwd: project, encoding: "utf8", env }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
   const cli = (...a) => spawnSync("node", [CLI, ...a], { cwd: project, encoding: "utf8", env });
   git("init", "-q", "-b", "main"); git("config", "user.name", "T"); git("config", "user.email", "t@example.invalid");
@@ -214,7 +215,7 @@ test("start schedules the watch and runs it once; status shows whether it runs, 
   const dir = path.join(home, "front-agent/demo");
   const recorded = JSON.parse(fs.readFileSync(path.join(dir, "front-agent.json"), "utf8"));
   assert.equal(recorded.projectDir, fs.realpathSync(project));
-  assert.equal(recorded.orcaCommand, path.join(bin, "orca"), "a bare name would not be found under cron's PATH");
+  assert.equal(recorded.orcaCommand, path.join(bin, process.platform === "linux" ? "orca-ide" : "orca"), "a bare name would not be found under cron's PATH");
   for (let i = 0; i < 50 && !fs.existsSync(path.join(dir, "statuswatch.alive")); i++) await new Promise((done) => setTimeout(done, 100));
   assert.equal(JSON.parse(cli("status", "--json").stdout).setup.statusWatch, true);
   assert.match(cli("doctor").stdout, /status watch running/);

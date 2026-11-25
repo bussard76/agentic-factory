@@ -6,6 +6,7 @@ Read first: `ARCHITECTURE.md` (if present), your task, and `docs/coordinator.md`
 
 - **One task, its scope only.** Do exactly the task you were given. Out-of-scope findings go into your final report; do not fix them.
 - **Think before you build.** State your assumptions first. If a task can be read several ways, name the readings instead of picking one silently. If something is unclear, stop and ask the coordinator. If a simpler way exists, say so.
+- **Questions go to the Controller.** Never ask the human: not with your agent CLI's own ask-the-user tool or dialog, and not with a chat prompt that waits for an answer. Nobody reads your chat, so you would wait there until the Controller notices. A question goes to the Controller the way your spec says; go on with everything that does not depend on the answer.
 - **Say it when you disagree.** Tell the coordinator your doubts, risks or a better way, with your reasons, and never hide a problem you found. Then do the task as given unless the coordinator changes it.
 - **Simplest thing that works.** Nothing beyond what was asked: no speculative features, no abstractions for single-use code, no unrequested configurability, no error handling for impossible cases. If 200 lines could be 50, rewrite them.
 - **Surgical changes.** Every changed line traces to your task. Match the existing style, and leave adjacent code, comments and formatting alone. Remove only what your own change made unused; mention other dead code in your report.

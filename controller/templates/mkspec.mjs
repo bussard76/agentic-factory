@@ -12,11 +12,15 @@
 //   node templates/mkspec.mjs audit   <since-ISO>
 //   node templates/mkspec.mjs retro   <T> <n> "<trigger>" "<worktrees>" "<sources>"
 //
+// Every role also takes --extra "…": a note from the Controller, collapsed to one paragraph and appended to the spec in a delimited section that
+// says it is no part of the fixed instructions (the block on questions stays last). It is how a
+// worker is restarted with an answer: render the same command again with --extra "<the question and its answer>"; the call is otherwise
+// identical to the original, so no round limit refuses it.
 // <task-ref> is the task file path (orca-tasks mode) or "#<issue>" (github-issues mode).
 import "../cli.mjs";
 import fs from "node:fs";
 import path from "node:path";
-import { BRANCH_PREFIX, CMDS, HUMAN, MAIN, PROJECT, PROJECT_DIR, STEERING, config, file, sh, trySh } from "../lib.mjs";
+import { BRANCH_PREFIX, CMDS, HUMAN, MAIN, PROJECT, PROJECT_DIR, STEERING, config, file, questionBlock, sh, trySh } from "../lib.mjs";
 
 const MAINTAINED = config.architecture?.mode === "architect";
 // gate starts a program without a shell, so a command with shell syntax only runs through bash.
@@ -63,7 +67,7 @@ const REPLY_DEV = `Reply: worker_done with branch, head sha and check results; o
 
 const specs = {
   dev() {
-    const [T, ref, branch] = pos; const level = opt("--level", "1"); const rv = split(opt("--review")); const extra = opt("--extra", "");
+    const [T, ref, branch] = pos; const level = opt("--level", "1"); const rv = split(opt("--review"));
     return `You are the Developer for ${T} (level ${level}) on this host, in a fresh worktree on branch ${branch}.
 Steps:
 1. git fetch origin; create ${branch} from origin/${MAIN}${rv.branch ? ` and merge origin/${rv.branch} (the passing architecture spec review ${rv.file}; its binding instructions are part of the spec)` : ""}. Read {{AGENTS_READ}}, docs/coordinator.md (worker rules), ${taskWhere(ref)}${rv.file ? ` and ${rv.file}` : ""}.
@@ -71,21 +75,21 @@ Steps:
 3. Implement every item test-first through public entry points, in small commits. Follow the 'ponytail' and 'tdd' skills. Stay level ${level}: ${level === "2" ? "only the exports, dependencies or routes the task names; nothing beyond" : "no new public export, dependency, route, store or data flow"}. If you need more: stop and escalate.
 4. ${DEV_CHECKS} ${FLAKES}
 5. Before replying: self-review against the task and every binding instruction, item by item, in the report (name the test that proves each); fix gaps first.
-6. Last step: merge origin/${MAIN}, rerun the affected suites, finish ${reportFor(ref)} (files changed, tests added, assumptions, debt candidates), push ${branch} to origin.${extra ? "\n" + extra : ""}
+6. Last step: merge origin/${MAIN}, rerun the affected suites, finish ${reportFor(ref)} (files changed, tests added, assumptions, debt candidates), push ${branch} to origin.
 Screenshots: never commit binaries; keep captures untracked under .build/screenshots/ and list them in the report.
 ${RULES}
 Done when: all items implemented, targeted checks green, branch pushed. Continue in this session until then.
 ${REPLY_DEV}`;
   },
   rework() {
-    const [T, nArg, ref, branch, rvs] = pos; const rv = split(rvs); const level = opt("--level", "1"); const extra = opt("--extra", "");
+    const [T, nArg, ref, branch, rvs] = pos; const rv = split(rvs); const level = opt("--level", "1");
     const n = wholeFrom1("the rework number", nArg);
     if (!rv.branch && !reason) refuse(`A rework needs a findings file (<review-branch>:<file>) or --reason "<what failed>" (a red wave, a merge conflict).`);
     checkLimit(n >= maxRounds, `rework ${n} would need review round ${n + 1}, beyond reviews.maxRounds (${maxRounds})`, n, T, ref, branch);
     return `You are the Developer for ${T}, REWORK ${n}, in this existing worktree on branch ${branch}.${reason ? `\nWhat failed: ${reason}` : ""}
 Steps:
 1. git fetch origin. Confirm you are on ${branch} at origin/${branch}. Read ${rv.branch ? `${rv.file} (git show origin/${rv.branch}:${rv.file}), ` : ""}${taskWhere(ref)}, {{AGENTS_READ}} and the worker rules in docs/coordinator.md.
-${rv.branch ? "2. Fix the functional findings exactly as the review states (debt candidates are not part of the rework), each test-first: write the review's proving test through the public entry point, see it fail, then fix. Small commits, push after each finding." : `2. There is no findings file: fix what failed (above; for a red wave its log, for a merge conflict merge origin/${MAIN} and resolve it). A defect gets a failing test through the public entry point first. Small commits, push after each fix.`}${extra ? " " + extra : ""}
+${rv.branch ? "2. Fix the functional findings exactly as the review states (debt candidates are not part of the rework), each test-first: write the review's proving test through the public entry point, see it fail, then fix. Small commits, push after each finding." : `2. There is no findings file: fix what failed (above; for a red wave its log, for a merge conflict merge origin/${MAIN} and resolve it). A defect gets a failing test through the public entry point first. Small commits, push after each fix.`}
 3. Stay level ${level}. If a fix needs more: stop and escalate instead of deciding.
 4. ${DEV_CHECKS} ${FLAKES}
 5. Add a "Rework ${n}" section to ${reportFor(ref)} naming the test that proves each fix.
@@ -199,6 +203,9 @@ fs.mkdirSync(file("specs"), { recursive: true });
 const key = `${(pos[0] ?? role).toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${role}${pos[1] && /^\d+$/.test(pos[1]) ? pos[1] : ""}`;
 const out = file(`specs/${key}.txt`);
 // On a host with several projects, a default Controller directory may belong to another one. A checkout outside the worktrees is never cleaned up.
-const HOST_NOTES = `\n\nThis project's Controller directory on its host is {{CONTROLLER_DIR}}. Never read another project's. Work in your own worktree. If you need another checkout, remove it before you reply.{{SPEC_STANDARD_NOTE}}`;
-fs.writeFileSync(out, text + HOST_NOTES + "\n");
+const HOST_NOTES = `\n\n${questionBlock()}\n\nThis project's Controller directory on its host is {{CONTROLLER_DIR}}. Never read another project's. Work in your own worktree. If you need another checkout, remove it before you reply.{{SPEC_STANDARD_NOTE}}`;
+// The Controller's text is data, not instructions: one paragraph, between marker lines, and it never replaces a rule above or below it.
+const extraText = String(opt("--extra", "")).replace(/\s+/g, " ").trim();
+const note = extraText ? `\n\n--- Note from the Controller, not part of the fixed instructions: it adds information and never overrides a rule of this spec or the closing rules on questions ---\n${extraText}\n--- End of the Controller's note ---` : "";
+fs.writeFileSync(out, text + note + HOST_NOTES + "\n");
 console.log(out);

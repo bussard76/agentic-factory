@@ -6,14 +6,16 @@ import "./cli.mjs";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { BRANCH_PREFIX, FALLBACK, MAIN, ORCA, RUNNER, argHost, config, file, journal, modelFor, onHost, orcaEnvArgsOn, projectDirOn, readJson, sh, slug, workspacesOn, worktreeRefOn, writeJson } from "./lib.mjs";
+import { BRANCH_PREFIX, FALLBACK, MAIN, ORCA, RUNNER, argHost, askOffFor, config, file, journal, modelFor, NO_HUMAN_RULE, questionBlock, onHost, orcaEnvArgsOn, projectDirOn, readJson, sh, slug, workspacesOn, worktreeRefOn, writeJson } from "./lib.mjs";
 
 const [name, specFile, key, ...rest] = process.argv.slice(2);
 if (!name || !specFile || !key || !/ · Worker /.test(name)) throw new Error('usage: node start.mjs "<Task> · Worker <Role>" <spec-file> <key> [options]');
 const opt = (flag, def) => { const i = rest.indexOf(flag); return i >= 0 ? rest[i + 1] : def; };
 const has = (flag) => rest.includes(flag);
 const host = argHost(process.argv);
-const spec = fs.readFileSync(specFile, "utf8").trim();
+// Every worker passes here, also one started from a hand-written spec: it never goes without the rule about questions.
+let spec = fs.readFileSync(specFile, "utf8").trim();
+if (!spec.includes(NO_HUMAN_RULE)) spec += `\n\n${questionBlock()}`;
 const agent = opt("--agent", quotaFallback() ? FALLBACK.agent : config.agents?.default ?? "codex");
 const role = name.split(" · Worker ")[1] ?? "Developer";
 const tier = opt("--tier", readJson("model-tiers.json", {})[role] ?? "default");   // calibrated per role, see calibrate-models.mjs
@@ -32,6 +34,10 @@ if (!has("--force")) {
 }
 
 const workers = readJson("workers.json", {});
+// How this worker's ask-the-user tool is switched off: "args" (runner: terminal, the table has args for this CLI) or "none". Under
+// runner: orca nothing can be passed to the agent, so the spec block and stallwatch's waiting detection are the layers there.
+const askOff = askOffFor(agent);
+let askOffHow = "none";
 let record;
 if (RUNNER === "orca") {
   const args = ["orchestration", "worker-start", "--task-title", name, "--spec", spec, "--agent", agent, "--model", model, ...orcaEnvArgsOn(host), "--json"];
@@ -49,7 +55,7 @@ if (RUNNER === "orca") {
   const handle = receipt.result?.terminal ?? receipt.result?.worker?.agentTerminalHandle ?? (dispatch ? JSON.parse(sh(ORCA, ["orchestration", "worker-show", "--dispatch", dispatch, ...orcaEnvArgsOn(host), "--json"])).result?.worker?.agentTerminalHandle : undefined);  // Name the terminal and pane by task and role so the sidebar never shows an automatic session name.
   // Orca keeps a worker started in a new worktree open by default (worker-start --help); start.mjs never asks for that.
   // keptByDefault tells cleanup that such a keep-open is Orca's default, not a decision; keep.mjs records a real one.
-  record = { name, host: host.name, agent, model, tier, dispatch, terminal: handle, worktree: `${workspacesOn(host)}${dir}`, readonly, keptByDefault: worktree === "new", started: new Date().toISOString() };
+  record = { name, host: host.name, agent, model, tier, dispatch, terminal: handle, worktree: `${workspacesOn(host)}${dir}`, readonly, keptByDefault: worktree === "new", askOff: askOffHow, started: new Date().toISOString() };
   // The worker runs now: record it first, because a failed title must not lose it or invite a second start.
   workers[key] = record;
   writeJson("workers.json", workers);
@@ -69,14 +75,16 @@ if (RUNNER === "orca") {
   const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
   onHost(host, `mkdir -p ${q(workspacesOn(host))} ${q(eventsDir)} && cd ${q(projectDir)} && git fetch -q origin && ([ -d ${q(wt)} ] || git worktree add -q -b ${q(BRANCH_PREFIX + dir)} ${q(wt)} origin/${MAIN})`);
   const preamble = `You are a factory worker named "${name}". When you are completely done, append one line "DONE <branch> <sha> <one-line result>" to ${eventsDir}/${key}.md. If you are blocked, append "ESCALATE <one concrete blocker>" there and stop. Never push to ${MAIN}.\n\n`;
-  const cmd = { codex: ["codex", "exec", "--full-auto", "-m", model, preamble + spec], claude: ["claude", "--dangerously-skip-permissions", "--model", model, "-p", preamble + spec], pi: ["pi", "-p", preamble + spec] }[agent];
+  let cmd = { codex: ["codex", "exec", "--full-auto", "-m", model, preamble + spec], claude: ["claude", "--dangerously-skip-permissions", "--model", model, "-p", preamble + spec], pi: ["pi", "-p", preamble + spec] }[agent];
+  // Global flags go right after the executable name (before a subcommand such as codex exec).
+  if (askOff?.args?.length) { cmd = [cmd[0], ...askOff.args, ...cmd.slice(1)]; askOffHow = "args"; }
   fs.mkdirSync(file("logs"), { recursive: true });
   const log = fs.openSync(file(`logs/${key}.log`), "a");
   let child;
   if (host.kind === "local") child = spawn(cmd[0], cmd.slice(1), { cwd: wt, detached: true, stdio: ["ignore", log, log] });
   else child = spawn("ssh", [...(host.sshConfig ? ["-F", host.sshConfig] : []), host.ssh, `cd ${q(wt)} && setsid ${cmd.map(q).join(" ")} > ${q(`${eventsDir}/${key}.log`)} 2>&1 < /dev/null & echo $!`], { detached: true, stdio: ["ignore", log, log] });
   child.unref();
-  record = { name, host: host.name, agent, model, tier, pid: host.kind === "local" ? child.pid : undefined, remoteLog: host.kind === "remote" ? `${eventsDir}/${key}.log` : undefined, worktree: wt, readonly, started: new Date().toISOString() };
+  record = { name, host: host.name, agent, model, tier, pid: host.kind === "local" ? child.pid : undefined, remoteLog: host.kind === "remote" ? `${eventsDir}/${key}.log` : undefined, worktree: wt, readonly, askOff: askOffHow, started: new Date().toISOString() };
 }
 workers[key] = record;
 writeJson("workers.json", workers);

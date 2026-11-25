@@ -296,8 +296,9 @@ const out = (result) => console.log(JSON.stringify({ ok: true, result }));
 if (a[0] === "terminal" && a[1] === "list") out({ terminals: s.terminals });
 else if (a[0] === "terminal" && a[1] === "create") { s.terminals.push({ handle: "term_ctl", title: "Demo controller", paneTitle: "demo · Controller", worktreePath: ${JSON.stringify(project)}, agentIdentity: "claude" }); fs.writeFileSync(${JSON.stringify(state)}, JSON.stringify(s)); out({ terminal: { handle: "term_ctl" } }); }
 else out({ terminals: [], repos: [] });\n`, { mode: 0o755 });
+  fs.copyFileSync(path.join(bin, "orca"), path.join(bin, "orca-ide"));   // on Linux outside an Orca terminal the CLI runs `orca-ide`, so the stand-in has both names
   const env = { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, GIT_CONFIG_NOSYSTEM: "1", FACTORY_SCHEDULER: "launchd" };
-  delete env.ORCA_TERMINAL_HANDLE; delete env.ORCA_CLI_COMMAND; delete env.ORCA_ENVIRONMENT;
+  delete env.ORCA_TERMINAL; delete env.ORCA_TERMINAL_HANDLE; delete env.ORCA_CLI_COMMAND; delete env.ORCA_ENVIRONMENT;
   const git = (...a) => { const r = spawnSync("git", a, { cwd: project, encoding: "utf8", env }); assert.equal(r.status, 0, r.stderr); };
   const cli = (args, over = {}) => { const r = spawnSync("node", [CLI, ...args], { cwd: project, encoding: "utf8", env: { ...env, ...over } }); stopBackground(path.join(home, "controller")); return r; };
   git("init", "-q", "-b", "main"); git("config", "user.name", "T"); git("config", "user.email", "t@example.invalid");
@@ -314,6 +315,30 @@ else out({ terminals: [], repos: [] });\n`, { mode: 0o755 });
   return { base, home, project, tab, flags, launchLog, cli, edit, agents, ctlDir, stamp, touch, terminals, bin, state, done: () => fs.rmSync(base, { recursive: true, force: true }) };
 }
 const hb = (h) => JSON.parse(h.cli(["status", "--json"]).stdout).setup.heartbeat;
+
+test("doctor and status show a restart.pending.json and say what to do", () => {
+  const h = startSetup();
+  fs.mkdirSync(h.ctlDir, { recursive: true });
+  assert.doesNotMatch(h.cli(["doctor"]).stdout, /a restart left a terminal/);
+  fs.writeFileSync(path.join(h.ctlDir, "restart.pending.json"), JSON.stringify({ handle: "term_new3", before: [], at: 1 }));
+  const doctor = h.cli(["doctor"]);
+  assert.match(doctor.stdout, /MISSING restart: a restart left a terminal it could not confirm closed \(term_new3\): look in Orca for a second "demo · Controller" terminal, close it if it is one, then delete ~\/controller\/restart\.pending\.json/);
+  assert.match(h.cli(["status"]).stdout, /MISSING restart: a restart left a terminal/);
+  assert.match(JSON.parse(h.cli(["status", "--json"]).stdout).setup.restartLeftover.problem, /term_new3/);
+  h.done();
+});
+
+test("doctor says when the Orca on the Controller's host has no `terminal create --keep-open` (1.4.266) and is silent for one that has it (1.4.272)", () => {
+  const h = startSetup();
+  const play = (version, keepOpen) => ["orca", "orca-ide"].forEach((name) => fs.writeFileSync(path.join(h.bin, name), `#!/bin/sh\ncase "$*" in\n  "--version") echo ${version};;\n  "terminal create --help") echo "orca terminal create"; echo "Usage: orca terminal create [--worktree <selector>] [--focus]${keepOpen ? " [--keep-open]" : ""} [--json]";;\n  *) echo '{"ok":true,"result":{"terminals":[],"repos":[]}}';;\nesac\n`, { mode: 0o755 }));
+  play("1.4.266", false);
+  assert.match(h.cli(["doctor"]).stdout, /info    Orca 1\.4\.266 on local has no `terminal create --keep-open` \(it has from 1\.4\.272\): the Controller's restart at 50% context make the new terminal without it/);
+  h.edit((c) => { c.hosts.controller.hung = { restart: true }; });
+  assert.match(h.cli(["doctor"]).stdout, /restart at 50% context and hosts\.controller\.hung\.restart make the new terminal without it/);
+  play("1.4.272", true);
+  assert.doesNotMatch(h.cli(["doctor"]).stdout, /keep-open/);
+  h.done();
+});
 
 test("on macOS the heartbeat goes to launchd where cron is refused; doctor and status say whether it is scheduled", () => {
   const h = startSetup();
