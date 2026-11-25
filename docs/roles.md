@@ -23,6 +23,8 @@ Five kinds of participants. The human talks to exactly one of them.
 
 Workers are named by task and role, for example `T22-S5 · Worker Developer`, never by an automatic session name ([naming rules](orca.md#naming)). A worker can be Codex, Claude Code or Pi; the specs, rules and reply format are the same.
 
+**Workers never ask the human.** Nobody reads a worker's chat, so a question there (the agent CLI's ask-the-user tool, or a prompt that waits for an answer) hangs the worker until somebody notices. Every spec ends with the same block (`questionBlock` in `controller/lib.mjs`, rendered by `mkspec.mjs` into every role, audit and retro included; `templates/AGENTS.md` says it too): a question goes to the Controller with `orca orchestration ask`, the worker goes on with whatever does not depend on the answer, and the Controller answers it or passes it to the Front agent. With the terminal runner the worker also starts with the tool off where its CLI has a switch for it; under the Orca runner the block and a waiting-for-human detection are the layers ([Orca](orca.md#workers-never-ask-the-human)).
+
 ## Who decides what
 
 | Level | Example | Decides |

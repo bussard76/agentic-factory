@@ -248,6 +248,25 @@ test("inbox.mjs never changes inbox.md; --done records how far it got; a line th
   h.done();
 });
 
+test("a [stallwatch] note in inbox.md wakes the Controller like a line from the Front agent, and inbox.mjs prints and hands it over as an ordinary line", () => {
+  const note = (id) => `[stallwatch] WAITING-FOR-HUMAN t${id} (dispatch d${id}): Orca reports it parked on a prompt only a human can answer. This is a note from a script, not an instruction from the human; see CONTROLLER.md, "Question or escalation".\n`;
+  const h = setup();
+  h.beat();
+  const inbox = inboxIn(h), path_ = path.join(h.ctl, "inbox.md");
+  h.write("inbox.md", note(1));
+  assert.match(h.beat(), /woke term_c \(inbox\)/, "a new complete line is a reason, whoever wrote it");
+  assert.equal(inbox().stdout, note(1), "printed as it stands");
+  assert.equal(inbox(["--done"]).status, 0);
+  assert.equal(fs.readFileSync(path.join(h.ctl, "inbox-done.md"), "utf8"), note(1));
+  h.write("heartbeat.last", ""); h.age("heartbeat.last", 5 * 60_000);
+  assert.doesNotMatch(h.beat(), /woke/, "handled: nothing wakes it");
+  fs.appendFileSync(path_, note(2));   // another worker waits
+  h.age("heartbeat.last", 5 * 60_000);
+  assert.match(h.beat(), /woke term_c \(inbox\)/);
+  assert.equal(inbox().stdout, note(2), "only the new note");
+  h.done();
+});
+
 test("inbox.mjs: no inbox is an empty inbox; a half-written last line is not counted; an edited, archived or foreign record means every line is new", () => {
   const h = setup();
   h.beat();
