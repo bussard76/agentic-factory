@@ -353,6 +353,9 @@ test("a last line without its newline is shown and counted like any other once t
   h.beat();
   const inbox = inboxIn(h), path_ = path.join(h.ctl, "inbox.md");
   h.write("heartbeat.last", "");   // no idle check due
+  // The file's birth time must be older than every time this test sets as its mtime below: macOS moves the birth time back when an
+  // mtime before it is set, and the handled record is tied to the birth time. So make the (empty) file old first, then fill it.
+  h.write("inbox.md", ""); h.age("inbox.md", 10 * 60_000);
   h.write("inbox.md", "first line\nsecond, still being writ");
   assert.equal(inbox().stdout, "first line\n", "a writer caught mid-append is not cut in half");
   assert.equal(inbox(["--done"]).status, 0);
@@ -360,7 +363,7 @@ test("a last line without its newline is shown and counted like any other once t
   assert.doesNotMatch(h.beat(), /woke/, "and it does not wake every minute for a line that is still being written");
   // Quiet for a minute: the tail is a line now, for the script and for the heartbeat alike.
   const t = new Date(Date.now() - 61_000); fs.utimesSync(path_, t, t);
-  assert.equal(inbox().stdout, "first line\nsecond, still being writ", "shown");
+  assert.equal(inbox().stdout, "second, still being writ", "the first line is handled; the tail is a line now and the only new one");
   h.write("heartbeat.last", ""); h.age("heartbeat.last", 5 * 60_000);
   fs.utimesSync(path_, t, t);
   assert.match(h.beat(), /woke term_c \(inbox\)/);
