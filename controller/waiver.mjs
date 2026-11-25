@@ -129,7 +129,7 @@ function ticketLevelOnMain() {
 }
 
 // Where the follow-up lives: a real ticket file or a debt entry on origin/<main>, or an issue number with GitHub issues. Never the task itself, never a
-// README, a template, a table header or a separator: the id has to contain a digit (T2, F55, KAUZ-12), and the debt table is read by its rows.
+// README, a template, a table header or a separator: the id has to contain a digit (T2, F55, ABC-12), and the debt table is read by its rows.
 function followUpProblem(id) {
   const bare = id.replace(/^#/, "");
   const same = id.toLowerCase() === key || (issue !== null && /^#?\d+$/.test(id) && bare === issue);
