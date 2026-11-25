@@ -268,3 +268,25 @@ export function declaredProblem(text) {
   if (decl.length !== 1 || !/^Documentation only: yes[ \t]*$/.test(decl[0])) return "it does not say `Documentation only: yes`";
   return "";
 }
+// The ticket's prose only, as declaredProblem reads it (not an HTML comment, not a fenced code block). Kept apart from it: a test holds
+// declaredProblem byte for byte equal to the guardrails' copy.
+function proseLines(text) {
+  const prose = String(text).replace(/<!--[\s\S]*?(-->|$)/g, ""), kept = [];
+  let fence = "";
+  for (const l of prose.split(/\r?\n/)) {
+    const m = /^ {0,3}(`{3,}|~{3,})/.exec(l);
+    if (fence) { if (m && m[1][0] === fence[0] && m[1].length >= fence.length) fence = ""; continue; }
+    if (m) { fence = m[1]; continue; }
+    kept.push(l);
+  }
+  return kept;
+}
+/** The change level a ticket states (1, 2 or 3), from its prose only (as declaredProblem). Every `Level:` line must read `Level: <1|2|3>`; with
+ *  several (a ticket repeats it under "Architecture impact") the highest counts. null when there is none or one is not a plain level
+ *  (an unfilled template `Level: 1 | 2 | 3`): unknown, which a caller treats as the highest. */
+export function ticketLevel(text) {
+  const lines = proseLines(text).filter((l) => /^level:/i.test(l));
+  if (!lines.length) return null;
+  const levels = lines.map((l) => /^Level: ([123])[ \t]*$/.exec(l)?.[1]);
+  return levels.some((v) => !v) ? null : Math.max(...levels.map(Number));
+}

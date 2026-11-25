@@ -20,7 +20,13 @@
 import "../cli.mjs";
 import fs from "node:fs";
 import path from "node:path";
-import { BRANCH_PREFIX, CMDS, HUMAN, MAIN, PROJECT, PROJECT_DIR, STEERING, config, file, questionBlock, sh, trySh } from "../lib.mjs";
+import { BRANCH_PREFIX, CMDS, HUMAN, MAIN, PROJECT, PROJECT_DIR, STEERING, config, file, journal, questionBlock, sh, trySh } from "../lib.mjs";
+
+// Every review that lists findings gives each one a class from a fixed list, in its heading: waiver.mjs reads the class strictly (a finding
+// without a readable one can never be waived; the file is then "not waivable" as a whole). One text for every review spec. The lists are
+// those of findings.mjs (not imported: this file is also run alone); test/review-waiver.test.mjs holds the two in step.
+const NEVER_WAIVABLE = ["security", "data-corruption", "input-loss", "gate"], WAIVABLE = ["functional", "process", "style"];
+const CLASS_RULE = `Every finding is one heading under '## Findings': '### F<n> [blocker|major|minor] [<class>] <title>' (F1, F2, ... unique), with EXACTLY ONE class from this fixed list, in lower case, in the heading: ${NEVER_WAIVABLE.join(", ")} (never waivable: a security problem, data corruption, loss of user input, a failing gate) or ${WAIVABLE.join(", ")} (a decided non-blocker of these may be waived). Pick the most serious class that fits; when unsure take the never-waivable one. A finding without a class, or in another form, can never be waived. The class is YOUR claim and no code checks it: a person decides a waiver from your file, so name the class that is true, and write no line that says [blocker] or [major] except as a finding heading.`;
 
 const MAINTAINED = config.architecture?.mode === "architect";
 // gate starts a program without a shell, so a command with shell syntax only runs through bash.
@@ -113,7 +119,7 @@ Steps:
 ${scope}
 3. Create a temporary branch from the reviewed head and merge current origin/${MAIN} into it; if it conflicts, abort, list the files and review on the branch's own base.
 4. Gates: ${gated(CMDS.verify ?? "verify")} once${CMDS.e2e ? ` and ${gated(CMDS.e2e)} once` : ""} (detached with nohup, poll the log). ${FLAKES} Then check the task's main flows in the browser or through the public API with the demo data.
-5. Only after the gates finished: write docs/reviews/${T}-review-${round}.md with findings by severity, debt candidates, 'Reviewed commit: <full SHA>' and 'Verdict: pass|fail'. Commit only that file on branch ${BRANCH_PREFIX}${T.toLowerCase()}-review-${round} created from the reviewed head, never --no-verify, push only that branch.
+5. Only after the gates finished: write docs/reviews/${T}-review-${round}.md with findings by severity, debt candidates, 'Reviewed commit: <full SHA>', 'Verdict: pass|fail' and one line 'Gates: verify pass|fail, e2e pass|fail|none'. ${CLASS_RULE} Commit only that file on branch ${BRANCH_PREFIX}${T.toLowerCase()}-review-${round} created from the reviewed head, never --no-verify, push only that branch.
 ${REVIEW_RULE}
 Read-only otherwise; demo or mock only; never send anything; no Docker.
 Reply: worker_done with verdict, the review branch and its full SHA, and --report-path docs/reviews/${T}-review-${round}.md.`;
@@ -126,7 +132,7 @@ Steps:
 1. git fetch origin; check out origin/${branch} at exactly ${sha} (state the full SHA). Read ${taskWhere(ref)} and the last review ${lv.file} on origin/${lv.branch}.
 2. Classify every finding of that review as 'functional defect' or 'debt candidate'. Do not invent new findings beyond a quick check of the main flows.
 3. The last full gates on this commit are in that review; do not rerun the full suites (that is no proof for the wave, which runs the full gate itself). Run the browser specs or API checks that cover the task's main flows once and look at the flows.
-4. Write docs/reviews/${T}-review-final.md: 'Reviewed commit: <full SHA>', 'Verdict: pass|fail', the classification table, the debt candidates, and one sentence ${HUMAN} can try on the preview for each open point. Commit only that file on branch ${BRANCH_PREFIX}${T.toLowerCase()}-review-final from ${sha}, never --no-verify, push only that branch.
+4. Write docs/reviews/${T}-review-final.md: 'Reviewed commit: <full SHA>', 'Verdict: pass|fail', the classification table (in its own section '## Classification', never under '## Findings'), the findings that are functional defects (each as a finding with its own class: ${CLASS_RULE}), the debt candidates, and one sentence ${HUMAN} can try on the preview for each open point. Commit only that file on branch ${BRANCH_PREFIX}${T.toLowerCase()}-review-final from ${sha}, never --no-verify, push only that branch.
 Reply: worker_done with verdict, the review branch and its full SHA, and --report-path docs/reviews/${T}-review-final.md.`;
   },
   specreview() {
@@ -135,7 +141,7 @@ Reply: worker_done with verdict, the review branch and its full SHA, and --repor
 Steps:
 1. git fetch origin; create branch ${BRANCH_PREFIX}${T.toLowerCase()}-specreview from origin/${branch}. Read ${taskWhere(ref)}, {{AGENTS_READ}}, ARCHITECTURE.md (if present) and the connected code.
 2. Confirm or raise the level. Are the interfaces exact and buildable, the seams, bounds, states (empty, ambiguous, error), privacy and ownership sufficient? Does the outside-in evidence (design/<feature>/, interfaces, logic diagram) match the spec? If this task runs in parallel with others, is each shared interface fixed with exact fields, is there one test through the real producer and consumer, and does the task state what it depends on? An edge case that causes no real functional defect is a debt candidate, not a reason for change-spec.
-3. Write docs/reviews/${T}-architecture-spec.md with findings and 'Verdict: pass|change-spec|level-3'. Precision-only gaps may be binding instructions for the Developer with a pass; anything design-relevant is change-spec; anything needing ${HUMAN}'s decision is level-3 with options and a recommendation.
+3. Write docs/reviews/${T}-architecture-spec.md with findings and 'Verdict: pass|change-spec|level-3'. ${CLASS_RULE} Precision-only gaps may be binding instructions for the Developer with a pass; anything design-relevant is change-spec; anything needing ${HUMAN}'s decision is level-3 with options and a recommendation.
 4. Commit only that file, never --no-verify, push only your branch.
 Done when the review is pushed. Do not write code, do not run test suites, never touch real data.
 Reply: worker_done with verdict, level, branch and sha (--report-path docs/reviews/${T}-architecture-spec.md).`;
@@ -148,7 +154,7 @@ Steps:
 2. Read docs/architect-protocol.md, ${taskWhere(ref)}, the passing spec review ${rv.file} (origin/${rv.branch}) and docs/coordinator.md.
 ${MAINTAINED ? `Also compare the change with ARCHITECTURE.md. A level 3 change that does not update it in this change fails. A level 2 change that makes it wrong is a finding.
 ` : ""}3. Coarse boundary check only (decided by ${HUMAN}): no new export, contract, durable store or data flow without a recorded approval, and no forbidden imports. Do NOT hunt logic edge cases; note them as debt candidates. Focused checks only; no full suites. Security and load observations are debt unless a change could reach a real external system.
-4. Write docs/reviews/${T}-architecture-conformance.md with findings, 'Reviewed commit: <full SHA>' and 'Verdict: pass|fail'. Commit only that file, never --no-verify, push only your branch.
+4. Write docs/reviews/${T}-architecture-conformance.md with findings, 'Reviewed commit: <full SHA>' and 'Verdict: pass|fail'. ${CLASS_RULE} Commit only that file, never --no-verify, push only your branch.
 Reply: worker_done with verdict, branch and sha (--report-path docs/reviews/${T}-architecture-conformance.md).`;
   },
   baseline() {
@@ -199,6 +205,20 @@ Reply: worker_done with the file path and one line per candidate (--report-path 
 };
 if (!specs[role]) throw new Error(`unknown role ${role}; one of ${Object.keys(specs).join(", ")}`);
 const text = specs[role]();
+// With GitHub issues, the task id and its issue are bound in the Controller's own journal the first time a spec is made for them (a `taskref` event): a
+// waiver reads the ticket level through that record, never from a reference its caller types. A second, different issue for the same task id is recorded
+// too, and makes the binding ambiguous (the level is then unknown: owner only).
+const specRef = role === "rework" ? pos[2] : ["dev", "test", "reeval", "specreview", "conf"].includes(role) ? pos[1] : undefined;
+if (STEERING === "github-issues" && /^#\d+$/.test(specRef ?? "") && pos[0]) {
+  let known = ""; try { known = fs.readFileSync(file("journal.ndjson"), "utf8"); } catch { /* no journal yet */ }
+  // (not imported from reviewrecord.mjs: this file is also run alone; recordedIssues there reads the same lines)
+  const bound = known.split("\n").some((l) => { try { const e = JSON.parse(l); return e.type === "taskref" && e.by === "mkspec.mjs" && String(e.task).toLowerCase() === pos[0].toLowerCase() && e.ref === specRef; } catch { return false; } });
+  if (!bound) {
+    const other = known.split("\n").flatMap((l) => { try { const e = JSON.parse(l); return e.type === "taskref" && e.by === "mkspec.mjs" && String(e.task).toLowerCase() === pos[0].toLowerCase() ? [e.ref] : []; } catch { return []; } });
+    if (other.length) console.error(`WARNING: ${pos[0]} is already bound to ${other.join(", ")} and this call names ${specRef}: the conflict is recorded, and from now on the ticket level of ${pos[0]} is unknown, so only the owner decides a waiver for it.`);
+    journal("taskref", pos[0], { ref: specRef, by: "mkspec.mjs" });
+  }
+}
 fs.mkdirSync(file("specs"), { recursive: true });
 const key = `${(pos[0] ?? role).toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${role}${pos[1] && /^\d+$/.test(pos[1]) ? pos[1] : ""}`;
 const out = file(`specs/${key}.txt`);

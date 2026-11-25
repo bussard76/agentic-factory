@@ -6,7 +6,7 @@
 // node steering/issues.mjs close <n> <text>      → closes with a comment (after the wave reached main)
 import "../cli.mjs";
 import fs from "node:fs";
-import { PROJECT_DIR, config, declaredProblem, journal, sh } from "../lib.mjs";
+import { PROJECT_DIR, config, declaredProblem, journal, sh, ticketLevel } from "../lib.mjs";
 
 const ready = config.steering?.readyLabel ?? "ready-for-agent";
 const gh = (...a) => sh("gh", a, { cwd: PROJECT_DIR });
@@ -26,10 +26,11 @@ if (cmd === "ready") {
 } else if (cmd === "claim") {
   // The issue's text as it is when the Controller takes it, before any worker runs: whether it declares a documentation ticket
   // (`Level: 1`, `Documentation only: yes`) goes into the Controller's own journal, which docsonly.mjs reads. Unreadable = not declared.
-  let documentation = false;
-  try { documentation = declaredProblem(JSON.parse(gh("issue", "view", n, "--json", "body")).body ?? "") === ""; } catch { /* stays false */ }
+  // Its level goes in as well (the lines `Level: <n>`; the highest, none when unreadable): a waiver reads who may decide from this record, never from the issue as it is later.
+  let documentation = false, level = null;
+  try { const body = JSON.parse(gh("issue", "view", n, "--json", "body")).body ?? ""; documentation = declaredProblem(body) === ""; level = ticketLevel(body); } catch { /* stays false and unknown */ }
   gh("issue", "edit", n, "--add-assignee", "@me", "--remove-label", ready, "--add-label", "in-progress");
-  journal("claim", n, { documentation });
+  journal("claim", n, { documentation, level });
   console.log("ok");
 }
 else if (cmd === "comment") { gh("issue", "comment", n, "--body-file", arg); console.log("ok"); }

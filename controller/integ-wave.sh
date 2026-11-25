@@ -8,11 +8,21 @@
 #   origin/<branch>@<sha> (a task branch: merges <sha>), origin/<branch>~<sha>:<rsha>=<file> (its review branch: merges <rsha>, which may add that one findings file only),
 #   origin/status-wave-<n> (sets Status: integrated on tickets of this wave, one line each, nothing else). Any other argument stops the wave. The rules are in the block after the fetch.
 # Env: WAVE_LOG_DIR (optional), TASKS_DIR (the ticket directory, default docs/tasks), WAVE_TASKS (task ids of the wave, lower case, space separated), MAIN, INSTALL_CMD, VERIFY_CMD (required, non-empty), E2E_CMD (optional), GATE (absolute path to this project's gate), WAVE_PROJECT (its name), TRAILER (optional)
+# WAVE_WAIVED: space separated <reviewed commit>=<findings file> of failed reviews that a waiver (waiver.mjs) covers; each must be the commit of a task branch AND the
+# file of a review branch of THIS wave's bound arguments, or the wave stops. Only then does the push gate get it (FACTORY_WAIVED, for the one push): it treats those
+# commits as reviewed, if the pushed tree holds that failed findings file. A wave with a waived review always runs the full gate: never the docs-only path.
+# WHAT THIS SCRIPT DOES NOT CHECK: WAVE_WAIVED is taken as given (wave.mjs builds it from the Controller's journal; this script does not read the journal and can
+# run on another host than the Controller). It only checks that the value fits the wave's own bound arguments. Whoever runs the script by hand with a hand-made
+# value is not stopped here (debt F55). WAVE_WAIVED_NOTES: the same entries with a base64 note (decider, findings, follow-up, words, reason) for the merge
+# message: a record of what the journal claimed, not a proof of it.
 # Docs-only path (docs/testing.md): with docsOnly.enabled in origin/MAIN's factory.config.json, a wave that changes
 # documentation only runs commands.formatCheck and commands.markdownCheck from that config instead of verify and e2e.
 # Every other wave runs commands.verify (and commands.e2e) through GATE on the merged candidate and pushes only on success:
 # no earlier result (a Developer's or Tester's run, a cached one, an evidence file) and no option or variable replaces it.
 set -uo pipefail
+# Only this script, for its one push, sets FACTORY_WAIVED: an inherited one is dropped here. The script's own inputs (WAVE_WAIVED, from wave.mjs) are the
+# only way in, and they are checked against this wave's arguments, not against the journal (see the header).
+unset FACTORY_WAIVED
 # Step logs stay inspectable after the wave; wave.mjs sets a directory per project, so waves of two projects on one host never mix.
 LOGS="${WAVE_LOG_DIR:-${TMPDIR:-/tmp}/wave-$$}"; mkdir -p "$LOGS"
 TITLE="$1"; SUMMARY="$2"; shift 2; BR="$*"
@@ -166,6 +176,21 @@ for b in $BR; do
       if [ -n "$extra" ]; then stopped="$stopped  $ref: a status branch may only set Status: to integrated, one line per ticket file of this wave in ${TASKS_DIR%/}/ (${WAVE_TASKS:-no task}), but: $extra Nothing is merged. Make the status branch again from $MAIN.\n"; else MERGES+=("$ref $tip"); fi ;;
   esac
 done
+# A waived review (WAVE_WAIVED, from wave.mjs): every entry is `<sha>=<findings file>` and must match a task token merging <sha> and a review token
+# adding that very file, in the arguments above. What does not match is not passed on to the push gate; the wave stops (a stale or hand-made value).
+WAIVED_OK=""
+for w in ${WAVE_WAIVED:-}; do
+  ws="${w%%=*}"; wf="${w#*=}"; tok_task=0; tok_rev=0
+  if ! printf %s "$ws" | grep -Eq '^[0-9a-f]{40}$' || ! printf %s "$wf" | grep -Eq '^docs/reviews/[A-Za-z0-9._-]+\.md$'; then stopped="$stopped  waived review '$w': not <40-character commit>=docs/reviews/<file>.md.\n"; continue; fi
+  for b in $BR; do
+    case "$b" in
+      *@*) [ "${b##*@}" = "$ws" ] && tok_task=1 ;;
+      *~*:*=*) rest="${b##*~}"; [ "${rest%%:*}" = "$ws" ] && [ "${rest#*=}" = "$wf" ] && tok_rev=1 ;;
+    esac
+  done
+  if [ "$tok_task$tok_rev" != 11 ]; then stopped="$stopped  waived review $wf of $ws: the wave does not merge both that commit and that review branch's file.\n"; continue; fi
+  WAIVED_OK="$WAIVED_OK $ws=$wf"
+done
 if [ -n "$stopped" ]; then
   echo "WAVE-STOPPED: nothing was merged or pushed. A branch on origin is not what was reviewed, or cannot be bound to a review:"
   printf '%b' "$stopped"
@@ -178,7 +203,10 @@ if [ -f "$(git rev-parse --git-common-dir)/factory/standard.json" ] || git show 
 # the guardrails, or this clone's installed standard). A branch merged below cannot choose its own gate path.
 cfgget() { git show "refs/remotes/origin/$MAIN:factory.config.json" 2>/dev/null | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{try{const v=process.argv[1].split(".").reduce((o,k)=>o?.[k],JSON.parse(s));process.stdout.write(typeof v==="boolean"||(typeof v==="string"&&process.argv[2]!=="bool")?String(v):"")}catch{}})' "$1" "${2:-}"; }
 # docsOnly.enabled counts only as the JSON boolean true, as in docsonly.mjs and the push gate: the string "true" is not on.
-DOCS_ENABLED=$(cfgget docsOnly.enabled bool); FORMAT_CHECK_CMD=$(cfgget commands.formatCheck); MARKDOWN_CHECK_CMD=$(cfgget commands.markdownCheck)
+DOCS_ENABLED=$(cfgget docsOnly.enabled bool)
+# A wave that carries a waived (failed) review is judged by the full gate and nothing lighter.
+[ -z "${WAIVED_OK# }" ] || { [ "$DOCS_ENABLED" = true ] && echo "GATE-PATH full: a waived review is in this wave"; DOCS_ENABLED=false; }
+FORMAT_CHECK_CMD=$(cfgget commands.formatCheck); MARKDOWN_CHECK_CMD=$(cfgget commands.markdownCheck)
 if blank "$FORMAT_CHECK_CMD"; then FORMAT_CHECK_CMD=""; fi; if blank "$MARKDOWN_CHECK_CMD"; then MARKDOWN_CHECK_CMD=""; fi
 DOCS_CHECK=""
 if [ "$DOCS_ENABLED" = true ]; then
@@ -206,7 +234,16 @@ for entry in "${MERGES[@]}"; do
   # The merged commits passed the commit hooks with their own ADR references; carry those references into the merge
   # message, so a task that touches a protected file (an ADR, AGENTS.md, a hook) merges without a second approval.
   refs=$(git log --format=%B "refs/remotes/origin/$MAIN..$m" | grep -oE 'ADR-[0-9]{4}' | sort -u | tr '\n' ' ')
-  git commit -q -m "Merge $name ($TITLE)" -m "$SUMMARY" -m "Merged commit: $(git rev-parse "$m")" ${refs:+-m "Refs: $refs"} ${TRAILER:+-m "$TRAILER"} > "$LOGS/wave-commit.log" 2>&1 \
+  waivedfiles=$(for w in $WAIVED_OK; do [ "${w%%=*}" = "$m" ] && printf '%s ' "${w#*=}"; done)
+  # What the waiver record says (WAVE_WAIVED_NOTES, from wave.mjs, base64): printed as a RECORD of a claim, never as a proof. ADR-NNNN is made harmless: no free text approves a protected file.
+  waivedrecord=""
+  for w in $WAIVED_OK; do
+    [ "${w%%=*}" = "$m" ] || continue
+    note=""
+    for n in ${WAVE_WAIVED_NOTES:-}; do case "$n" in "$w":*) note=$(printf %s "${n#*:}" | base64 -d 2>/dev/null | tr -d '\000-\037' | head -c 1500 | sed 's/ADR-\([0-9][0-9][0-9][0-9]\)/ADR_\1/g') ;; esac; done
+    waivedrecord="${waivedrecord:+$waivedrecord }Record for ${w#*=}: ${note:-(no note was passed)}."
+  done
+  git commit -q -m "Merge $name ($TITLE)" -m "$SUMMARY" -m "Merged commit: $(git rev-parse "$m")" ${waivedfiles:+-m "Waived review: ${waivedfiles% } (it still says Verdict: fail). The line below is a RECORD, not a proof: it is what the caller of this script passed in (wave.mjs copies it from the Controller's journal), this script did not read the journal, and nobody checked who decided or that the classes in the findings file are right."} ${waivedfiles:+-m "$waivedrecord"} ${refs:+-m "Refs: $refs"} ${TRAILER:+-m "$TRAILER"} > "$LOGS/wave-commit.log" 2>&1 \
     || { strip < "$LOGS/wave-commit.log" | grep -a -iE "fail|protected|factory" | head -6; echo "COMMIT-FAILED for $name"; exit 1; }
   echo "merged $name at $m"; merged=$((merged + 1))
 done
@@ -238,4 +275,5 @@ fi
 fi
 git log --oneline -3
 arm
-if git push origin "integration:$MAIN" > "$LOGS/wave-push.log" 2>&1; then strip < "$LOGS/wave-push.log" | tail -2; echo "PUSHED $MAIN"; else strip < "$LOGS/wave-push.log" | grep -a -E '^\[factory\]|^[0-9a-f]{10}|^remote:|^error:|^fatal:' | head -12; echo "PUSH-FAILED"; exit 1; fi
+# FACTORY_WAIVED reaches the pre-push hook for this one push only, and only with what the check above bound.
+if FACTORY_WAIVED="${WAIVED_OK# }" git push origin "integration:$MAIN" > "$LOGS/wave-push.log" 2>&1; then strip < "$LOGS/wave-push.log" | tail -2; echo "PUSHED $MAIN"; else strip < "$LOGS/wave-push.log" | grep -a -E '^\[factory\]|^[0-9a-f]{10}|^remote:|^error:|^fatal:' | head -12; echo "PUSH-FAILED"; exit 1; fi

@@ -22,13 +22,16 @@ Decision: <needed, recorded, or accepted ADR>
 
 ## Prefactoring
 ## Findings
+### F<n> [blocker|major|minor] [<class>] <title>
 ```
+
+Every finding of a spec review and of a conformance review is one heading `### F<n> [blocker|major|minor] [<class>] <title>` with exactly one class from the fixed list of `docs/review-protocol.md` ("Findings file format"): `security`, `data-corruption`, `input-loss`, `gate` (never waivable) or `functional`, `process`, `style`. The Controller reads it strictly; a finding without a class can never be waived. The class is your own claim and no code checks it: name the true one.
 
 ## After the build: conformance (levels 2 and 3)
 
 Coarse boundary check only (decided by {{HUMAN}}, {{DATE}}): no new port, contract, durable store or data flow without a recorded approval, and no forbidden imports. Do not hunt logic edge cases; note them as debt candidates. Focused checks only (typecheck, lint, dependency rules, reading the diff); no full suites. Security and load observations are debt unless a change could reach a real external system.
 
-Record the full branch-tip SHA. Commit only `docs/reviews/<task>-architecture-conformance.md` with `Verdict: pass|fail`. A Tester pass remains independently required.
+Record the full branch-tip SHA. Commit only `docs/reviews/<task>-architecture-conformance.md` with `Reviewed commit:`, `Verdict: pass|fail` and the findings in the classed form above. A Tester pass remains independently required.
 
 ## After each merged wave: stewardship
 
