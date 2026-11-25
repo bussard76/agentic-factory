@@ -9,7 +9,9 @@ import readline from "node:readline/promises";
 import { check } from "../controller/cli.mjs";
 import { controllerPlaces, controllerSession, createArgs, createdHandle, locateController } from "../controller/controller-terminal.mjs";
 import { heartbeatCronCheckScript, heartbeatCronScript, heartbeatLabel, heartbeatPlist, statusWatchCronScript, statusWatchLabel, statusWatchPlist } from "./heartbeat-cron.mjs";
-import { staleLimit } from "../front-agent/hosts.mjs";
+import { hostName, isThisMachine, machineId, markerFile, ownEntry, readMarker, sshUser, staleLimit } from "../front-agent/hosts.mjs";
+import { patchJson } from "./json-patch.mjs";
+import { RECORD, diffKeys, hash16, isConfig, isEditable, missingKeys, planPlacement, probeSource } from "./placement.mjs";
 import { applyReadGrants } from "./read-grants.mjs";
 import { copyTreeAtomic, withLock, writeFileAtomic } from "./safe-write.mjs";
 
@@ -29,6 +31,7 @@ const USAGE = {
   selfcheck: ["", "(factory repo) syntax and placeholder check"],
   status: ["[--json]", "prerequisites, setup, the work in the repo and the phase with the next step (--json for the Front agent)"],
   start: ["[--keep-own-hooks]", "user-level skills, Front agent and Controller bundles, gate, load log and the Controller's session in Orca"],
+  "this-machine": ["[<ssh target>] [--forget]", "say that a configured remote host IS the machine this runs on (its ssh target does not resolve here): the CLI then does locally what it would do over ssh. No target: show what is recorded. --forget: take the record away"],
 };
 const commandHelp = (c) => `Usage: agentic-factory ${c}${USAGE[c][0] ? ` ${USAGE[c][0]}` : ""}\n  ${USAGE[c][1]}\nEvery command also takes --yes (take defaults).`;
 if (Object.hasOwn(USAGE, cmd)) check(args.slice(1), commandHelp(cmd), `agentic-factory ${cmd}`);
@@ -439,13 +442,13 @@ function templateVars(c) {
     PREVIEW_URL: c.hosts.frontAgent.preview.enabled ? `http://localhost:${c.hosts.frontAgent.preview.port}` : "n/a", PREVIEW_PORT: String(c.hosts.frontAgent.preview.port), PREVIEW_CMD: c.hosts.frontAgent.preview.command, PREVIEW_ENV_FILE: c.hosts.frontAgent.preview.envFile ?? "", INSTALL_CMD: c.commands.install ?? "",
     SSH_ALIAS: remote?.ssh ?? "local",
     CONTROLLER_LOCATION: ctl.kind === "local" ? `on this machine (\`${c.hosts.controller.controllerDir ?? "~/controller"}\`)` : `on the server \`${ctl.name}\` (ssh alias \`${ctl.ssh}\`, \`${c.hosts.controller.controllerDir ?? "~/controller"}\`)`,
-    STATUS_READ: ctl.kind === "local" ? "a file on this machine" : `on \`${ctl.name}\`: \`ssh ${ctl.ssh} cat ${c.hosts.controller.controllerDir ?? "~/controller"}/status.md\``,
+    STATUS_READ: ctl.kind === "local" ? "a file on this machine" : `on \`${ctl.name}\`: \`ssh ${ctl.ssh} cat ${c.hosts.controller.controllerDir ?? "~/controller"}/status.md\` (on \`${ctl.name}\` itself, where that alias does not resolve: \`cat ${c.hosts.controller.controllerDir ?? "~/controller"}/status.md\`)`,
     FRONT_BOT: c.hosts.frontAgent?.bot || "<bot name>",
     // Empty for the terminal Front agent, so its CONTROLLER.md stays as it was.
     FRONT_BOT_EVENTS: frontKind(c) !== "orca-bot" ? "" : `\n- **With an Orca bot as the Front agent** (\`${c.hosts.frontAgent.bot || "<bot name>"}\`): on the same events, append the same line to \`${c.hosts.controller.controllerDir ?? "~/controller"}/front-events.log\`${ctl.kind === "local"
       ? ` and send it to the bot: \`orca orchestration send --to "bot:${c.hosts.frontAgent.bot || "<bot name>"}" --type question --subject "<KIND>" --body "<the line>"\` for a new "Needs ${c.project.humanName}" item or a block, \`--type status\` for every other event. \`inbox.md\` stays the record of orders.`
       : `. Do not send it to the bot: \`bot:\` only reaches bots on the same machine, and a server cannot send to a client. The bot reads your \`status.md\` over ssh every 5 minutes, so keep "Needs ${c.project.humanName}" and "Problems" there current; it sends orders through \`inbox.md\` and text into your terminal.`} A question the bot can answer from ${c.project.humanName}'s recorded decisions, without ${c.project.humanName}, goes into \`status.md\` under \`## Needs front agent\`.`,
-    INBOX_CMD: ctl.kind === "local" ? `\`cat >> ${c.hosts.controller.controllerDir ?? "~/controller"}/inbox.md\`` : `\`ssh ${ctl.ssh} 'cat >> ${c.hosts.controller.controllerDir ?? "~/controller"}/inbox.md'\``,
+    INBOX_CMD: ctl.kind === "local" ? `\`cat >> ${c.hosts.controller.controllerDir ?? "~/controller"}/inbox.md\`` : `\`ssh ${ctl.ssh} 'cat >> ${c.hosts.controller.controllerDir ?? "~/controller"}/inbox.md'\` (on \`${ctl.name}\` itself: \`cat >> ${c.hosts.controller.controllerDir ?? "~/controller"}/inbox.md\`)`,
     PREVIEW_PLIST: `de.${c.project.name}.preview`, PREVIEW_LABEL: `de.${c.project.name}.preview`, PREVIEW_SCRIPT: `${os.homedir()}/front-agent/${c.project.name}/preview-update.sh`, HOME: os.homedir(),
     FACTORY_CLI: `node ${path.join(ROOT, "bin/agentic-factory.mjs").replace(os.homedir(), "~")}`,
     COMMIT_PATTERN: `mv .env ../.${c.project.name}.env; git add …; git commit …; mv ../.${c.project.name}.env .env`,
@@ -507,7 +510,7 @@ exit 0
 }
 function installStandardOnRemotes(c) {
   let failed = 0;
-  for (const h of c.hosts.workers.filter((h) => h.kind === "remote")) { const problem = installStandardOn(h, c); if (problem) { failed++; say(`  ${h.name}: ${problem}. Its clone keeps the older standard until this works.`); } else say(`  ${h.name}: standard installed, hooks armed`); }
+  for (const h of hostsOf(c).filter((h) => h.kind === "remote" || h.here)) { const problem = installStandardOn(h, c); if (problem) { failed++; say(`  ${h.name}: ${problem}. Its clone keeps the older standard until this works.${h.here ? "" : selfHint(h, c)}`); } else say(`  ${h.name}: standard installed, hooks armed${h.here ? " (this machine)" : ""}`); }
   return failed;
 }
 // What git would really run, checked by the same code the wave relies on.
@@ -535,6 +538,15 @@ function installStandard() {
 }
 // Another host's clone: same files, armed there. Git hooks there run under the same login shell the workers use.
 function installStandardOn(h, c) {
+  if (h.here) {
+    // This machine: the clone is a directory here. The one this runs in already has the standard (installStandard ran first).
+    const dir = cloneDir(h, c);
+    if (!fs.existsSync(path.join(dir, ".git"))) return `no clone at ${dir.replace(os.homedir(), "~")}`;
+    if (sameRepo(dir)) return "";
+    try { fs.cpSync(path.join(cwd, ".factory/standard"), path.join(dir, ".git/factory"), { recursive: true, force: true }); } catch (error) { return `copy failed: ${error.message}`; }
+    const arm = spawnSync("node", [".git/factory/arm.mjs", "--all"], { cwd: dir, encoding: "utf8" });
+    return arm.status === 0 ? "" : `${(arm.stderr || "arming failed").trim().split("\n").pop().slice(0, 200)}`;
+  }
   const dir = h.projectDir ?? `${h.projectsDir}/${c.project.name}`;
   const clone = spawnSync("ssh", [...sshArgsFor(h), `test -d ${dir}/.git`], { encoding: "utf8", timeout: 60000 });
   if (clone.status !== 0) return `no clone at ${dir}, or the host cannot be reached`;
@@ -675,11 +687,158 @@ function appendGitignore(lines) { const p = ".gitignore"; const cur = fs.existsS
 
 // The Controller's handbook of this project (the copy `update` kept or wrote, which `start` installs): one loud line when it calls
 // cleanup without --apply. A copy changed locally stays on update, so scripts and handbook can disagree without anyone seeing.
+// `text` is the handbook that is actually in use: the one in the Controller directory (kept there when the project changed it), or the
+// bundle's, which is what start installs where nothing was changed.
 function warnCleanupTrap(where = ".factory/controller/CONTROLLER.md", text) {
   const f = ".factory/controller/CONTROLLER.md";
-  const calls = cleanupCallsWithoutApply(text ?? (fs.existsSync(f) ? fs.readFileSync(f, "utf8") : ""));
+  const body = text ?? (fs.existsSync(f) ? fs.readFileSync(f, "utf8") : "");
+  if (!body) return;
+  const calls = cleanupCallsWithoutApply(body);
   if (calls.length) say(`\nWARNING: ${where} calls cleanup without --apply (\`${calls[0]}\`): ${CLEANUP_TRAP}.`);
-  if (text === undefined && fs.existsSync(f)) { const missing = handbookMissing(fs.readFileSync(f, "utf8")); if (missing.length) say(`\nWARNING: ${where} does not mention ${missing.join(" and ")}: ${HANDBOOK_NOTE}.`); }
+  const missing = handbookMissing(body);
+  if (missing.length) say(`\nWARNING: ${where} does not mention ${missing.join(" and ")}: ${HANDBOOK_NOTE}.`);
+}
+
+// --- bundles at their destinations --------------------------------------------------------------------
+// The Controller directory, the Front agent's directory and the gate on other hosts get the bundles' files; a file the project changed
+// there is kept (bin/placement.mjs has the rule). update looks and says; start places.
+// The manifest as the destinations are judged by it: its files, the hashes `update` replaced (previous) and, for an installation that
+// predates both the record and `previous`, the hashes the committed manifest held in its last 20 versions (what an older update wrote).
+let manifestCache;
+const manifestNow = () => {
+  if (manifestCache) return manifestCache;
+  let m; try { m = JSON.parse(fs.readFileSync(".factory/manifest.json", "utf8")); } catch { m = { files: {} }; }
+  const previous = Object.fromEntries(Object.entries(m.previous ?? {}).map(([k, v]) => [k, [...v]]));
+  for (const sha of sh("git", ["log", "-n", "20", "--format=%H", "--", ".factory/manifest.json"]).split("\n").filter(Boolean)) {
+    try { for (const [k, v] of Object.entries(JSON.parse(sh("git", ["show", `${sha}:.factory/manifest.json`])).files ?? {})) if (typeof v === "string" && v !== "user") (previous[k] ??= []).push(v); } catch { /* an unreadable version tells nothing */ }
+  }
+  return (manifestCache = { ...m, previous });
+};
+const quoteSh = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
+const bundleFiles = (bundle, only) => new Map(walk(bundle).filter((rel) => !only || only.includes(rel)).sort().map((rel) => [rel, fs.readFileSync(path.join(bundle, rel))]));
+const rsyncShell = (h) => `ssh ${sshArgsFor(h).slice(0, -1).map((a) => JSON.stringify(a)).join(" ")}`;
+// What a destination holds (placement.probeSource, run by node there); null when the host did not answer or answered nonsense.
+function probeDest(host, dir, rels, read = []) {
+  const src = probeSource(rels, read);
+  const r = host.kind === "local"
+    ? spawnSync(process.execPath, ["--input-type=module", "-", dir], { input: src, encoding: "utf8", timeout: 30000 })
+    : spawnSync("ssh", [...sshArgsFor(host), `bash -lc 'node --input-type=module - "$0"' ${quoteSh(dir)}`], { input: src, encoding: "utf8", timeout: 30000 });
+  try { const p = JSON.parse(String(r.stdout ?? "").trim().split("\n").pop()); return p?.files ? p : null; } catch { return null; }
+}
+// Looks at a destination and, with `apply`, installs the bundle there (the rule in bin/placement.mjs): code always, as one set; the files people
+// edit only where nothing says the project changed them. Copies that are replaced without being a known template version are saved first.
+// Returns the plan, or { unreachable: true }; the plan has `error` when something failed (and then the record is not written).
+const backupDate = () => new Date().toISOString().slice(0, 10);
+function placeBundle({ host, dir, bundle, only, apply, read = [] }) {
+  const files = bundleFiles(bundle, only);
+  const execs = new Set([...files.keys()].filter((rel) => fs.statSync(path.join(bundle, rel)).mode & 0o100));
+  const probe = probeDest(host, dir, [...files.keys()], read);
+  if (!probe) return { unreachable: true };
+  const plan = { ...planPlacement({ files, execs, probe, manifest: manifestNow(), bundle }), texts: probe.texts, files, dirExists: probe.dirExists, bundleDir: bundle };
+  plan.missing = plan.kept.some((k) => isConfig(k.rel)) ? missingKeys(bundle, probe.texts?.["factory.config.json"] ?? "") : [];
+  if (apply && plan.missing.length) { plan.error = `the config there lacks ${plan.missing.join(", ")}, which the scripts cannot run without`; return plan; }
+  const date = backupDate();
+  if (!apply) { plan.backedUp = plan.backups.map((b) => ({ ...b, name: `${b.rel}.backup-${date}` })); return plan; }
+  const run = (script) => (host.kind === "local" ? spawnSync("sh", ["-c", script], { encoding: "utf8" }) : spawnSync("ssh", [...sshArgsFor(host), script], { encoding: "utf8" }));
+  const stage = fs.mkdtempSync(path.join(os.tmpdir(), "af-place-"));
+  const copyOut = (from) => {
+    if (host.kind === "local") { copyTreeAtomic(from, expandHome(dir)); return ""; }
+    const r = spawnSync("rsync", ["-a", "-e", rsyncShell(host), `${from}/`, `${host.ssh}:${dir}/`], { encoding: "utf8" });
+    return r.status === 0 ? "" : (r.stderr || "rsync failed").trim().slice(0, 200);
+  };
+  try {
+    // 1. Save what is about to be replaced and is not a known template version (a numbered name when the day's name is taken).
+    plan.backedUp = [];
+    if (plan.backups.length) {
+      const list = plan.backups.map((b) => quoteSh(b.rel)).join(" ");
+      const r = run(`cd "${dir.replace(/^~(?=\/|$)/, "$HOME")}" && for f in ${list}; do n="$f.backup-${date}"; i=2; while [ -e "$n" ]; do n="$f.backup-${date}-$i"; i=$((i+1)); done; cp -p "$f" "$n" && printf '%s\\t%s\\n' "$f" "$n" || exit 1; done`);
+      if (r.status !== 0) { plan.error = `could not save the copies that are about to be replaced (${(r.stderr || "").trim().slice(0, 150)}); nothing was installed`; return plan; }
+      const names = Object.fromEntries(String(r.stdout).trim().split("\n").map((l) => l.split("\t")));
+      plan.backedUp = plan.backups.map((b) => ({ ...b, name: names[b.rel] ?? `${b.rel}.backup-${date}` }));
+    }
+    // 2. The files, then a look at what is there now, and only then the record: it must never say "installed" for a file that is not.
+    const put = (root, rel, bytes, mode) => { const to = path.join(root, rel); fs.mkdirSync(path.dirname(to), { recursive: true }); fs.writeFileSync(to, bytes, { mode }); };
+    for (const rel of plan.install) put(stage, rel, files.get(rel), fs.statSync(path.join(bundle, rel)).mode & 0o777);
+    for (const k of plan.kept) put(stage, `${k.rel}.new`, files.get(k.rel), 0o644);
+    plan.error = copyOut(stage);
+    if (plan.error) return plan;
+    const after = probeDest(host, dir, [...files.keys()], []);
+    const stale = [...files.keys()].filter((rel) => !isEditable(bundle, rel) && (after?.files?.[rel] ?? null) !== hash16(files.get(rel)));
+    if (!after || stale.length) { plan.error = !after ? "the directory could not be read again after the copy" : `after the copy ${stale.length} script file(s) are still not the new version (${stale.slice(0, 4).join(", ")}${stale.length > 4 ? ", …" : ""})`; return plan; }
+    const last = fs.mkdtempSync(path.join(os.tmpdir(), "af-place-"));
+    try { put(last, RECORD, JSON.stringify({ factoryVersion: PKG.version, files: plan.record }, null, 2) + "\n", 0o644); plan.error = copyOut(last); } finally { fs.rmSync(last, { recursive: true, force: true }); }
+  } catch (error) { plan.error = error.message; }
+  finally { fs.rmSync(stage, { recursive: true, force: true }); }
+  return plan;
+}
+const placeWhere = (host, dir) => (host.kind === "local" ? dir : `${host.name}:${dir}`);
+// A kept config that lacks a key the scripts read without a default cannot run them: say which, and stop before anything runs with it.
+function stopIfBroken(plan, host, dir) {
+  if (!plan?.missing?.length) return;
+  const at = placeWhere(host, dir);
+  say(`\nSTOPPED: ${at}/factory.config.json has no ${plan.missing.join(", ")}, which the scripts cannot run without. It was not replaced and nothing was installed or started. Add the key (the project's copy is ${plan.bundleDir}/factory.config.json in the project), or take the project's copy: cp ${plan.bundleDir}/factory.config.json ${at.replace(/^[^:]*:/, "")}/factory.config.json`);
+  process.exit(1);
+}
+// The lines for what was kept and what was replaced with a copy saved. beside: start did it (the new version lies beside the kept file, the copies
+// exist); otherwise update says what start will do.
+function sayKept(plan, host, dir, beside) {
+  const at = placeWhere(host, dir), here = at.replace(/^[^:]*:/, "");
+  const diffOf = (rel, oldText) => { try { return diffKeys(JSON.parse(oldText ?? "{}"), JSON.parse(plan.files.get(rel).toString("utf8"))); } catch { return []; } };
+  const keys = (diff) => diff.map((d) => `\n           ${d.key} (there ${d.here}, project ${d.bundle})`).join("");
+  for (const k of plan.kept) {
+    // start puts the new version where update would have, unless update already did: there it may be the template's, and this file the project's own.
+    if (beside) {
+      const n = path.join(cwd, ".factory/new", plan.bundleDir, k.rel), pure = manifestNow().files?.[`${plan.bundleDir}/${k.rel}`] === hash(plan.files.get(k.rel).toString("utf8"));
+      if (pure || !fs.existsSync(n)) { fs.mkdirSync(path.dirname(n), { recursive: true }); fs.writeFileSync(n, plan.files.get(k.rel)); }
+    }
+    if (k.rel !== "factory.config.json") { say(`  keep   ${at}/${k.rel} (changed there since the template installed it)${beside ? ` → new version beside it: ${at}/${k.rel}.new` : ""}; also in .factory/new/${plan.bundleDir}/${k.rel}`); continue; }
+    // The Controller's own config is whole its own: tuned there (models, caps, calibration), so it is neither replaced nor merged.
+    const diff = diffOf(k.rel, plan.texts["factory.config.json"]);
+    say(`  keep   ${at}/factory.config.json (it differs from the project's copy, so it stays as it is: a config is never replaced once it differs, and nothing is merged)${diff.length ? `. It differs from the project's in these ${diff.length} keys:${keys(diff)}` : ""}`);
+    say(`         To use the project's copy instead: cp ${here}/factory.config.json.new ${here}/factory.config.json${host.kind === "local" ? "" : ` (on ${host.name})`}${beside ? "" : "; start writes it beside the kept file"}`);
+  }
+  const done = beside ? plan.backedUp : plan.backups.map((b) => ({ ...b, name: `${b.rel}.backup-${backupDate()}` }));
+  const docs = done.filter((b) => b.editable), code = done.filter((b) => !b.editable);
+  if (docs.length) {
+    say(`\nWARNING: ${at}: ${docs.map((b) => b.rel).join(", ")} ${beside ? (docs.length > 1 ? "were" : "was") : "will be"} replaced by the new version, because nothing says whether the project changed ${docs.length > 1 ? "them" : "it"}: ${docs.length > 1 ? "they match" : "it matches"} no version the template installed before and there is no record of what it installed here. The copy ${beside ? "is" : "will be"} saved beside it (${docs.map((b) => b.name).join(", ")}). If ${docs.length > 1 ? "they were" : "it was"} edited, carry the changes over from the copy; if not, this is simply up to date and the copy can go.`);
+    for (const b of docs.filter((b) => b.rel === "factory.config.json")) { const diff = diffOf(b.rel, plan.texts["factory.config.json"]); if (diff.length) say(`         ${b.rel} differed from the project's in these ${diff.length} keys:${keys(diff)}`); }
+  }
+  // start verified the copy before it got here: say that the installation is one version.
+  if (beside) say(`  ${at}: all ${[...plan.files.keys()].filter((rel) => !isEditable(plan.bundleDir, rel)).length} script/code files are the new version (factory ${PKG.version}), checked after the copy${plan.kept.length ? `; kept as the project's own: ${plan.kept.map((k) => k.rel).join(", ")}` : ""}`);
+  if (code.length) say(`\nNOTE: ${at}: ${code.length} script/code file(s) ${beside ? "were" : "will be"} replaced by the new version (code is always installed as one set; no installation runs two versions) and ${code.length > 1 ? "were" : "was"} not a version the template installed before. The copies ${beside ? "are" : "will be"} saved beside them:\n${code.map((b) => `  ${b.rel} → ${b.name}`).join("\n")}`);
+}
+const destinations = (c) => {
+  const host = controllerHost(c) ?? { kind: "local", name: "local" }, dir = c.hosts.controller.controllerDir ?? "~/controller";
+  return [
+    { label: "Controller directory", host, dir, bundle: ".factory/controller" },
+    { label: "Front agent directory", host: { kind: "local", name: "local" }, dir: `~/front-agent/${c.project.name}`, bundle: ".factory/front-agent" },
+  ];
+};
+// update: looks at the destinations, offers the new version of a file changed there in .factory/new, and checks the handbook in use.
+// Returns how many files it kept and whether it saw the Controller's handbook.
+function reportDestinations(c, offered) {
+  let kept = 0, sawHandbook = false;
+  for (const d of destinations(c)) {
+    const plan = placeBundle({ ...d, apply: false, read: ["CONTROLLER.md", "factory.config.json"] });
+    if (plan.unreachable) { say(`  ${d.label} on ${d.host.name}: not looked at (the host did not answer), so a file changed there is not noticed now; start looks again`); continue; }
+    let owner; try { owner = JSON.parse(plan.texts["factory.config.json"] ?? "{}").project?.name; } catch { /* no owner to compare */ }
+    if (owner && owner !== c.project.name) continue;   // another project's Controller directory: start refuses it, update has nothing to say
+    plan.bundleDir = d.bundle;
+    sayKept(plan, d.host, d.dir, false);
+    for (const k of plan.kept) {
+      const target = path.join(cwd, ".factory/new", d.bundle, k.rel);
+      if (!offered.has(`${d.bundle}/${k.rel}`)) { fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, plan.files.get(k.rel)); }
+      kept++;
+    }
+    if (d.bundle === ".factory/controller" && plan.files.has("CONTROLLER.md")) {
+      sawHandbook = true;
+      // The handbook in use is the one in the Controller directory; where none is installed yet, the bundle's is what start will install.
+      // A kept one is named by where it lies; any other is replaced by the bundle's at start, so the bundle's is what is checked.
+      if (plan.kept.some((k) => k.rel === "CONTROLLER.md")) warnCleanupTrap(`${placeWhere(d.host, d.dir)}/CONTROLLER.md`, plan.texts["CONTROLLER.md"]);
+      else sawHandbook = false;
+    }
+  }
+  return { kept, sawHandbook };
 }
 // --- update ----------------------------------------------------------------------------------------
 async function update() {
@@ -689,7 +848,8 @@ async function update() {
   await initNonInteractiveRefresh();
 }
 async function initNonInteractiveRefresh() {
-  const c = JSON.parse(fs.readFileSync("factory.config.json", "utf8"));
+  const rawConfig = fs.readFileSync("factory.config.json", "utf8");
+  const c = JSON.parse(rawConfig), configBefore = structuredClone(c);
   // Projects adopted before adoptedOn existed: derive the adoption day once (first commit of the manifest, else the
   // adoption ADR's Date line, else today) and persist it, so the recorded decision dates stop following the clock.
   if (!c.project.adoptedOn) {
@@ -702,18 +862,26 @@ async function initNonInteractiveRefresh() {
   // hooks: keep a recorded mode; fill in the directory and hooksPath for configs written by an older factory.
   const setup = hooksSetup();
   c.hooks = { mode: c.hooks?.mode ?? hookMode(setup), dir: c.hooks?.dir ?? c.hooks?.ownDir ?? setup.dir, hooksPath: c.hooks?.hooksPath ?? (c.hooks?.mode === "own" ? setup.hooksPath : c.hooks?.ownDir ?? setup.hooksPath), layout: c.hooks?.layout ?? setup.layout };
-  fs.writeFileSync("factory.config.json", JSON.stringify(c, null, 2) + "\n");
+  // The tracked config is the project's file, and its formatter's too: only the values that change are changed, in the text it has
+  // (indentation, key order, short arrays on one line, the trailing newline stay), and nothing is written when nothing changes.
+  const patchedConfig = patchJson(rawConfig, configBefore, c);
+  if (patchedConfig !== rawConfig) fs.writeFileSync("factory.config.json", patchedConfig);
   const vars = templateVars(c);
   const manifest = JSON.parse(fs.existsSync(".factory/manifest.json") ? fs.readFileSync(".factory/manifest.json", "utf8") : '{"files":{}}');
   let written = 0, kept = 0;
+  const offered = new Set();   // bundle files whose new version this run already put in .factory/new
   const write = (rel, content, mode) => {
     const target = path.join(cwd, rel);
     if (fs.existsSync(target)) {
       const current = fs.readFileSync(target, "utf8");
       if (current === content) return;
       // Unknown to the manifest, or changed since we generated it: user-owned, keep it.
-      if (!manifest.files[rel] || manifest.files[rel] !== hash(current)) { kept++; fs.mkdirSync(path.dirname(path.join(cwd, ".factory/new", rel)), { recursive: true }); fs.writeFileSync(path.join(cwd, ".factory/new", rel), content); say(`  keep   ${rel} (user-owned) → new version in .factory/new/${rel}`); return; }
+      if (!manifest.files[rel] || manifest.files[rel] !== hash(current)) { kept++; offered.add(rel); fs.mkdirSync(path.dirname(path.join(cwd, ".factory/new", rel)), { recursive: true }); fs.writeFileSync(path.join(cwd, ".factory/new", rel), content); say(`  keep   ${rel} (user-owned) → new version in .factory/new/${rel}`); return; }
     }
+    // The hash this replaces is what the template installed at the destinations (start) until now: kept, so that a destination
+    // that still holds it is known to be unchanged (bin/placement.mjs).
+    const old = manifest.files[rel];
+    if (old && old !== "user" && old !== hash(content) && /^\.factory\/(controller|front-agent)\//.test(rel)) manifest.previous = { ...manifest.previous, [rel]: [old, ...(manifest.previous?.[rel] ?? []).filter((h) => h !== old)].slice(0, 5) };
     fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, content); if (mode) fs.chmodSync(target, mode); manifest.files[rel] = hash(content); written++; say(`  update ${rel}`);
   };
   const mode = c.hooks.mode, hdir = c.hooks.dir;
@@ -747,8 +915,12 @@ async function initNonInteractiveRefresh() {
   // Every checkout of an adopted project (a fresh clone, the server checkout the waves push from) must arm the hooks:
   // core.hooksPath is per clone, not committed. own mode keeps its own setting.
   if (!minimal(c) && mode !== "own" && fs.existsSync(path.join(hdir, "pre-commit"))) sh("git", ["config", "core.hooksPath", c.hooks.hooksPath]);
+  // Files the project changed where the template put them (the Controller directory, the Front agent's): offered like the ones changed here.
+  laptopNote(c);
+  const dest = reportDestinations(c, offered);
+  kept += dest.kept;
   say(`${written} updated, ${kept} kept (locally changed). Review .factory/new/ and merge what you want.`);
-  warnCleanupTrap();
+  if (!dest.sawHandbook) warnCleanupTrap();
 }
 
 // --- doctor ----------------------------------------------------------------------------------------
@@ -757,7 +929,12 @@ function doctor() {
   const ok = (m) => say(`OK      ${m}`), bad = (m) => { say(`MISSING ${m}`); fail++; }, info = (m) => say(`info    ${m}`);
   const major = Number(process.versions.node.split(".")[0]); major >= 22 ? ok(`node ${process.versions.node}`) : bad(`node >= 22 (have ${process.versions.node})`);
   if (!fs.existsSync("factory.config.json")) { bad("factory.config.json (run init)"); process.exit(1); }
-  const c = JSON.parse(fs.readFileSync("factory.config.json", "utf8")); ok(`factory.config.json (project ${c.project.name}, factory ${c.factoryVersion})`);
+  const c = JSON.parse(fs.readFileSync("factory.config.json", "utf8")); ok(`factory.config.json (project ${c.project.name})`);
+  // The version that is installed is the one running this; the config records the one that wrote it, and update does not change that.
+  ok(`factory ${PKG.version} installed (${path.join(ROOT, "bin/agentic-factory.mjs").replace(os.homedir(), "~")})`);
+  if (c.factoryVersion && c.factoryVersion !== PKG.version) info(`factory.config.json records factory ${c.factoryVersion} (the version that wrote it; update leaves it as it is), this is ${PKG.version}`);
+  { const rendered = (() => { try { return JSON.parse(fs.readFileSync(".factory/manifest.json", "utf8")).factoryVersion; } catch { return undefined; } })(); if (rendered && rendered !== PKG.version) info(`this project's files were last rendered by factory ${rendered}, this is ${PKG.version}: run update`); }
+  laptopNote(c);
   if (minimal(c)) doctorStandard(ok, bad, info);
   else doctorTracked(c, ok, bad, info);
   if (watchRequired(c) && readWatchProblem(c)) info(`status watch cannot reach the terminal: ${readWatchProblem(c)}`);
@@ -774,6 +951,19 @@ function doctor() {
   }
   { const hb = handbookStatus(c); if (hb.problem) bad(`handbook: ${hb.problem}`); else if (hb.handbookInstalled) ok("handbook: it knows inbox.mjs --done, restart.md and cycle.mjs end"); }
   { const cl = cleanupStatus(c); if (cl.problem) bad(`cleanup: ${cl.problem}`); else if (cl.unknown) info("cleanup: the Controller's host did not answer, so it is not known whether the handbook calls cleanup with --apply"); else if (!cl.handbookInstalled) info("cleanup: not checked, no Controller handbook is installed yet (run start)"); else ok("cleanup: the handbook calls it with --apply and no removable work waits"); }
+  // The installation must be one version: every script of the bundle is in the Controller directory (and the Front agent's) as the bundle has it,
+  // and the Controller's own config, which start keeps whole when it was tuned there, is listed key by key.
+  try {
+    for (const d of destinations(c)) {
+      if (!fs.existsSync(`${d.bundle}/${d.bundle.endsWith("controller") ? "CONTROLLER.md" : "FRONT_AGENT.md"}`)) continue;
+      const p = placeBundle({ ...d, apply: false, read: ["factory.config.json"] });
+      if (p.unreachable || !p.dirExists) continue;
+      const code = p.stale;
+      if (code.length) bad(`${d.label} (${placeWhere(d.host, d.dir)}): ${code.length} script/code file(s) are not the version of this project's bundle (${code.slice(0, 5).join(", ")}${code.length > 5 ? ", …" : ""}): the installation mixes versions. Run \`agentic-factory start\``);
+      else ok(`${d.label}: every script/code file is the bundle's (one version)`);
+      if (p.kept.some((k) => k.rel === "factory.config.json")) { const diff = diffKeys(JSON.parse(p.texts["factory.config.json"]), JSON.parse(p.files.get("factory.config.json").toString("utf8"))); info(`the Controller's factory.config.json (${placeWhere(d.host, d.dir)}) was changed there and differs from the project's in ${diff.length} keys: ${diff.map((x) => x.key).join(", ")}. start keeps it whole; \`cp factory.config.json.new factory.config.json\` there takes the project's`); }
+    }
+  } catch { /* nothing to compare */ }
   if (!heartbeatOn(c) && c.hosts.controller.heartbeat === false) info("heartbeat off (hosts.controller.heartbeat is false): you wake the Controller yourself");
   { const s = staleLimit(c); if (s.note) info(`stale limit: ${s.note}`); }
   if (!["terminal", "orca-bot"].includes(frontKind(c))) bad(`hosts.frontAgent.kind "${frontKind(c)}" (terminal or orca-bot)`);
@@ -792,23 +982,27 @@ function doctor() {
   const userSkillDirs = [path.join(os.homedir(), ".claude/skills"), path.join(os.homedir(), ".agents/skills")];
   for (const s of c.agents.runner === "orca" ? ["orchestration", "orca-cli", "writing-for-agents", "retro"] : ["writing-for-agents", "retro"]) userSkillDirs.some((d) => fs.existsSync(path.join(d, s, "SKILL.md"))) ? ok(`user-level skill ${s}`) : bad(`user-level skill ${s} (run: agentic-factory install-skills)`);
   if (c.steering.mode === "github-issues") has("gh") ? ok("gh CLI") : bad("gh CLI (steering is github-issues)");
-  for (const h of c.hosts.workers.filter((h) => h.kind === "remote")) {
+  for (const h of hostsOf(c).filter((h) => h.kind === "remote" || h.here)) {
     const sshArgs = [...(h.sshConfig ? ["-F", h.sshConfig.replace(/^~/, os.homedir())] : []), "-o", "ConnectTimeout=5", h.ssh];
-    const r = spawnSync("ssh", [...sshArgs, "echo ok"], { encoding: "utf8" });
-    r.stdout?.trim() === "ok" ? ok(`ssh ${h.ssh}`) : bad(`ssh ${h.ssh} reachable`);
+    // This machine (this-machine): its commands run here, not over an ssh alias that does not resolve.
+    const exec = (script) => (h.here ? spawnSync("sh", ["-c", script], { encoding: "utf8" }) : spawnSync("ssh", [...sshArgs, script], { encoding: "utf8" }));
+    const r = h.here ? { stdout: "ok" } : exec("echo ok");
+    if (h.here) ok(`${h.name} is this machine (recorded with \`this-machine ${h.ssh}\`): checked here, no ssh`);
+    else if (r.stdout?.trim() === "ok") ok(`ssh ${h.ssh}`);
+    else { bad(`ssh ${h.ssh} reachable`); const hint = selfHint(h, c); if (hint) info(hint.trim()); }
     if (r.stdout?.trim() === "ok" && h.name === c.hosts.controller.host) {
-      const sk = spawnSync("ssh", [...sshArgs, "for s in orchestration orca-cli writing-for-agents retro; do [ -f ~/.claude/skills/$s/SKILL.md ] || [ -f ~/.agents/skills/$s/SKILL.md ] || echo $s; done"], { encoding: "utf8" }).stdout.trim();
+      const sk = exec("for s in orchestration orca-cli writing-for-agents retro; do [ -f ~/.claude/skills/$s/SKILL.md ] || [ -f ~/.agents/skills/$s/SKILL.md ] || echo $s; done").stdout.trim();
       sk ? bad(`${h.name}: user-level skills missing: ${sk.split("\n").join(", ")} (copy ${c.hosts.controller.controllerDir ?? "~/controller"}/skills/* into ~/.claude/skills and ~/.agents/skills there)`) : ok(`${h.name}: user-level skills present`);
     }
     if (r.stdout?.trim() === "ok") {
       // Gates run on every worker host (their workers, their waves; capacity.mjs writes their slots): the project's gate must be there.
       const gd = c.hosts.controller.controllerDir ?? "~/controller";
-      const g = spawnSync("ssh", [...sshArgs, `[ -x ${gd}/gate ] && [ -f ${gd}/gate.mjs ] && [ -f ${gd}/factory.config.json ] && echo ok`], { encoding: "utf8" });
+      const g = exec(`[ -x ${gd}/gate ] && [ -f ${gd}/gate.mjs ] && [ -f ${gd}/factory.config.json ] && echo ok`);
       g.stdout?.trim() === "ok" ? ok(`${h.name}: this project's gate (${gd}/gate)`) : bad(`${h.name}: this project's gate is missing in ${gd} (run \`agentic-factory start\`: it copies gate, gate.mjs and factory.config.json to every worker host)`);
     }
     if (c.agents.runner === "orca" && !h.orcaRepoId) info(`${h.name}: orcaRepoId not set yet`);
   }
-  const ctl = c.hosts.workers.find((h) => h.name === c.hosts.controller.host);
+  const ctl = hostsOf(c).find((h) => h.name === c.hosts.controller.host);
   if (!ctl || ctl.kind === "local") {
     // This project's gate is its own file in its Controller directory; the shared ~/.local/bin/gate of older factories is not used by it.
     const own = expandHome(`${c.hosts.controller.controllerDir ?? "~/controller"}/gate`);
@@ -911,13 +1105,64 @@ const readConfig = () => (fs.existsSync("factory.config.json") ? JSON.parse(fs.r
 const isAdopted = () => fs.existsSync("factory.config.json") && (fs.existsSync(".factory/manifest.json") || minimal(readConfig()));
 const expandHome = (p) => String(p ?? "").replace(/^~(?=\/|$)/, os.homedir());
 const sshArgsFor = (h) => [...(h.sshConfig ? ["-F", expandHome(h.sshConfig)] : []), "-o", "ConnectTimeout=5", h.ssh];
+// Seen from the machine this runs on, a configured remote host that is this machine is local: its files are read and written directly,
+// its crontab is this user's, its Orca is the local one. That is resolved here, once, in the host lists the commands use; the config
+// itself and what is rendered from it (templateVars) still describe the host as the other machines see it, so a laptop and the server
+// render the same files. Which host is this machine is the marker's to say (`this-machine`, front-agent/hosts.mjs), never a guess.
+const eff = (h) => (h && h.kind === "remote" && isThisMachine(h) ? { ...h, kind: "local", orcaEnvironment: "", here: true } : h);
+const hostsOf = (c) => (c.hosts.workers ?? []).map(eff);
+const cloneDir = (h, c) => expandHome(h.projectDir ?? `${h.projectsDir ?? "~/projects"}/${c.project.name}`);
+// A worker host the config calls local, seen from a machine that is a configured remote host, is the human's own machine.
+const laptopNote = (c) => {
+  if (!hostsOf(c).some((h) => h.here)) return;
+  const others = hostsOf(c).filter((h) => h.kind === "local" && !h.here).map((h) => h.name);
+  if (others.length) say(`Note: ${others.join(", ")} (kind local in the config) ${others.length > 1 ? "are" : "is"} the human's own machine, not this one: its clone, standard and Front side are set up by running update and start there. Nothing is done for it from here.`);
+};
+// The one thing a person has to tell a machine: that a host with an ssh target it cannot resolve is itself.
+// True when `dir` is a clone (or worktree) of the repository this runs in: the same git common directory.
+const sameRepo = (dir) => {
+  try { const common = spawnSync("git", ["-C", dir, "rev-parse", "--git-common-dir"], { encoding: "utf8" }).stdout?.trim(); return Boolean(common) && fs.realpathSync(path.resolve(dir, common)) === gitCommonDir(); } catch { return false; }
+};
+const selfHint = (h, c) => {
+  if (!sameRepo(cloneDir(h, c))) return "";
+  return ` This checkout is that host's clone (${cloneDir(h, c).replace(os.homedir(), "~")}): if this machine is ${h.name}, say so once with \`agentic-factory this-machine ${h.ssh}\`, and the CLI works here without ssh.`;
+};
+function thisMachine() {
+  const c = fs.existsSync("factory.config.json") ? readConfig() : null;
+  const [, ...rest] = args, marker = readMarker(), target = rest.find((a) => !a.startsWith("--")) ?? "";
+  const save = (machines) => (machines.length ? writeFileAtomic(markerFile(), JSON.stringify({ machines }, null, 2) + "\n") : fs.rmSync(markerFile(), { force: true }));
+  const isOwn = (e) => e.machineId === machineId() && e.hostname === hostName();
+  if (!c && target && !flag("--forget")) { say("Run this in the project: it needs its factory.config.json to check that the host is this machine. Nothing recorded."); process.exit(1); }
+  if (flag("--forget")) {
+    // This machine's entry only (a home shared by several machines holds one entry each): one target, or all of them.
+    save(marker.machines.map((e) => (isOwn(e) ? { ...e, ssh: target ? e.ssh.filter((t) => t !== target) : [] } : e)).filter((e) => e.ssh.length));
+    say(target ? `${target} is no longer recorded as this machine.` : "Nothing is recorded as this machine any more."); return;
+  }
+  if (!target) {
+    const own = ownEntry(marker);
+    say(marker.missing ? "No host is recorded as this machine." : `Recorded in ${markerFile().replace(os.homedir(), "~")}: ${marker.machines.map((e) => `${e.hostname} (${e.ssh.join(", ")})${isOwn(e) ? " ← this machine" : ""}`).join("; ")}${own ? "" : ". None of it counts for this machine (another machine, another host name, or no machine id here)"}`);
+    if (c) for (const h of c.hosts.workers.filter((h) => h.kind === "remote")) say(`  ${h.name} (${h.ssh}): ${isThisMachine(h) ? "this machine, handled locally" : "another machine, reached over ssh"}`);
+    return;
+  }
+  if (!machineId()) { say("This machine has no machine id (/etc/machine-id, IOPlatformUUID), so a record could not be told from another machine's: nothing recorded."); process.exit(1); }
+  const hosts = (c?.hosts.workers ?? []).filter((h) => h.kind === "remote" && h.ssh === target);
+  // The target must also belong to a host whose clone is this repository: another machine that happens to be unreachable right now never qualifies.
+  if (hosts.length && !sameRepo(cloneDir(hosts[0], c))) { say(`${target} is the host ${hosts[0].name}, whose clone ${cloneDir(hosts[0], c).replace(os.homedir(), "~")} is not this repository on this machine, so this cannot be that host. Run this in its clone (hosts.workers[].projectDir or projectsDir/<project>). Nothing recorded.`); process.exit(1); }
+  if (c && !hosts.length) { say(`No remote host in this project's factory.config.json has the ssh target ${target} (${c.hosts.workers.filter((h) => h.kind === "remote").map((h) => `${h.name}: ${h.ssh}`).join("; ") || "no remote host"}). Nothing recorded.`); process.exit(1); }
+  if (sshUser(target) && sshUser(target) !== os.userInfo().username) { say(`${target} names the user ${sshUser(target)}, and this runs as ${os.userInfo().username}: that is not this login on this machine. Nothing recorded.`); process.exit(1); }
+  // An ssh target that answers from here is either another machine or one this machine can already reach: marking it would send the work to the wrong place.
+  const r = spawnSync("ssh", [...(hosts[0]?.sshConfig ? ["-F", expandHome(hosts[0].sshConfig)] : []), "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", target, "echo ok"], { encoding: "utf8" });
+  if (r.stdout?.trim() === "ok") { say(`${target} answers over ssh from here, so the CLI reaches it that way already (or it is another machine). Nothing recorded; only a target that does not resolve here but is this machine needs this.`); return; }
+  save([...marker.machines.filter((e) => !isOwn(e)), { machineId: machineId(), hostname: hostName(), ssh: [...new Set([...(ownEntry(marker)?.ssh ?? []), target])] }]);
+  say(`Recorded: ${target} is this machine (${hostName()}, ${markerFile().replace(os.homedir(), "~")}). update, doctor, start and status now do locally what they would do over ssh. If this machine is cloned, the clone must get its own machine id or host name, or run \`agentic-factory this-machine --forget\`.`);
+}
 const controllerTitle = (c) => `${c.project.name} · Controller`;
 // The Controller's identity: the handle from the receipt of the `terminal create` that start itself performed, recorded at that
 // moment with the worktree it was created in (controller-terminal.txt in the Controller directory: handle, newline, worktree).
 // It is never taken from a lookup later (controller/controller-terminal.mjs), and a record that is gone, orphaned or in
 // another worktree is dropped. Empty where nothing was recorded.
 const HANDLE = /^[\w.:-]{1,100}$/;
-const controllerHost = (c) => c.hosts.workers.find((h) => h.name === c.hosts.controller.host);
+const controllerHost = (c) => hostsOf(c).find((h) => h.name === c.hosts.controller.host);
 const handleFile = (c) => `${c.hosts.controller.controllerDir ?? "~/controller"}/controller-terminal.txt`.replace(/^~(?=\/|$)/, "$HOME");
 const localHandleFile = (c) => expandHome(handleFile(c).replace(/^\$HOME/, "~"));
 const recordedHandle = (c) => {
@@ -967,7 +1212,7 @@ const hasControllerTerminal = (c) => Boolean(controllerTerminal(c)?.terminal);
 
 // Reads the Controller's status.md (local file or over ssh): age in minutes and the open "Needs <human>" items.
 function controllerStatus(c) {
-  const ctl = c.hosts.workers.find((h) => h.name === c.hosts.controller.host);
+  const ctl = controllerHost(c);
   const file = `${c.hosts.controller.controllerDir ?? "~/controller"}/status.md`;
   let text = "", ageMin = null;
   if (!ctl || ctl.kind === "local") {
@@ -1163,13 +1408,13 @@ function heartbeatStatus(c) {
 // The calls of cleanup.mjs in a handbook that do not clean up: no --apply, and not a call that only looks (--help, or an unbracketed
 // --dry; the old handbook's `[--dry]` is an optional flag of a call that is meant to clean up).
 const cleanupCallsWithoutApply = (text) => [...String(text).matchAll(/node cleanup\.mjs[^`\n]*/g)].map((m) => m[0].trim()).filter((s) => !/--apply\b|--help\b|(?<!\[)--dry\b/.test(s));
-const CLEANUP_TRAP = "cleanup deletes only with --apply, so this handbook cleans up nothing (every cycle exits with code 3). A CONTROLLER.md you edited stays on update and its new version lies in .factory/new/.factory/controller/CONTROLLER.md: merge it, or add --apply to the call, then run start";
+const CLEANUP_TRAP = "cleanup deletes only with --apply, so this handbook cleans up nothing (every cycle exits with code 3). A CONTROLLER.md you edited stays where it is (update and start never replace it); the new version lies in .factory/new/.factory/controller/CONTROLLER.md, and start also puts it beside the kept file as CONTROLLER.md.new: merge it, or add --apply to the call, then run start";
 // The handbook of an installation that kept an edited CONTROLLER.md (the new one lies in .factory/new/) may predate the heartbeat's
 // inbox and restart scripts: a Controller that does not know `inbox.mjs --done` leaves every inbox line waking it, and one that does
 // not know restart.md would not read what a restart left for it.
 const HANDBOOK_NEW = [["inbox\\.mjs --done", "reading the inbox with `node inbox.mjs` and `--done`"], ["restart\\.md", "`restart.md` after a restart"], ["cycle\\.mjs end", "ending a cycle with `node cycle.mjs end` (the marker that lets the heartbeat wake an idle Controller whatever Orca says)"]];
 const handbookMissing = (text) => HANDBOOK_NEW.filter(([re]) => !new RegExp(re).test(text)).map(([, what]) => what);
-const HANDBOOK_NOTE = "an older CONTROLLER.md you edited stays on update and its new version lies in .factory/new/.factory/controller/CONTROLLER.md: merge it, then run start. Until then every non-empty inbox keeps waking the Controller, a Controller restarted by the heartbeat or by itself would not know what restart.md is, and an idle Controller that Orca reads as busy (a background `wait.mjs`) is reached only by the slower pointer";
+const HANDBOOK_NOTE = "an older CONTROLLER.md you edited stays where it is (update and start never replace it) and its new version lies in .factory/new/.factory/controller/CONTROLLER.md, and start also puts it beside the kept file as CONTROLLER.md.new: merge it, then run start. Until then every non-empty inbox keeps waking the Controller, a Controller restarted by the heartbeat or by itself would not know what restart.md is, and an idle Controller that Orca reads as busy (a background `wait.mjs`) is reached only by the slower pointer";
 function handbookStatus(c) {
   const ctl = controllerHost(c) ?? { kind: "local", name: "local" };
   const dir = heartbeatDir(c).replace(/^~(?=\/|$)/, "$HOME");
@@ -1395,13 +1640,19 @@ async function start() {
   if (!fs.existsSync(".factory/controller/CONTROLLER.md") || !fs.existsSync(".factory/front-agent/FRONT_AGENT.md") || (minimal(c) && !fs.existsSync(".factory/standard/standard.json"))) { say("Bundles missing (a fresh clone): regenerating them from factory.config.json."); await initNonInteractiveRefresh(); }
   say("\nUser-level skills:"); installSkills();
   const fa = path.join(os.homedir(), "front-agent", c.project.name);
-  fs.mkdirSync(fa, { recursive: true }); copyTreeAtomic(".factory/front-agent", fa);   // statuswatch and botwatch run from here on a schedule: whole files only
-   say(`\nFront agent bundle: ${fa.replace(os.homedir(), "~")}`);
-  armStatusWatch(c, fa);
+  fs.mkdirSync(fa, { recursive: true });
   let failed = 0;
+  // statuswatch and botwatch run from here on a schedule: whole files only. A file changed in this directory stays, the new one lands beside it.
+  const front = placeBundle({ host: { kind: "local", name: "local" }, dir: fa, bundle: ".factory/front-agent", apply: true, read: ["factory.config.json"] });
+  stopIfBroken(front, { kind: "local" }, fa.replace(os.homedir(), "~"));
+  say(`\nFront agent bundle: ${fa.replace(os.homedir(), "~")}`);
+  if (front.unreachable || front.error) { failed++; say(`  could not place the Front agent bundle (${front.error ?? "its directory could not be read"}); the status watch below runs what is there.`); }
+  else { front.bundleDir = ".factory/front-agent"; sayKept(front, { kind: "local" }, fa.replace(os.homedir(), "~"), true); }
+  armStatusWatch(c, fa);
   if (!["terminal", "orca-bot"].includes(frontKind(c))) { failed++; say(`Front agent: hosts.frontAgent.kind is "${frontKind(c)}"; it must be "terminal" or "orca-bot".`); }
   if (frontKind(c) === "orca-bot") failed += armBotWatch(c, fa);
-  const ctl = c.hosts.workers.find((h) => h.name === c.hosts.controller.host) ?? { kind: "local", name: "local" };
+  const ctl = controllerHost(c) ?? { kind: "local", name: "local" };
+  laptopNote(c);
   const dir = c.hosts.controller.controllerDir ?? "~/controller";
   const session = controllerSession({ dir, project: c.project.name, agent: c.agents.default, args: c.agents.controllerArgs });
   const title = controllerTitle(c);
@@ -1415,8 +1666,16 @@ async function start() {
   if (owner && owner !== c.project.name) { say(`Controller directory ${dir}${ctl.kind === "local" ? "" : ` on ${ctl.name}`} belongs to the project ${owner}. Set hosts.controller.controllerDir in factory.config.json to a directory of its own (for example ~/controller-${c.project.name}), run \`agentic-factory update\`, then start again. Nothing was copied.`); process.exit(1); }
   if (ctl.kind === "local") {
     const d = expandHome(dir);
-    fs.mkdirSync(d, { recursive: true }); copyTreeAtomic(".factory/controller", d); say(`Controller bundle: ${dir}`);
-    warnCleanupTrap();
+    fs.mkdirSync(d, { recursive: true });
+    const placed = placeBundle({ host: ctl, dir, bundle: ".factory/controller", apply: true, read: ["CONTROLLER.md", "factory.config.json"] });
+    stopIfBroken(placed, ctl, dir);
+    placed.bundleDir = ".factory/controller";
+    if (placed.unreachable || placed.error) { failed++; say(`Controller bundle: could not place it in ${dir} (${placed.error ?? "the directory could not be read"}). Nothing else was changed there.`); }
+    else {
+      say(`Controller bundle: ${dir}${ctl.here ? ` (${ctl.name}, this machine)` : ""}`);
+      sayKept(placed, ctl, dir, true);
+      warnCleanupTrap(`${dir}/CONTROLLER.md`, placed.kept.some((k) => k.rel === "CONTROLLER.md") ? placed.texts["CONTROLLER.md"] : placed.files.get("CONTROLLER.md")?.toString("utf8"));
+    }
     say(`Gate: ${dir}/gate (this project's own; the shared ~/.local/bin/gate is neither used nor touched)`);
     const loadlog = path.join(d, "loadlog.sh");
     // A logger of this directory that was started without the project name writes untagged lines for as long as it runs: it goes.
@@ -1431,24 +1690,29 @@ async function start() {
     // One logger per Controller directory, not one per host. The trailing space is the project argument: a logger from before it was
     // passed (started as "bash loadlog.sh" in this directory, writing untagged lines) is stopped, found by its working directory (Linux).
     const remoteDir = dir, remoteLoadlog = `${dir.replace(/^~(?=\/|$)/, "$HOME")}/loadlog.sh`, quoted = `'${c.project.name.replace(/'/g, "'\\''")}'`;
-    const r = spawnSync("rsync", ["-a", "-e", `ssh ${sshArgsFor(ctl).slice(0, -1).map((a) => JSON.stringify(a)).join(" ")}`, ".factory/controller/", `${ctl.ssh}:${remoteDir}/`], { encoding: "utf8" });
-    if (r.status !== 0) { failed++; say(`Controller bundle: copy to ${ctl.name} failed: ${(r.stderr || "").trim().slice(0, 200)}`); }
+    const placed = placeBundle({ host: ctl, dir: remoteDir, bundle: ".factory/controller", apply: true, read: ["CONTROLLER.md", "factory.config.json"] });
+    stopIfBroken(placed, ctl, remoteDir);
+    placed.bundleDir = ".factory/controller";
+    if (placed.unreachable) { failed++; say(`Controller bundle: copy to ${ctl.name} failed: could not look at ${remoteDir} there (no answer over ssh, or no node), so nothing was copied.${selfHint(ctl, c)}`); }
+    else if (placed.error) { failed++; say(`Controller bundle: copy to ${ctl.name} failed: ${placed.error}`); }
     else {
       say(`Controller bundle: ${ctl.name}:${remoteDir}`);
+      sayKept(placed, ctl, remoteDir, true);
       const s = spawnSync("ssh", [...sshArgsFor(ctl), `for s in ${remoteDir}/skills/*; do n=$(basename "$s"); for t in ~/.claude/skills ~/.agents/skills; do mkdir -p "$t"; [ -e "$t/$n" ] || cp -R "$s" "$t/"; done; done; for p in $(pgrep -f "[b]ash loadlog.sh$" 2>/dev/null); do [ "$(readlink /proc/$p/cwd 2>/dev/null)" = "$(cd ${remoteDir} && pwd)" ] && kill $p; done; pgrep -f "[b]ash ${remoteLoadlog} " >/dev/null || (cd ${remoteDir} && nohup bash ${remoteLoadlog} ${quoted} >/dev/null 2>&1 &); echo ok`], { encoding: "utf8" });
-      // The same check on the handbook as it now lies on the Controller's host.
-      const hb = spawnSync("ssh", [...sshArgsFor(ctl), `grep -o 'node cleanup\\.mjs[^\`]*' "${remoteDir.replace(/^~(?=\/|$)/, "$HOME")}/CONTROLLER.md" 2>/dev/null`], { encoding: "utf8" });
-      warnCleanupTrap(`${ctl.name}:${remoteDir}/CONTROLLER.md`, hb.stdout ?? "");
+      // The same check on the handbook as it now lies on the Controller's host: the kept one when the project changed it there.
+      warnCleanupTrap(`${ctl.name}:${remoteDir}/CONTROLLER.md`, placed.kept.some((k) => k.rel === "CONTROLLER.md") ? placed.texts["CONTROLLER.md"] : placed.files.get("CONTROLLER.md")?.toString("utf8"));
       s.stdout?.trim().endsWith("ok") ? say(`User-level skills and load log on ${ctl.name}: ok`) : (failed++, say(`User-level skills or load log on ${ctl.name} failed: ${(s.stderr || "").trim().slice(0, 200)}`));
     }
   }
   // Gates run on every other worker host too (its workers, its waves; capacity.mjs writes its slots there): the project's gate goes
   // with them, the same files in the same directory, written by rsync (temporary file and rename).
-  for (const h of c.hosts.workers.filter((h) => h.kind === "remote" && h.name !== c.hosts.controller.host)) {
-    const mk = spawnSync("ssh", [...sshArgsFor(h), `mkdir -p ${dir}`], { encoding: "utf8" });
-    const cp = mk.status === 0 ? spawnSync("rsync", ["-a", "-e", `ssh ${sshArgsFor(h).slice(0, -1).map((a) => JSON.stringify(a)).join(" ")}`, ".factory/controller/gate", ".factory/controller/gate.mjs", ".factory/controller/factory.config.json", `${h.ssh}:${dir}/`], { encoding: "utf8" }) : mk;
-    if (cp.status === 0) say(`Gate on ${h.name}: ${dir}/gate (this project's own)`);
-    else { failed++; say(`Gate on ${h.name}: could not copy it to ${dir} (${(cp.stderr || "").trim().slice(0, 200)}). Gates run there too, so this start failed.`); }
+  for (const h of hostsOf(c).filter((h) => (h.kind === "remote" || h.here) && h.name !== c.hosts.controller.host)) {
+    const mk = h.here ? { status: 0 } : spawnSync("ssh", [...sshArgsFor(h), `mkdir -p ${dir}`], { encoding: "utf8" });
+    const gate = mk.status === 0 ? placeBundle({ host: h, dir, bundle: ".factory/controller", only: ["gate", "gate.mjs", "factory.config.json"], apply: true, read: ["factory.config.json"] }) : { error: (mk.stderr || "").trim().slice(0, 200) };
+    stopIfBroken(gate, h, dir);
+    gate.bundleDir = ".factory/controller";
+    if (!gate.unreachable && !gate.error) { say(`Gate on ${h.name}: ${dir}/gate (this project's own)`); sayKept(gate, h, dir, true); }
+    else { failed++; say(`Gate on ${h.name}: could not copy it to ${dir} (${gate.error ?? "no answer"}). Gates run there too, so this start failed.`); }
   }
   failed += armHeartbeat(c, ctl, dir);
   // Running `start` is somebody looking at the project: a Controller restarted automatically after a hang may be restarted once more
@@ -1473,11 +1737,16 @@ async function start() {
     const remotePath = ctl.projectDir ?? `${ctl.projectsDir}/${c.project.name}`;
     if (ctl.kind === "remote" && (!ctl.orcaEnvironment || !remoteHome.startsWith("/") || (!remotePath.startsWith("/") && !/^~(?:\/|$)/.test(remotePath)))) { failed++; say(`Controller session: set hosts.workers[].orcaEnvironment to the saved Orca environment name and configure an absolute or ~/ remote project path; ensure ssh can resolve the remote home. Start it by hand:\n  ${session}`); }
     else {
-    const where = ctl.kind === "local" ? ["--worktree", `path:${cwd}`] : ["--environment", ctl.orcaEnvironment, "--worktree", `path:${path.posix.resolve(remotePath.replace(/^~(?=\/|$)/, remoteHome))}`];
+    // On this machine as a configured remote host, the Controller lives in that host's own clone (not in whatever worktree start ran in).
+    const sessionDir = ctl.here && fs.existsSync(path.join(cloneDir(ctl, c), ".git")) ? fs.realpathSync(cloneDir(ctl, c)) : cwd;
+    const where = ctl.kind === "local" ? ["--worktree", `path:${sessionDir}`] : ["--environment", ctl.orcaEnvironment, "--worktree", `path:${path.posix.resolve(remotePath.replace(/^~(?=\/|$)/, remoteHome))}`];
     const r = spawnSync(ORCA_BIN, createArgs({ where, title, session }), { encoding: "utf8" });
     if (r.status === 0 && /"ok":\s*true/.test(r.stdout)) {
       const created = createdHandle(r.stdout);   // without a handle the Controller's name finds it
-      if (created) recordHandle(c, ctl, created, ctl.kind === "local" ? cwd : path.posix.resolve(remotePath.replace(/^~(?=\/|$)/, remoteHome)));
+      if (created) recordHandle(c, ctl, created, ctl.kind === "local" ? sessionDir : path.posix.resolve(remotePath.replace(/^~(?=\/|$)/, remoteHome)));
+      // A terminal Orca made without showing it ("surface": "background") is there but not discoverable until it is focused.
+      // `focus` is what Orca 1.4.x calls it; a newer Orca names it `switch`.
+      if (created && /"surface":\s*"background"/.test(r.stdout)) for (const sub of ["focus", "switch"]) if (/"ok":\s*true/.test(spawnSync(ORCA_BIN, ["terminal", sub, "--terminal", created, ...(ctl.kind === "local" ? [] : ["--environment", ctl.orcaEnvironment]), "--json"], { encoding: "utf8" }).stdout ?? "")) break;
       say(`Controller session: started (Orca terminal "${title}"). ${TRUST_HINT}`);
     }
     else { failed++; say(`Controller session: Orca could not create the terminal (${(r.stderr || r.stdout || "").trim().slice(0, 200)}). Start it by hand:\n  ${session}`); }
@@ -1488,7 +1757,7 @@ async function start() {
   process.exit(failed ? 1 : 0);
 }
 
-const commands = { init, update, doctor, selfcheck, status, start, deviate, "install-skills": installSkills };
+const commands = { init, update, doctor, selfcheck, status, start, deviate, "install-skills": installSkills, "this-machine": thisMachine };
 if (!commands[cmd]) {
   const known = !cmd || cmd === "--help" || cmd === "-h";
   if (!known) console.error(`agentic-factory: unknown command ${JSON.stringify(cmd)}`);
