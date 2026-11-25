@@ -223,7 +223,9 @@ export function restartController({ reason, kind = "context", lockHeld = false, 
     if (handle) writeText("controller-terminal.txt", `${handle}\n${worktree}\n`); else fs.rmSync(file("controller-terminal.txt"), { force: true });
     const state = { at: Date.now(), kind, reason: oneLine(reason, 200), from: old.handle, to: handle };
     writeJson("heartbeat.restarted.json", state);
-    for (const name of ["heartbeat.busy.json", "heartbeat.pointer"]) fs.rmSync(file(name), { force: true });
+    // The old session's own word is not the new Controller's: its waiting marker and the record of the mail it read are removed now
+    // that the new one is confirmed (the heartbeat also distrusts a marker older than controller-terminal.txt).
+    for (const name of ["heartbeat.busy.json", "heartbeat.pointer", "controller.waiting.json", "mail.read.json"]) fs.rmSync(file(name), { force: true });
     unlock();   // before the close: when the Controller runs this itself, closing its terminal ends this process
     spawnSync(ORCA, ["terminal", "close", "--terminal", old.handle, "--json"], { encoding: "utf8", timeout: 30_000 });
     // Proof, not the exit status: is the old terminal gone from Orca's list?
@@ -239,7 +241,7 @@ export function restartController({ reason, kind = "context", lockHeld = false, 
     const told = closeFailed ? tellFront("TWO-CONTROLLERS", event, { type: "question" }) : tell ? tellFront("RESTARTED", event, { push: kind === "hang" }) : [];
     return closeFailed
       ? { ok: true, code: 0, handle, event, closeFailed: old.handle, message: `restarted (${how}), but the old terminal ${old.handle} is still open (${told.join(", ")}): close it by hand, two Controllers must not run` }
-      : { ok: true, code: 0, handle, event, message: `restarted; new terminal ${handle ?? "unknown"} created ${how}, ${old.handle} closed` };
+      : { ok: true, code: 0, handle, event, message: `restarted; new terminal ${handle ?? "unknown"} created ${how}, ${old.handle} closed; the old session's controller.waiting.json and mail.read.json were removed` };
   } finally { unlock(); }
 }
 

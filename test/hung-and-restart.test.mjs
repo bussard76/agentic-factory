@@ -350,6 +350,23 @@ test("restart.mjs: saves the handover, opens the new Controller, records it and 
 
 const creates = (h) => h.calledAll().filter((a) => a[0] === "terminal" && a[1] === "create").map((a) => a.includes("--help") ? "help" : a.includes("--keep-open") ? "keep-open" : "plain");
 
+test("restart.mjs removes the old session's waiting marker and mail record once the new Controller is confirmed, and not before", () => {
+  const h = setup();
+  h.write("controller.waiting.json", JSON.stringify({ at: Date.now() }));
+  h.write("mail.read.json", "{}");
+  h.patch({ background: true, focusFails: true });   // not confirmed: the old Controller stays, and so do its files
+  const bad = restart(h);
+  assert.equal(bad.status, 1, bad.stdout);
+  assert.ok(h.read("controller.waiting.json") && h.read("mail.read.json"), "an unconfirmed restart leaves the old session's files");
+  h.patch({ background: false, focusFails: false });
+  const r = restart(h);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(h.read("controller.waiting.json"), null);
+  assert.equal(h.read("mail.read.json"), null);
+  assert.match(r.stdout, /controller\.waiting\.json and mail\.read\.json were removed/);
+  h.done();
+});
+
 test("restart.mjs on an Orca with --keep-open in its help passes it and says so", () => {
   const h = setup();
   const r = h.run("restart.mjs", ["--reason", "context 60%"], { ORCA_TERMINAL_HANDLE: "term_old" });
