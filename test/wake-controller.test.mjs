@@ -315,6 +315,30 @@ else out({ terminals: [], repos: [] });\n`, { mode: 0o755 });
 }
 const hb = (h) => JSON.parse(h.cli(["status", "--json"]).stdout).setup.heartbeat;
 
+test("doctor and status show a restart.pending.json and say what to do", () => {
+  const h = startSetup();
+  fs.mkdirSync(h.ctlDir, { recursive: true });
+  assert.doesNotMatch(h.cli(["doctor"]).stdout, /a restart left a terminal/);
+  fs.writeFileSync(path.join(h.ctlDir, "restart.pending.json"), JSON.stringify({ handle: "term_new3", before: [], at: 1 }));
+  const doctor = h.cli(["doctor"]);
+  assert.match(doctor.stdout, /MISSING restart: a restart left a terminal it could not confirm closed \(term_new3\): look in Orca for a second "demo · Controller" terminal, close it if it is one, then delete ~\/controller\/restart\.pending\.json/);
+  assert.match(h.cli(["status"]).stdout, /MISSING restart: a restart left a terminal/);
+  assert.match(JSON.parse(h.cli(["status", "--json"]).stdout).setup.restartLeftover.problem, /term_new3/);
+  h.done();
+});
+
+test("doctor says when the Orca on the Controller's host has no `terminal create --keep-open` (1.4.266) and is silent for one that has it (1.4.272)", () => {
+  const h = startSetup();
+  const play = (version, keepOpen) => fs.writeFileSync(path.join(h.bin, "orca"), `#!/bin/sh\ncase "$*" in\n  "--version") echo ${version};;\n  "terminal create --help") echo "orca terminal create"; echo "Usage: orca terminal create [--worktree <selector>] [--focus]${keepOpen ? " [--keep-open]" : ""} [--json]";;\n  *) echo '{"ok":true,"result":{"terminals":[],"repos":[]}}';;\nesac\n`, { mode: 0o755 });
+  play("1.4.266", false);
+  assert.match(h.cli(["doctor"]).stdout, /info    Orca 1\.4\.266 on local has no `terminal create --keep-open` \(it has from 1\.4\.272\): the Controller's restart at 50% context make the new terminal without it/);
+  h.edit((c) => { c.hosts.controller.hung = { restart: true }; });
+  assert.match(h.cli(["doctor"]).stdout, /restart at 50% context and hosts\.controller\.hung\.restart make the new terminal without it/);
+  play("1.4.272", true);
+  assert.doesNotMatch(h.cli(["doctor"]).stdout, /keep-open/);
+  h.done();
+});
+
 test("on macOS the heartbeat goes to launchd where cron is refused; doctor and status say whether it is scheduled", () => {
   const h = startSetup();
   fs.writeFileSync(path.join(h.flags, "cron-refused"), "");
