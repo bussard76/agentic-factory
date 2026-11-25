@@ -616,7 +616,14 @@ test("controller scripts run against the generated config", () => {
   const run = (...a) => execFileSync("node", a, { cwd: ctl, encoding: "utf8", env }).trim();
   const verdict = JSON.parse(run("capacity.mjs", "--verbose"));
   assert.ok(["start", "wait"].includes(verdict.suite)); assert.equal(verdict.caps.calibration, "auto");
+  // A new project enforces the readiness check: a ticket that was never sharpened gets no Developer spec, a sharpened one does.
+  const ticketFile = path.join(tmp, "docs/tasks/T01-x.md");
+  fs.mkdirSync(path.dirname(ticketFile), { recursive: true });
+  fs.writeFileSync(ticketFile, "# T01: x\n\nStatus: ready\n");
+  assert.throws(() => run("templates/mkspec.mjs", "dev", "T01", "docs/tasks/T01-x.md", "agents/t01"), /T01 is not ready to code: missing no assessment/);
+  fs.writeFileSync(ticketFile, "# T01: x\n\nStatus: ready\nAssessed: ready as written, 2026-11-25\nLevel: 1\n\n## Goal\n\nA goal.\n\n## Observable acceptance\n\n1. It works.\n\n## Out of scope\n\nNothing else.\n");
   assert.match(run("templates/mkspec.mjs", "dev", "T01", "docs/tasks/T01-x.md", "agents/t01"), /t01-dev\.txt$/);
+  fs.rmSync(ticketFile);
   assert.match(run("templates/mkspec.mjs", "baseline"), /baseline/);
   // Every placeholder is filled, including those with a digit, and a release is one runnable command.
   for (const f of ["AGENTS.md", "docs/coordinator.md", "docs/review-protocol.md", "docs/architect-protocol.md", "docs/dev-workflow.md", ".factory/controller/CONTROLLER.md"]) assert.doesNotMatch(fs.readFileSync(path.join(tmp, f), "utf8"), /\{\{[A-Z0-9_]+\}\}/, f);

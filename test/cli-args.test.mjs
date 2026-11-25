@@ -14,7 +14,7 @@ import { grammar, leadingComment, parse } from "../controller/cli.mjs";
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const CLI = path.join(ROOT, "bin/agentic-factory.mjs");
 // Modules other scripts import; nobody runs them.
-const LIBRARIES = ["controller/lib.mjs", "controller/reviewrecord.mjs", "controller/findings.mjs", "controller/cli.mjs", "controller/controller-terminal.mjs", "controller/front-notice.mjs", "front-agent/hosts.mjs", "front-agent/cli.mjs"];
+const LIBRARIES = ["controller/lib.mjs", "controller/ticket.mjs", "controller/reviewrecord.mjs", "controller/findings.mjs", "controller/cli.mjs", "controller/controller-terminal.mjs", "controller/front-notice.mjs", "front-agent/hosts.mjs", "front-agent/cli.mjs"];
 // Installed as single files, so they handle --help themselves. gate's arguments are the command it runs, and the
 // guardrails take a hook's subcommand, so only arm.mjs also rejects unknown arguments.
 const STANDALONE = ["controller/gate.mjs", "templates/tools/factory-guardrails.mjs", "standard/arm.mjs"];
