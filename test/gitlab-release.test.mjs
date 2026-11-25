@@ -169,5 +169,6 @@ test(".gitlab-ci.yml runs this script for a tag and for the manual backfill, and
   assert.match(ci, /sh scripts\/gitlab-release\.sh "\$CI_COMMIT_TAG"/);
   assert.match(ci, /sh scripts\/gitlab-release\.sh --backfill/);
   assert.match(ci, /\$CI_COMMIT_TAG =~ \/\^v\\d\+\\\.\\d\+\\\.\\d\+\$\//);
+  assert.match(ci, /^  image: gitlab\/glab:v\d+\.\d+\.\d+$/m);   // an exact version, from Docker Hub, which more runners reach than registry.gitlab.com
   assert.ok(fs.existsSync(SCRIPT));
 });

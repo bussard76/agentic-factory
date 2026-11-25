@@ -22,6 +22,8 @@ pages:
 # Creates the GitLab release page for a version tag from releases/<tag>.md, with the job's own token (CI_JOB_TOKEN, no secret variables).
 # A release that already exists, such as a hand-written one, is left alone. A tag without a notes file fails the job.
 # Shared runners on this instance run tagged jobs only, and the CLI image must be one your runners can pull: adjust the tag and image to your instance.
+# The image is the GitLab CLI's own, from Docker Hub (the same image, same digest, as registry.gitlab.com/gitlab-org/cli). The registry it comes from
+# must be reachable from your runners; use the other name, or a mirror or dependency proxy, where only one of them is.
 # The script uses `glab release create`, not the `release:` keyword, because that keyword fails the job when the release exists.
 # Needs a GitLab version whose job token may use the Releases API; GitLab's documentation names no version for that, so the first run proves it.
 # Only tags like v1.2.3 get a release (no pre-release suffixes).
@@ -29,7 +31,7 @@ pages:
   stage: deploy
   tags:
     - docker
-  image: registry.gitlab.com/gitlab-org/cli:v1.133.0
+  image: gitlab/glab:v1.133.0
 
 gitlab-release:
   extends: .gitlab-release
