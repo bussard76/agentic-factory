@@ -1,5 +1,6 @@
 # Publishes the intro page with GitLab Pages. The page links to this repository's documents, releases and README on GitHub;
 # the copy published here has those links rewritten to this GitLab project's own views, so a reader stays on this instance.
+# The release link goes to the tag view, not a release page: a tag exists wherever it was pushed, a release page only where someone published one.
 # Shared runners on this instance run tagged jobs only; adjust the tag and image to your instance.
 pages:
   stage: deploy
@@ -9,7 +10,7 @@ pages:
   script:
     - mkdir -p public
     - cp site/index.html public/index.html
-    - sed -i "s|https://github\.com/bussard76/agentic-factory/blob/main/|$CI_PROJECT_URL/-/blob/$CI_DEFAULT_BRANCH/|g; s|https://github\.com/bussard76/agentic-factory/releases/tag/|$CI_PROJECT_URL/-/releases/|g; s|https://github\.com/bussard76/agentic-factory#readme|$CI_PROJECT_URL/-/blob/$CI_DEFAULT_BRANCH/README.md|g" public/index.html
+    - sed -i "s|https://github\.com/bussard76/agentic-factory/blob/main/|$CI_PROJECT_URL/-/blob/$CI_DEFAULT_BRANCH/|g; s|https://github\.com/bussard76/agentic-factory/releases/tag/|$CI_PROJECT_URL/-/tags/|g; s|https://github\.com/bussard76/agentic-factory#readme|$CI_PROJECT_URL/-/blob/$CI_DEFAULT_BRANCH/README.md|g" public/index.html
     # The clone command on the page points at this GitLab project, not at GitHub.
     - sed -i "s|https://github\.com/bussard76/agentic-factory\.git|$CI_PROJECT_URL.git|g" public/index.html
   artifacts:
