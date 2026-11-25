@@ -788,6 +788,7 @@ function doctor() {
     }
   }
   for (const t of [c.agents.default, c.agents.fallback?.agent].filter(Boolean)) has(t) ? ok(`${t} CLI`) : info(`${t} CLI not on this machine`);
+  { const pi = piOrcaNote(c, { ssh: true }); if (pi) say(`warn    ${pi.text}`); }
   if (c.agents.runner === "orca") has("orca") || has("orca-ide") ? ok("orca CLI") : bad("orca CLI (runner is orca)");
   if (c.agents.runner === "orca" && process.env.FACTORY_SKIP_ORCA !== "1") orcaRestartNote(c, info);
   // User-level skills: the Controller and Front agent sessions run outside the repo and need these on their host.
@@ -913,6 +914,47 @@ const readConfig = () => (fs.existsSync("factory.config.json") ? JSON.parse(fs.r
 const isAdopted = () => fs.existsSync("factory.config.json") && (fs.existsSync(".factory/manifest.json") || minimal(readConfig()));
 const expandHome = (p) => String(p ?? "").replace(/^~(?=\/|$)/, os.homedir());
 const sshArgsFor = (h) => [...(h.sshConfig ? ["-F", expandHome(h.sshConfig)] : []), "-o", "ConnectTimeout=5", h.ssh];
+// Pi workers under the Orca runner: Orca starts pi itself, so the factory can pass it no arguments and no tool exclusion. Such a worker
+// runs with the human's own pi extensions, and an extension's question tool opens a dialog nobody answers (docs/orca.md, "Workers never
+// ask the human"). A warning, never a failure: it changes no exit code. It reads pi's settings (PI_CODING_AGENT_DIR, else ~/.pi/agent) and
+// the names in its extensions directory, read only; "installed" is not "active". `ssh` true also reads remote worker hosts (doctor does,
+// status stays on this machine).
+const PI_QUESTION_EXTENSION = /ask[-_]?user|question|interview/i;
+function piQuestionExtensions(settingsText, extensionNames) {
+  let settings = {};
+  try { settings = JSON.parse(settingsText || "{}"); } catch { /* an unreadable settings file names nothing */ }
+  const entries = [...(Array.isArray(settings.packages) ? settings.packages.map((p) => (typeof p === "string" ? p : p?.source)) : []), ...(Array.isArray(settings.extensions) ? settings.extensions : []), ...extensionNames];
+  return [...new Set(entries.filter((e) => typeof e === "string" && PI_QUESTION_EXTENSION.test(e)))];
+}
+function piOrcaNote(c, { ssh = false } = {}) {
+  const a = c?.agents ?? {};
+  if ((a.runner ?? "orca") !== "orca" || !(a.default === "pi" || a.fallback?.agent === "pi" || Object.keys(a.piRoleModels ?? {}).length)) return null;
+  const workers = c.hosts?.workers?.length ? c.hosts.workers : [{ name: "local", kind: "local" }];
+  const detected = [], unread = [], checked = [];
+  let localDone = false;
+  for (const h of workers) {
+    let names = null;
+    if ((h.kind ?? "local") === "local") {
+      if (localDone) continue;
+      localDone = true;
+      const dir = expandHome(process.env.PI_CODING_AGENT_DIR || "~/.pi/agent");
+      const read = (f) => { try { return fs.readFileSync(path.join(dir, f), "utf8"); } catch { return null; } };
+      const settings = read("settings.json");
+      let ext = []; try { ext = fs.readdirSync(path.join(dir, "extensions")); } catch { /* none */ }
+      if (settings !== null || ext.length) names = piQuestionExtensions(settings, ext);
+    } else if (ssh) {
+      const r = spawnSync("ssh", [...sshArgsFor(h), 'd="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"; cat "$d/settings.json" 2>/dev/null; echo; echo "--extensions--"; ls "$d/extensions" 2>/dev/null'], { encoding: "utf8", timeout: 20000 });
+      if (r.status === 0) { const [settings, ext = ""] = r.stdout.split("\n--extensions--\n"); names = piQuestionExtensions(settings, ext.split("\n").filter(Boolean)); }
+    } else { unread.push(`${h.name} (not checked)`); continue; }
+    if (names === null) { unread.push(`${h.name} (pi's settings could not be read)`); continue; }
+    checked.push(h.name);
+    if (names.length) detected.push({ host: h.name, names });
+  }
+  const text = "pi workers under the Orca runner run with the human's own pi extensions and with Orca's default arguments for pi: the factory can pass the agent nothing. A question tool from an extension can hang such a worker at a dialog nobody answers. What to do: remove the extension on the worker host, or set default arguments for pi in Orca (`--exclude-tools ask_user_question,question,questionnaire`, plus the name of any other question tool) and check on one real worker that they apply (ask it to list its tools)."
+    + (detected.length ? ` Found in pi's settings: ${detected.map((d) => `${d.host}: ${d.names.join(", ")}`).join("; ")} (installed, not necessarily active).` : checked.length ? ` No question extension found in pi's settings on ${checked.join(", ")}.` : "")
+    + (unread.length ? ` Not checked: ${unread.join(", ")}; this check covers only the hosts it could read.` : "");
+  return { text, detected, checked, unread };
+}
 const controllerTitle = (c) => `${c.project.name} · Controller`;
 // The Controller's identity: the handle from the receipt of the `terminal create` that start itself performed, recorded at that
 // moment with the worktree it was created in (controller-terminal.txt in the Controller directory: handle, newline, worktree).
@@ -1028,6 +1070,7 @@ function collectStatus() {
     cleanup: cleanupStatus(c),
     handbook: handbookStatus(c),
     restartLeftover: restartLeftoverStatus(c),
+    ...(piOrcaNote(c) ? { piOrca: piOrcaNote(c) } : {}),
   };
   // A bot Front agent: the bot and its watch automation instead of the terminal's status watch.
   if (frontKind(c) === "orca-bot") { s.setup.frontAgent = { kind: "orca-bot", ...botWatchStatus(c) }; s.setup.statusWatch = false; }   // a bot is woken by its automation (setup.frontAgent.watchAutomation), not by a status watch
@@ -1095,6 +1138,7 @@ function status() {
     if (st.cleanup?.problem) say(`MISSING cleanup: ${st.cleanup.problem}`);
     if (st.handbook?.problem) say(`MISSING handbook: ${st.handbook.problem}`);
     if (st.restartLeftover?.problem) say(`MISSING restart: ${st.restartLeftover.problem}`);
+    if (st.piOrca) say(`warn    ${st.piOrca.text}`);
     say(`${st.controller.running ? "OK     " : "MISSING"} Controller on ${st.controller.host}${st.controller.statusAgeMin !== null ? ` (status.md ${st.controller.statusAgeMin} min old)` : ""}${st.controller.terminalProblem ? `: ${st.controller.terminalProblem}` : ""}`);
     const w = s.work;
     say(`\nDesigned features: ${w.designedFeatures.length ? w.designedFeatures.join(", ") : "none"}`);

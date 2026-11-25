@@ -56,14 +56,11 @@ export const questionBlock = (runner = RUNNER) => `Questions: ${NO_HUMAN_RULE} $
 // removed reliably afterwards). An args list must not end in a variadic option (it would swallow the prompt that follows).
 // Only entries checked against the real CLI belong here. agents.askOff in factory.config.json adds or replaces one entry per
 // agent name (null removes it), for a project on another CLI or version. Nothing here touches a user's global settings.
-// pi: `--exclude-tools <names>` (pi 0.77.0 and later, docs/cli.md "Tools") takes one comma-separated value, so it is no variadic option, and
-// it removes built-in, extension and custom tools from every selection, also from an extension's later registration. Pi has no built-in
-// ask tool; these are the names the ask-the-user extensions use: `ask_user_question` (@juicesharp/rpiv-ask-user-question) and the
-// `question` and `questionnaire` of pi's own example extensions. Exact names, no patterns (patterns need pi 1.0.4); a pi older than
-// 0.77.0 reads the flag as an unknown one and ignores it.
+// pi has no default on purpose: with the terminal runner it runs as `pi -p` (print mode, no UI), where the ask extensions already refuse,
+// and a pi that does not know `--exclude-tools` (older than 0.77.0) may exit with "Unknown option" instead of starting. A project on a
+// pi that has the flag can set agents.askOff.pi itself (docs/orca.md); that entry replaces, it does not extend.
 const ASK_OFF_DEFAULTS = {
   claude: { args: ["--disallowedTools", "AskUserQuestion"] },
-  pi: { args: ["--exclude-tools", "ask_user_question,question,questionnaire"] },
 };
 export const askOffFor = (agent) => { const own = config.agents?.askOff ?? {}; return (Object.hasOwn(own, agent) ? own[agent] : ASK_OFF_DEFAULTS[agent]) ?? null; };
 

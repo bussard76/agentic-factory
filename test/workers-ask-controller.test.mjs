@@ -85,17 +85,16 @@ console.log(JSON.stringify({ ok: true, result: a[1] === "worker-start" ? { dispa
   return { dir, ws, run, agentLog, waitFor, workers };
 }
 const hostsFor = (dir) => ({ controller: { host: "local" }, workers: [{ name: "local", kind: "local", orcaRepoId: "r", ...(dir ? { workspacesDir: path.join(dir, "ws"), projectsDir: path.join(dir, "proj") } : {}) }] });
-test("terminal runner: Claude and pi workers start with their ask-the-user tool off, other CLIs are left as they are", async () => {
-  for (const [agent, expectFlag] of [["claude", true], ["codex", false], ["pi", true]]) {
+test("terminal runner: a Claude worker starts with its ask-the-user tool disallowed, other CLIs are left as they are", async () => {
+  for (const [agent, expectFlag] of [["claude", true], ["codex", false], ["pi", false]]) {
     const rig = startRig({ runner: "terminal", default: agent });
     fs.mkdirSync(path.join(rig.ws, "t1"));
     const { out } = rig.run();
     const line = await rig.waitFor(rig.agentLog);
     assert.ok(line, `${agent} was started`);
-    assert.equal((agent === "pi" ? /--exclude-tools ask_user_question,question,questionnaire/ : /--disallowedTools AskUserQuestion/).test(line), expectFlag, `${agent}: ${line}`);
+    assert.equal(/--disallowedTools AskUserQuestion/.test(line), expectFlag, `${agent}: ${line}`);
     assert.equal(out.askOff, expectFlag ? "args" : "none");
     if (agent === "claude") assert.match(line, /^\S*claude --disallowedTools AskUserQuestion --dangerously-skip-permissions /, "global flags come right after the executable");
-    if (agent === "pi") assert.match(line, /^\S*pi --exclude-tools ask_user_question,question,questionnaire -p /, "pi: the flag comes before -p and the prompt");
     if (agent === "codex") assert.match(line, /codex exec --full-auto/, "a subcommand stays first");
   }
 });
@@ -105,6 +104,15 @@ test("agents.askOff overrides the table for one agent, and null switches the def
   fs.mkdirSync(path.join(rig.ws, "t1"));
   assert.equal(rig.run().out.askOff, "args");
   assert.match(await rig.waitFor(rig.agentLog), /pi --no-ask-tool -p /);
+  // pi has no default entry: without one it starts exactly as before; a project's own entry goes right after the executable.
+  rig = startRig({ runner: "terminal", default: "pi" });
+  fs.mkdirSync(path.join(rig.ws, "t1"));
+  assert.equal(rig.run().out.askOff, "none");
+  assert.match(await rig.waitFor(rig.agentLog), /pi -p /);
+  rig = startRig({ runner: "terminal", default: "pi", askOff: { pi: { args: ["--exclude-tools", "ask_user_question,question"] } } });
+  fs.mkdirSync(path.join(rig.ws, "t1"));
+  assert.equal(rig.run().out.askOff, "args");
+  assert.match(await rig.waitFor(rig.agentLog), /pi --exclude-tools ask_user_question,question -p /);
   rig = startRig({ runner: "terminal", default: "claude", askOff: { claude: null } });
   fs.mkdirSync(path.join(rig.ws, "t1"));
   assert.equal(rig.run().out.askOff, "none");
