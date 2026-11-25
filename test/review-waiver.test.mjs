@@ -562,6 +562,10 @@ test("review finding 1: the Front agent waives only process and style; a functio
   // style and process stay the Front agent's (the PR's own case), also named together with a minor functional finding
   const st = scene({ text: (sha) => FILE(sha, { findings: [["F1", "blocker", "style"], ["F2", "minor", "functional"]] }) });
   try { record(st.b); assert.equal(waive(st.b, st.p.tip("agents/t1-review-1"), { findings: "F1" }).status, 0, "a minor finding of another class that is not named is no blocker"); assert.match(waive(st.b, st.p.tip("agents/t1-review-1"), { findings: "F1,F2" }).stdout, /already waived/); } finally { st.b.cleanup(); }
+  // a re-evaluation file with the classification table of the earlier findings: references to F1 are no finding and the file stays readable (and waivable by the owner)
+  const reeval = FILE(A, { gates: "", body: `${heading("F1", "blocker", "functional", "The export drops rows")}\n| Earlier finding | Class |\n|---|---|\n| F1 | functional defect |\n| F2 | debt candidate |\nF2 - round 1 said this is debt\n` });
+  assert.equal(parseFindings(reeval).ok, true, "a table row or line that only names F1 or F2 is not a finding");
+  assert.equal(waivable(parseFindings(reeval), ["F1"], "final").ok, true);
   const named = scene({ text: (sha) => FILE(sha, { findings: [["F1", "blocker", "style"], ["F2", "minor", "functional"]] }) });
   try { record(named.b); const r = waive(named.b, named.p.tip("agents/t1-review-1"), { findings: "F1,F2" }); assert.equal(r.status, 3, "naming a functional finding is the owner's, even a minor one"); assert.match(r.stdout, /F2 \(functional\)/); } finally { named.b.cleanup(); }
 });
@@ -592,7 +596,6 @@ test("review finding 2: any line in ## Findings that looks like a blocker or maj
     "a list item": "- F4 [major] [security] secret in the response\n",
     "a numbered item": "1. [blocker] the export is wrong\n",
     "upper case": "F5 [MAJOR] [gate] the gate is red\n",
-    "an id only, no brackets": "F6 - secret leak in the logs\n",
     "a table row": "| F7 | [blocker] | security |\n",
     "a blocker named in a body line": "- Problem: this is a [blocker] for the release\n",
   };
@@ -633,6 +636,7 @@ test("review finding 5: a follow-up is a real ticket or debt id: not the README,
     assert.equal(waive(b, rsha, { followUp: "F1" }).status, 0, "a real debt id");
     assert.equal(waiverEvents(b)[0].followUp, "F1");
   } finally { b.cleanup(); }
+  { const q = scene({ mainFiles: { "docs/tasks/T7-template-engine.md": "# T7: a real ticket about templates\n" } }); try { record(q.b); assert.equal(waive(q.b, q.p.tip("agents/t1-review-1"), { followUp: "T7" }).status, 0, "a real ticket whose name contains template"); } finally { q.b.cleanup(); } }
   for (const id of ["N2", "T2"]) { const q = scene({ mainFiles: { "docs/debt.md": debt } }); try { record(q.b); assert.equal(waive(q.b, q.p.tip("agents/t1-review-1"), { followUp: id }).status, 0, id); } finally { q.b.cleanup(); } }
 });
 

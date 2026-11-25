@@ -26,9 +26,9 @@ export const SEVERITIES = ["blocker", "major", "minor"];
 const HEADING = /^### (F[1-9]\d{0,2}) \[(blocker|major|minor)\] \[([a-z-]+)\] ([^\s[].*)$/;   // the title never starts with a bracket: a second class marker is no title
 const LOOKS_LIKE_FINDING = /^#{3,6}\s.*\[(blocker|major|minor)\]/i;
 // Inside "## Findings": a line that looks like a blocker or major finding in any markup (bold, list, numbered, a deeper heading, a table row) but is no
-// well-formed heading makes the file unreadable (fail closed). So does a line that starts like a finding id (F1 ...) without being a heading.
+// well-formed heading makes the file unreadable (fail closed). A bare reference to an earlier finding ("F1 | functional defect", a classification table of a
+// re-evaluation) is no finding and stays readable: only a [blocker] or [major] marker, or a ### heading, makes a line count.
 const LOOKS_BLOCKING = /\[(blocker|major)\]/i;
-const LOOKS_LIKE_ID = /^[\s>*_#\-\d.)|]*F[1-9]\d*\b/;
 const GATES = /^Gates: verify (pass|fail), e2e (pass|fail|none)\s*$/;
 
 /** What to do when a file cannot be read as classed findings (a review written before the classes existed, or a Tester that did not follow the template). */
@@ -46,7 +46,7 @@ export function parseFindings(text) {
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
     const inside = i >= start && i < end;
-    if (!LOOKS_LIKE_FINDING.test(l) && !(inside && (/^###(\s|$)/.test(l) || LOOKS_BLOCKING.test(l) || (LOOKS_LIKE_ID.test(l) && !HEADING.test(l))))) continue;
+    if (!LOOKS_LIKE_FINDING.test(l) && !(inside && (/^###(\s|$)/.test(l) || LOOKS_BLOCKING.test(l)))) continue;
     if (!inside) return { ok: false, why: `a finding heading outside "## Findings" (line ${i + 1}: ${l.slice(0, 60)})` };
     const m = HEADING.exec(l);
     if (!m) return { ok: false, why: `line ${i + 1} looks like a finding but is not a finding heading of the form "### F<n> [blocker|major|minor] [<class>] <title>": ${l.slice(0, 70)}` };

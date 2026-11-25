@@ -21,7 +21,6 @@ import "../cli.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { BRANCH_PREFIX, CMDS, HUMAN, MAIN, PROJECT, PROJECT_DIR, STEERING, config, file, journal, questionBlock, sh, trySh } from "../lib.mjs";
-import { recordedIssues } from "../reviewrecord.mjs";
 
 // Every review that lists findings gives each one a class from a fixed list, in its heading: waiver.mjs reads the class strictly (a finding
 // without a readable one can never be waived; the file is then "not waivable" as a whole). One text for every review spec. The lists are
@@ -133,7 +132,7 @@ Steps:
 1. git fetch origin; check out origin/${branch} at exactly ${sha} (state the full SHA). Read ${taskWhere(ref)} and the last review ${lv.file} on origin/${lv.branch}.
 2. Classify every finding of that review as 'functional defect' or 'debt candidate'. Do not invent new findings beyond a quick check of the main flows.
 3. The last full gates on this commit are in that review; do not rerun the full suites (that is no proof for the wave, which runs the full gate itself). Run the browser specs or API checks that cover the task's main flows once and look at the flows.
-4. Write docs/reviews/${T}-review-final.md: 'Reviewed commit: <full SHA>', 'Verdict: pass|fail', the classification table, the findings that are functional defects (each as a finding with its own class: ${CLASS_RULE}), the debt candidates, and one sentence ${HUMAN} can try on the preview for each open point. Commit only that file on branch ${BRANCH_PREFIX}${T.toLowerCase()}-review-final from ${sha}, never --no-verify, push only that branch.
+4. Write docs/reviews/${T}-review-final.md: 'Reviewed commit: <full SHA>', 'Verdict: pass|fail', the classification table (in its own section '## Classification', never under '## Findings'), the findings that are functional defects (each as a finding with its own class: ${CLASS_RULE}), the debt candidates, and one sentence ${HUMAN} can try on the preview for each open point. Commit only that file on branch ${BRANCH_PREFIX}${T.toLowerCase()}-review-final from ${sha}, never --no-verify, push only that branch.
 Reply: worker_done with verdict, the review branch and its full SHA, and --report-path docs/reviews/${T}-review-final.md.`;
   },
   specreview() {
@@ -212,7 +211,9 @@ const text = specs[role]();
 const specRef = role === "rework" ? pos[2] : ["dev", "test", "reeval", "specreview", "conf"].includes(role) ? pos[1] : undefined;
 if (STEERING === "github-issues" && /^#\d+$/.test(specRef ?? "") && pos[0]) {
   let known = ""; try { known = fs.readFileSync(file("journal.ndjson"), "utf8"); } catch { /* no journal yet */ }
-  if (!recordedIssues(known, pos[0]).has(specRef.slice(1))) journal("taskref", pos[0], { ref: specRef, by: "mkspec.mjs" });
+  // (not imported from reviewrecord.mjs: this file is also run alone; recordedIssues there reads the same lines)
+  const bound = known.split("\n").some((l) => { try { const e = JSON.parse(l); return e.type === "taskref" && e.by === "mkspec.mjs" && String(e.task).toLowerCase() === pos[0].toLowerCase() && e.ref === specRef; } catch { return false; } });
+  if (!bound) journal("taskref", pos[0], { ref: specRef, by: "mkspec.mjs" });
 }
 fs.mkdirSync(file("specs"), { recursive: true });
 const key = `${(pos[0] ?? role).toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${role}${pos[1] && /^\d+$/.test(pos[1]) ? pos[1] : ""}`;
