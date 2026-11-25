@@ -25,7 +25,7 @@ Decision: <needed, recorded, or accepted ADR>
 ### F<n> [blocker|major|minor] [<class>] <title>
 ```
 
-Every finding of a spec review and of a conformance review is one heading `### F<n> [blocker|major|minor] [<class>] <title>` with exactly one class from the fixed list of `docs/review-protocol.md` ("Findings file format"): `security`, `data-corruption`, `input-loss`, `gate` (never waivable) or `functional`, `process`, `style`. The Controller reads it strictly; a finding without a class can never be waived.
+Every finding of a spec review and of a conformance review is one heading `### F<n> [blocker|major|minor] [<class>] <title>` with exactly one class from the fixed list of `docs/review-protocol.md` ("Findings file format"): `security`, `data-corruption`, `input-loss`, `gate` (never waivable) or `functional`, `process`, `style`. The Controller reads it strictly; a finding without a class can never be waived. The class is your own claim and no code checks it: name the true one.
 
 ## After the build: conformance (levels 2 and 3)
 

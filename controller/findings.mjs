@@ -2,6 +2,10 @@
 // and may a human decide that they are no blocker? A module for waiver.mjs and reviewed.mjs (nobody runs it); it reads nothing
 // but the text it is given.
 //
+// What this code does NOT know: whether the class is right, or who really wrote the file. The class is the REVIEWER'S OWN CLAIM about its
+// finding. The code checks ids, format, level, the binding to one commit and the named findings; it never checks that a "style" finding is
+// really style. Whoever decides a waiver (the Front agent, the owner) has to read the findings file itself.
+//
 // The format (templates/docs/review-protocol.md, "Findings file format"): under a `## Findings` heading, one heading per finding,
 //   ### F<n> [<severity>] [<class>] <title>
 // severity: blocker | major | minor. class, exactly one per finding, lower case, from this fixed list:
@@ -12,12 +16,19 @@
 // and none of its findings can be waived. Unknown is never waivable.
 
 export const NEVER_WAIVABLE = ["security", "data-corruption", "input-loss", "gate"];
-export const WAIVABLE = ["functional", "process", "style"];
+export const WAIVABLE = ["functional", "process", "style"];   // what the OWNER may waive
+// The one place that says which classes the Front agent may waive on its own. Everything else (a functional finding, a level-3 ticket, the last
+// Tester round and anything after the round limit, a failed re-evaluation) is the owner's decision (waiver.mjs). Narrow or widen it here only.
+export const FRONT_AGENT_WAIVABLE = ["process", "style"];
 export const CLASSES = [...NEVER_WAIVABLE, ...WAIVABLE];
 export const SEVERITIES = ["blocker", "major", "minor"];
 
 const HEADING = /^### (F[1-9]\d{0,2}) \[(blocker|major|minor)\] \[([a-z-]+)\] ([^\s[].*)$/;   // the title never starts with a bracket: a second class marker is no title
-const LOOKS_LIKE_FINDING = /^#{3,4}\s.*\[(blocker|major|minor)\]/i;
+const LOOKS_LIKE_FINDING = /^#{3,6}\s.*\[(blocker|major|minor)\]/i;
+// Inside "## Findings": a line that looks like a blocker or major finding in any markup (bold, list, numbered, a deeper heading, a table row) but is no
+// well-formed heading makes the file unreadable (fail closed). So does a line that starts like a finding id (F1 ...) without being a heading.
+const LOOKS_BLOCKING = /\[(blocker|major)\]/i;
+const LOOKS_LIKE_ID = /^[\s>*_#\-\d.)|]*F[1-9]\d*\b/;
 const GATES = /^Gates: verify (pass|fail), e2e (pass|fail|none)\s*$/;
 
 /** What to do when a file cannot be read as classed findings (a review written before the classes existed, or a Tester that did not follow the template). */
@@ -34,11 +45,11 @@ export function parseFindings(text) {
   const findings = [], seen = new Set();
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
-    if (!LOOKS_LIKE_FINDING.test(l) && !(i >= start && i < end && /^###(\s|$)/.test(l))) continue;
     const inside = i >= start && i < end;
+    if (!LOOKS_LIKE_FINDING.test(l) && !(inside && (/^###(\s|$)/.test(l) || LOOKS_BLOCKING.test(l) || (LOOKS_LIKE_ID.test(l) && !HEADING.test(l))))) continue;
     if (!inside) return { ok: false, why: `a finding heading outside "## Findings" (line ${i + 1}: ${l.slice(0, 60)})` };
     const m = HEADING.exec(l);
-    if (!m) return { ok: false, why: `line ${i + 1} is not a finding heading of the form "### F<n> [blocker|major|minor] [<class>] <title>": ${l.slice(0, 70)}` };
+    if (!m) return { ok: false, why: `line ${i + 1} looks like a finding but is not a finding heading of the form "### F<n> [blocker|major|minor] [<class>] <title>": ${l.slice(0, 70)}` };
     const [, id, severity, cls, title] = m;
     if (!CLASSES.includes(cls)) return { ok: false, why: `${id} has the class "${cls}", which is not one of ${CLASSES.join(", ")}` };
     if (seen.has(id)) return { ok: false, why: `${id} is used twice` };
@@ -75,6 +86,14 @@ export function waivable(parsed, named, path) {
   const open = blocking.filter((f) => !named.includes(f.id));
   if (open.length) return { ok: false, why: `${open.map((f) => `${f.id} [${f.severity}]`).join(", ")} is not named: every blocker and major of the review must be named (minor findings and debt candidates are not blockers)` };
   return { ok: true };
+}
+
+/** May the FRONT AGENT (not the owner) decide this waiver on its class? Only findings of FRONT_AGENT_WAIVABLE: any named finding of another class
+ *  (a functional defect above all) is the owner's. The class is the reviewer's claim (see the top of this file). Call it after `waivable` said ok. */
+export function frontAgentMayWaive(parsed, named) {
+  const outside = parsed.findings.filter((f) => named.includes(f.id) && !FRONT_AGENT_WAIVABLE.includes(f.cls));
+  if (!outside.length) return { ok: true };
+  return { ok: false, why: `${outside.map((f) => `${f.id} (${f.cls})`).join(", ")}: the Front agent may waive only findings classed ${FRONT_AGENT_WAIVABLE.join(" or ")}; a finding of another class is the owner's decision (--decider owner, with their words verbatim)` };
 }
 
 /** For reviewed.mjs after it recorded a fail: why no waiver could ever cover this review, or "" when none is ruled out. It never says a

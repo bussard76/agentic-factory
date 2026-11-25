@@ -10,8 +10,8 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { bindBranches, latestReview } from "../controller/reviewrecord.mjs";
-import { parseFindings, waivable, waivableNote, CLASSES, NEVER_WAIVABLE, WAIVABLE } from "../controller/findings.mjs";
+import { bindBranches, latestReview, recordedIssues } from "../controller/reviewrecord.mjs";
+import { parseFindings, waivable, waivableNote, CLASSES, NEVER_WAIVABLE, WAIVABLE, FRONT_AGENT_WAIVABLE } from "../controller/findings.mjs";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const NOHOOKS = ["-c", "core.hooksPath=/dev/null"];
@@ -307,12 +307,12 @@ test("break it 3: a waiver is for one commit; the branch moving past it stops th
     p.review("t1", moved, FILE(moved).replace("round 1", "round 2"), { round: 2 });
     assert.equal(record(b, 2).status, 0);
     const r = b.run("wave.mjs", ["Title", "Summary", "origin/agents/t1", "origin/agents/t1-review-2"]); assert.equal(r.status, 1); assert.match(r.stderr, /WAVE-NOT-STARTED/);
-    const again = waive(b, p.tip("agents/t1-review-2"), { branch: "agents/t1-review-2" }); assert.equal(again.status, 0, again.stdout); assert.equal(waiverEvents(b).length, 2);
+    const again = waive(b, p.tip("agents/t1-review-2"), { branch: "agents/t1-review-2", decider: "owner", words: "the owner takes the last round" }); assert.equal(again.status, 0, again.stdout); assert.equal(waiverEvents(b).length, 2);
   } finally { b.cleanup(); }
 });
 
 test("break it 4: a waiver names its findings: none, a wildcard, an unknown id or a missing blocker or major is refused; an unclassed review is not waivable at all", () => {
-  const two = (s) => FILE(s, { findings: [["F1", "blocker", "process"], ["F2", "major", "functional"], ["F3", "minor", "style"]] });
+  const two = (s) => FILE(s, { findings: [["F1", "blocker", "process"], ["F2", "major", "style"], ["F3", "minor", "functional"]] });
   const { p, b } = scene({ text: two });
   try {
     record(b); const rsha = p.tip("agents/t1-review-1");
@@ -325,7 +325,7 @@ test("break it 4: a waiver names its findings: none, a wildcard, an unknown id o
   // a review written before the classes: recorded as before, never waivable, with the way out
   const old = scene({ text: (s) => `# T1 review, round 1\n\nVerdict: fail\nReviewed commit: ${s}\nGates: verify pass, e2e none\n\n## Findings\n### [blocker] The approval came after the build\n- Where: x\n` });
   try {
-    const r = record(old.b); assert.equal(r.status, 0); assert.match(r.stdout, /waiver: not waivable: line \d+ is not a finding heading[\s\S]*A new review with the current template is needed/);
+    const r = record(old.b); assert.equal(r.status, 0); assert.match(r.stdout, /waiver: not waivable: line \d+ looks like a finding but is not a finding heading[\s\S]*A new review with the current template is needed/);
     const w = waive(old.b, old.p.tip("agents/t1-review-1")); assert.equal(w.status, 3); assert.match(w.stdout, /not in the classed format[\s\S]*A new review with the current template is needed \(a new Tester round, mkspec test; after the round limit the re-evaluation, mkspec reeval\)/);
   } finally { old.b.cleanup(); }
 });
@@ -353,7 +353,7 @@ test("break it 6: who may decide: level 3, or a level that cannot be established
   const l3 = scene({ level: 3 });
   try {
     record(l3.b); const rsha = l3.p.tip("agents/t1-review-1");
-    const front = waive(l3.b, rsha); assert.equal(front.status, 3); assert.match(front.stdout, /its level is 3[\s\S]*only the owner decides a waiver/); assert.equal(waiverEvents(l3.b).length, 0);
+    const front = waive(l3.b, rsha); assert.equal(front.status, 3); assert.match(front.stdout, /its level is 3[\s\S]*Only the owner decides/); assert.equal(waiverEvents(l3.b).length, 0);
     const owner = waive(l3.b, rsha, { decider: "owner", words: "I, the owner, accept this and want a follow-up" }); assert.equal(owner.status, 0, owner.stdout); assert.deepEqual([waiverEvents(l3.b)[0].decider, waiverEvents(l3.b)[0].level, waiverEvents(l3.b)[0].words], ["owner", 3, "I, the owner, accept this and want a follow-up"]);
   } finally { l3.b.cleanup(); }
   // the Controller is not a decider, and "words" are required
@@ -364,7 +364,7 @@ test("break it 6: who may decide: level 3, or a level that cannot be established
     assert.match(waive(c.b, rsha, { words: "ok" }).stdout, /fewer than three words is no decision/);
     assert.match(waive(c.b, rsha, { words: undefined }).stdout, /--words is required/);
     assert.match(waive(c.b, rsha, { followUp: "T1" }).stdout, /not the task that is waived/);
-    assert.match(waive(c.b, rsha, { followUp: "T99" }).stdout, /is not a ticket file in docs\/tasks\/ or a debt entry/);
+    assert.match(waive(c.b, rsha, { followUp: "T99" }).stdout, /is not a ticket file in docs\/tasks\/ .*or a debt entry/);
     assert.equal(waiverEvents(c.b).length, 0);
   } finally { c.b.cleanup(); }
   // the ticket says level 3 on main, the task branch lowers it to 1: main counts
@@ -379,11 +379,11 @@ test("break it 6: who may decide: level 3, or a level that cannot be established
   try { raised.p.onMain({ "docs/tasks/T1-x.md": "# T1: x\n\nStatus: building\nLevel: 3\n" }); record(raised.b); assert.match(waive(raised.b, raised.p.tip("agents/t1-review-1")).stdout, /its level is 3/); } finally { raised.b.cleanup(); }
   for (const [name, ticket] of [["an unfilled template", "# T1\n\nLevel: 1 | 2 | 3\n"], ["no level at all", "# T1\n\nStatus: building\n"]]) {
     const u = scene({ ticket });
-    try { record(u.b); const r = waive(u.b, u.p.tip("agents/t1-review-1")); assert.equal(r.status, 3, name); assert.match(r.stdout, /its level cannot be read from the ticket on the main branch[\s\S]*only the owner/, name); assert.equal(waive(u.b, u.p.tip("agents/t1-review-1"), { decider: "owner", words: "the owner decides this one" }).status, 0, `${name}: the owner may`); } finally { u.b.cleanup(); }
+    try { record(u.b); const r = waive(u.b, u.p.tip("agents/t1-review-1")); assert.equal(r.status, 3, name); assert.match(r.stdout, /its level cannot be read from the ticket on the main branch[\s\S]*Only the owner/, name); assert.equal(waive(u.b, u.p.tip("agents/t1-review-1"), { decider: "owner", words: "the owner decides this one" }).status, 0, `${name}: the owner may`); } finally { u.b.cleanup(); }
   }
 });
 
-test("break it 7: the round limit and the final re-evaluation: a waiver of round 2 starts the wave, a re-evaluation that fails afterwards needs its own, one that passes needs none", () => {
+test("break it 7: the round limit and the final re-evaluation: only the owner's waiver of round 2 starts the wave, a re-evaluation that fails afterwards needs its own (the owner's), one that passes needs none", () => {
   const { p, b, sha } = scene();
   try {
     record(b); assert.equal(waive(b, p.tip("agents/t1-review-1")).status, 0);   // round 1 failed on `sha`, waived
@@ -391,7 +391,10 @@ test("break it 7: the round limit and the final re-evaluation: a waiver of round
     p.review("t1", c2, FILE(c2).replace("round 1", "round 2"), { round: 2 }); assert.equal(record(b, 2).status, 0);   // round 2 fails: the limit (2) is reached
     // the old waiver does not cover round 2; a new one does; the wave would start for c2
     assert.equal(b.run("wave.mjs", ["Title", "Summary", "origin/agents/t1", "origin/agents/t1-review-2"]).status, 1);
-    assert.equal(waive(b, p.tip("agents/t1-review-2"), { branch: "agents/t1-review-2" }).status, 0);
+    // finding 1: the last Tester round is the owner's. The Front agent cannot replace the re-evaluation by a waiver; the owner can.
+    const front2 = waive(b, p.tip("agents/t1-review-2"), { branch: "agents/t1-review-2" }); assert.equal(front2.status, 3); assert.match(front2.stdout, /2 Tester round\(s\) of T1 failed and the limit is 2: this is the last round[\s\S]*Only the owner decides/);
+    assert.equal(b.run("wave.mjs", ["Title", "Summary", "origin/agents/t1", "origin/agents/t1-review-2"]).status, 1, "still no wave");
+    assert.equal(waive(b, p.tip("agents/t1-review-2"), { branch: "agents/t1-review-2", decider: "owner", words: "I, the owner, accept the last round as it is" }).status, 0);
     // the re-evaluation of c2 fails: a failed review of the same commit that the waiver of round 2 does not name
     p.review("t1", c2, FILE(c2, { gates: "" }).replace("round 1", "final"), { name: "t1-review-final", file: "docs/reviews/T1-review-final.md" });
     const rf = record(b, "final"); assert.equal(rf.status, 0, rf.stdout + rf.stderr);
@@ -405,20 +408,42 @@ test("break it 7: the round limit and the final re-evaluation: a waiver of round
   } finally { b.cleanup(); }
 });
 
-test("github-issues: the level is the Controller's claim record (the first one), read with --ref; a missing level or record means the owner only", () => {
+test("github-issues: the level is the Controller's own record of THIS task: the issue mkspec bound to it and that issue's first claim; a caller's --ref is refused, no or an ambiguous binding means the owner only", () => {
   const { p, b } = scene({ extra: { steering: { mode: "github-issues" } } });
   try {
     record(b); const rsha = p.tip("agents/t1-review-1"), journalFile = path.join(b.ctl, "journal.ndjson");
-    const claims = (...c) => { const rest = b.events().filter((e) => e.type !== "claim"); fs.writeFileSync(journalFile, [...c.map((x) => ({ type: "claim", task: "12", documentation: false, ...x })), ...rest].map((e) => JSON.stringify(e)).join("\n") + "\n"); };
-    const over = { ref: "#12", followUp: "#9" };
-    assert.match(waive(b, rsha, { ...over, ref: undefined }).stdout, /pass the task reference: --ref "#<n>"/, "no --ref");
-    claims(); assert.match(waive(b, rsha, over).stdout, /its level cannot be read[\s\S]*only the owner/, "no claim record");
-    claims({}); assert.match(waive(b, rsha, over).stdout, /its level cannot be read/, "a claim from before the level was recorded");
-    claims({ level: 3 }); assert.match(waive(b, rsha, over).stdout, /its level is 3/, "level 3");
-    claims({ level: 3 }, { level: 1 }); assert.match(waive(b, rsha, over).stdout, /its level is 3/, "the first claim record wins: the issue edited later does not lower it");
-    claims({ level: 2 }); assert.match(waive(b, rsha, { ...over, followUp: "T7" }).stdout, /is not a ticket file in docs\/tasks\/ or a debt entry in docs\/debt\.md on origin\/main, nor an issue as #<n>/, "a follow-up that exists nowhere");
+    const records = (refs, ...c) => { const rest = b.events().filter((e) => e.type !== "claim" && e.type !== "taskref"); fs.writeFileSync(journalFile, [...refs.map((r) => ({ type: "taskref", task: "T1", ref: r, by: "mkspec.mjs" })), ...c.map((x) => ({ type: "claim", documentation: false, ...x })), ...rest].map((e) => JSON.stringify(e)).join("\n") + "\n"); };
+    const over = { followUp: "#9" };
+    // attack A3: the caller used to pick the claim by --ref; it is not an option any more, whatever it says
+    for (const ref of ["#5", "#7"]) { const r = waive(b, rsha, { ...over, ref }); assert.equal(r.status, 3); assert.match(r.stdout, /--ref is not an option of waiver\.mjs|--ref is gone/, ref); }
+    records([], { task: "5", level: 1 }, { task: "7", level: 3 });
+    assert.match(waive(b, rsha, over).stdout, /its level cannot be read[\s\S]*Only the owner/i, "claims exist, but nothing binds T1 to an issue: the Front agent is refused whatever the claims say");
+    records(["#7"], { task: "5", level: 1 }, { task: "7", level: 3 });
+    assert.match(waive(b, rsha, over).stdout, /its level is 3/, "T1 is issue 7: its level 3 counts, even with a level 1 claim of another issue (#5) in the journal");
+    records(["#5"], { task: "5", level: 1 }, { task: "7", level: 3 });
+    assert.match(waive(b, rsha, { ...over, followUp: "#5" }).stdout, /not the task that is waived/, "the follow-up is not the task's own issue (the mapped one, not a typed one)");
+    records(["#5", "#7"], { task: "5", level: 1 }, { task: "7", level: 3 });
+    assert.match(waive(b, rsha, over).stdout, /its level cannot be read/, "two issues bound to one task id: ambiguous, owner only");
+    records(["#12"]); assert.match(waive(b, rsha, over).stdout, /its level cannot be read/, "bound, but no claim record");
+    records(["#12"], { task: "12" }); assert.match(waive(b, rsha, over).stdout, /its level cannot be read/, "a claim from before the level was recorded");
+    records(["#12"], { task: "12", level: 3 }, { task: "12", level: 1 }); assert.match(waive(b, rsha, over).stdout, /its level is 3/, "the first claim record wins: the issue edited later does not lower it");
+    records(["#12"], { task: "12", level: 2 }); assert.match(waive(b, rsha, { ...over, followUp: "T7" }).stdout, /is not a ticket file in docs\/tasks\/ .*or a debt entry in docs\/debt\.md on origin\/main.*nor an issue as #<n>/, "a follow-up that exists nowhere");
     assert.equal(waiverEvents(b).length, 0);
     const ok = waive(b, rsha, over); assert.equal(ok.status, 0, ok.stdout); assert.deepEqual([waiverEvents(b)[0].level, waiverEvents(b)[0].decider, waiverEvents(b)[0].followUp], [2, "front-agent", "#9"]);
+  } finally { b.cleanup(); }
+});
+
+test("github-issues: mkspec binds the task id to its issue in the Controller's journal (first record, no duplicates), a second issue for the same id makes it ambiguous", () => {
+  const { b } = scene({ extra: { steering: { mode: "github-issues" } } });
+  try {
+    const dev = (ref) => { const r = b.raw("templates/mkspec.mjs", ["dev", "T1", ref, "agents/t1"]); assert.equal(r.status, 0, r.stdout + r.stderr); };
+    dev("#12"); dev("#12"); const refs = () => b.events().filter((e) => e.type === "taskref");
+    assert.deepEqual(refs().map((e) => [e.task, e.ref, e.by]), [["T1", "#12", "mkspec.mjs"]], "one record, however often a spec is made");
+    dev("#13"); assert.deepEqual(refs().map((e) => e.ref), ["#12", "#13"], "a different issue for the same task is recorded too");
+    assert.deepEqual([...recordedIssues(fs.readFileSync(path.join(b.ctl, "journal.ndjson"), "utf8"), "t1")].sort(), ["12", "13"], "and the reader sees two: ambiguous");
+    assert.equal(recordedIssues(fs.readFileSync(path.join(b.ctl, "journal.ndjson"), "utf8"), "T2").size, 0);
+    // a line that is not mkspec's, or has no issue reference, binds nothing
+    assert.equal(recordedIssues(J({ type: "taskref", task: "T1", ref: "#4", by: "worker" }, { type: "taskref", task: "T1", ref: "README" }), "T1").size, 0);
   } finally { b.cleanup(); }
 });
 
@@ -487,6 +512,7 @@ test("every rendered review spec demands one class per finding from the fixed li
       for (const cls of CLASSES) assert.ok(text.includes(cls), `${name} names the class ${cls}`);
       assert.ok(text.includes(`${NEVER_WAIVABLE.join(", ")} (never waivable`), `${name}: the never-waivable list is findings.mjs's`); assert.ok(text.includes(`${WAIVABLE.join(", ")} (a decided non-blocker`), `${name}: the waivable list is findings.mjs's`);
       assert.match(text, /A finding without a class, or in another form, can never be waived/, name);
+      assert.match(text, /The class is YOUR claim and no code checks it/, name);
     }
     assert.match(specs["Tester round 1"], /'Gates: verify pass\|fail, e2e pass\|fail\|none'/);
     assert.match(fs.readFileSync(path.join(ROOT, "templates/docs/review-protocol.md"), "utf8"), /### F<n> \[blocker\|major\|minor\] \[<class>\] <short title>/, "the findings file format of the protocol");
@@ -513,4 +539,158 @@ test("status --json and the human status list the waivers of the Controller's jo
   const s = JSON.parse(cli("status", "--json").stdout);
   assert.equal(s.work.waivers.count, 1); assert.deepEqual([s.work.waivers.list[0].task, s.work.waivers.list[0].commit, s.work.waivers.list[0].decider, s.work.waivers.list[0].followUp], ["T7", A, "front-agent", "T9"]);
   assert.match(cli("status").stdout, /Waivers \(a failed review decided to hold no blocker, 1\):\n\s+T7 aaaaaaaaaa by the front-agent, follow-up T9/);
+});
+
+// --- PR #76 review: what the independent reviewer found, and now refused ----------------------------------------------------------------
+const FUNC = (sha, title = "The specified CSV export drops every second row") => FILE(sha, { findings: [["F1", "blocker", "functional", title]] });
+
+test("review finding 1: the Front agent waives only process and style; a functional finding is the owner's, however the Tester worded it; the set is one constant", () => {
+  assert.deepEqual(FRONT_AGENT_WAIVABLE, ["process", "style"]); assert.ok(FRONT_AGENT_WAIVABLE.every((c) => WAIVABLE.includes(c)), "a subset of what the owner may waive");
+  // attack A4: a functional blocker, level 2, the Front agent: refused. (It pushed to main before.)
+  const s = scene({ level: 2, text: FUNC });
+  try {
+    record(s.b); const rsha = s.p.tip("agents/t1-review-1");
+    const r = waive(s.b, rsha); assert.equal(r.status, 3); assert.match(r.stdout, /F1 \(functional\): the Front agent may waive only findings classed process or style[\s\S]*the owner's decision/); assert.equal(waiverEvents(s.b).length, 0);
+    assert.equal(s.b.run("wave.mjs", WAVE).status, 1, "and no wave starts");
+    // the owner may, with their words: that is the changed happy path of a functional finding, through the wave to main
+    const o = waive(s.b, rsha, { decider: "owner", words: "I, the owner, decided this is a follow-up" }); assert.equal(o.status, 0, o.stdout); assert.equal(waiverEvents(s.b)[0].decider, "owner");
+    assert.equal(s.b.run("wave.mjs", WAVE).status, 0); const log = s.b.waitEnd(); assert.match(log, /PUSHED main/);
+  } finally { s.b.cleanup(); }
+  // attack A4b: a security hole the Tester labelled functional: refused for the Front agent as well (the class is a claim; a functional one is the owner's)
+  const m = scene({ text: (sha) => FUNC(sha, "SQL injection in the login query") });
+  try { record(m.b); const r = waive(m.b, m.p.tip("agents/t1-review-1")); assert.equal(r.status, 3); assert.match(r.stdout, /Front agent may waive only/); } finally { m.b.cleanup(); }
+  // style and process stay the Front agent's (the PR's own case), also named together with a minor functional finding
+  const st = scene({ text: (sha) => FILE(sha, { findings: [["F1", "blocker", "style"], ["F2", "minor", "functional"]] }) });
+  try { record(st.b); assert.equal(waive(st.b, st.p.tip("agents/t1-review-1"), { findings: "F1" }).status, 0, "a minor finding of another class that is not named is no blocker"); assert.match(waive(st.b, st.p.tip("agents/t1-review-1"), { findings: "F1,F2" }).stdout, /already waived/); } finally { st.b.cleanup(); }
+  const named = scene({ text: (sha) => FILE(sha, { findings: [["F1", "blocker", "style"], ["F2", "minor", "functional"]] }) });
+  try { record(named.b); const r = waive(named.b, named.p.tip("agents/t1-review-1"), { findings: "F1,F2" }); assert.equal(r.status, 3, "naming a functional finding is the owner's, even a minor one"); assert.match(r.stdout, /F2 \(functional\)/); } finally { named.b.cleanup(); }
+});
+
+test("review finding 1: the round limit comes from the journal's failed rounds, not a branch name; an unreadable limit is the owner's; a failed conformance review after the limit too", () => {
+  const { p, b } = scene({ extra: { reviews: { maxRounds: "two rounds" } } });
+  try {
+    record(b); const r = waive(b, p.tip("agents/t1-review-1")); assert.equal(r.status, 3); assert.match(r.stdout, /reviews\.maxRounds \("two rounds"\) cannot be read[\s\S]*Only the owner/);
+    assert.equal(waive(b, p.tip("agents/t1-review-1"), { decider: "owner", words: "the owner decides this one" }).status, 0);
+  } finally { b.cleanup(); }
+  // one failed Tester round of a limit of 1: this IS the last round, so the Front agent cannot waive it (a limit of 2 above could)
+  const one = scene({ extra: { reviews: { maxRounds: 1 } } });
+  try { record(one.b); const r = waive(one.b, one.p.tip("agents/t1-review-1")); assert.equal(r.status, 3); assert.match(r.stdout, /1 Tester round\(s\) of T1 failed and the limit is 1/); } finally { one.b.cleanup(); }
+  // a failed conformance review of a task whose Tester rounds hit the limit: after the limit, the owner's too
+  const c = scene(); 
+  try {
+    record(c.b); const c2 = c.p.push("t1", { "src/t1.js": "export const t1 = 2;\n" }, "rework");
+    c.p.review("t1", c2, FILE(c2).replace("round 1", "round 2"), { round: 2 }); record(c.b, 2);
+    c.p.review("t1", c2, FILE(c2, { gates: "" }), { name: "t1-conformance", file: "docs/reviews/T1-architecture-conformance.md" }); assert.equal(c.b.run("reviewed.mjs", ["T1", "agents/t1-conformance"]).status, 0);
+    const r = waive(c.b, c.p.tip("agents/t1-conformance"), { branch: "agents/t1-conformance" }); assert.equal(r.status, 3); assert.match(r.stdout, /2 Tester round\(s\) of T1 failed and the limit is 2/);
+  } finally { c.b.cleanup(); }
+});
+
+test("review finding 2: any line in ## Findings that looks like a blocker or major finding but is no finding heading makes the file unreadable (bold, list, number, deeper heading, id-only, table, any case)", () => {
+  const bad = {
+    "bold": "**F2 [blocker] [security] token written to the log**\n",
+    "a deeper heading": "##### F3 [blocker] [data-corruption] rows overwritten\n",
+    "a list item": "- F4 [major] [security] secret in the response\n",
+    "a numbered item": "1. [blocker] the export is wrong\n",
+    "upper case": "F5 [MAJOR] [gate] the gate is red\n",
+    "an id only, no brackets": "F6 - secret leak in the logs\n",
+    "a table row": "| F7 | [blocker] | security |\n",
+    "a blocker named in a body line": "- Problem: this is a [blocker] for the release\n",
+  };
+  for (const [name, extra] of Object.entries(bad)) {
+    const text = FILE(A, { body: `${heading("F1", "blocker", "process")}\n${extra}` });   // attack A4d: F1 is process, the rest hides in the prose
+    const p = parseFindings(text); assert.equal(p.ok, false, name); assert.match(p.why, /looks like a finding but is not a finding heading|not a finding heading/, name);
+    assert.match(waivable(p, ["F1"], "tester").why, /not in the classed format/, name);
+  }
+  // a deeper heading outside the section is refused too, and an honest file with prose in its bodies is still read
+  assert.equal(parseFindings(FILE(A).replace("## Debt candidates", "##### F9 [blocker] [security] hidden\n\n## Debt candidates")).ok, false, "a ##### finding heading after the section");
+  const honest = parseFindings(FILE(A, { findings: [["F1", "blocker", "process", "A missing proof"], ["F2", "minor", "style"]] })); assert.equal(honest.ok, true); assert.equal(honest.findings.length, 2);
+  // through the whole path: the review is recorded as before, and the waiver refuses it with the reason
+  const s = scene({ text: (sha) => FILE(sha, { findings: [["F1", "blocker", "process"]] }).replace("## Debt candidates\n", "## Debt candidates\n**F2 [blocker] [security] token written to the log**\n") });
+  try { record(s.b); assert.equal(waive(s.b, s.p.tip("agents/t1-review-1")).status, 0, "outside the section it is another section's text (the decision names the Findings section only)"); } finally { s.b.cleanup(); }
+  const t = scene({ text: (sha) => FILE(sha, { findings: [["F1", "blocker", "process"]] }).replace("## Debt candidates", "**F2 [blocker] [security] token written to the log**\n\n## Debt candidates").replace("## Findings\n", "## Findings\n**F2 [blocker] [security] token written to the log**\n") });
+  try { record(t.b); const r = waive(t.b, t.p.tip("agents/t1-review-1")); assert.equal(r.status, 3); assert.match(r.stdout, /looks like a finding but is not a finding heading/); assert.equal(waiverEvents(t.b).length, 0); assert.equal(waive(t.b, t.p.tip("agents/t1-review-1"), { decider: "owner", words: "the owner decides this" }).status, 3, "not even the owner: an unreadable file is not waivable"); } finally { t.b.cleanup(); }
+});
+
+test("review finding 3: with GitHub issues a typed --ref is refused as an option, whatever the claims say (see the github-issues tests above for the binding)", () => {
+  const { p, b } = scene({ extra: { steering: { mode: "github-issues" } } });
+  try {
+    record(b); const rsha = p.tip("agents/t1-review-1");
+    const r = b.raw("waiver.mjs", ["T1", "agents/t1-review-1", rsha, "--findings", "F1", "--decider", "front-agent", "--words", "this is a follow-up", "--reason", "r", "--follow-up", "#9", "--ref", "#5"]);
+    assert.equal(r.status, 3); assert.match(r.stdout, /--ref: not an option of waiver\.mjs\. --ref is gone/); assert.equal(waiverEvents(b).length, 0);
+    const bogus = b.raw("waiver.mjs", ["T1", "agents/t1-review-1", rsha, "--bogus", "x"]); assert.equal(bogus.status, 2, "any other option is the shared argument check's usage error"); assert.match(bogus.stderr, /--bogus/);
+  } finally { b.cleanup(); }
+});
+
+test("review finding 5: a follow-up is a real ticket or debt id: not the README, a template, a header row, a separator or a placeholder row", () => {
+  const debt = "| ID | Category | Where |\n|---|---|---|\n| F1 | x | y |\n| <id> | <category> | placeholder |\n\n| N1 | Category | Where |\n|---|---|---|\n| N2 | x | y |\n";
+  const { p, b } = scene({ mainFiles: { "docs/tasks/README.md": "# tasks\n", "docs/tasks/T00-template.md": "# T00\n", "docs/tasks/0000-template.md": "# t\n", "docs/debt.md": debt } });
+  try {
+    record(b); const rsha = p.tip("agents/t1-review-1");
+    for (const id of ["README", "readme", "ID", "---", "|---|", "Category", "<id>", "0000-template", "0000", "T00-template", "T00", "N1", "T", "x y", "../T2", ""]) {
+      const r = waive(b, rsha, { followUp: id }); assert.equal(r.status, 3, `follow-up ${JSON.stringify(id)}`); assert.equal(waiverEvents(b).length, 0, id);
+    }
+    assert.match(waive(b, rsha, { followUp: "README" }).stdout, /not the README or the template/);
+    assert.equal(waive(b, rsha, { followUp: "F1" }).status, 0, "a real debt id");
+    assert.equal(waiverEvents(b)[0].followUp, "F1");
+  } finally { b.cleanup(); }
+  for (const id of ["N2", "T2"]) { const q = scene({ mainFiles: { "docs/debt.md": debt } }); try { record(q.b); assert.equal(waive(q.b, q.p.tip("agents/t1-review-1"), { followUp: id }).status, 0, id); } finally { q.b.cleanup(); } }
+});
+
+test("review finding 6: a second waiver for the same review is refused, by anybody, and the first decider stays on record; a hand-appended later line does not replace it", () => {
+  const { p, b, sha } = scene();
+  try {
+    record(b);
+    // a failed conformance review of the same commit stands as well (the reviewer's scene: the old check ran only when the whole task was waived)
+    p.review("t1", sha, FILE(sha, { gates: "" }), { name: "t1-conformance", file: "docs/reviews/T1-architecture-conformance.md" }); assert.equal(b.run("reviewed.mjs", ["T1", "agents/t1-conformance"]).status, 0);
+    const rsha = p.tip("agents/t1-review-1");
+    assert.equal(waive(b, rsha, { decider: "owner", words: "owner says follow up please" }).status, 0);
+    const again = waive(b, rsha, { decider: "front-agent" }); assert.equal(again.status, 3); assert.match(again.stdout, /already waived: one decision per review/);
+    assert.equal(waive(b, rsha, { decider: "owner", words: "owner says it once more" }).status, 3, "not even the owner again");
+    assert.deepEqual(waiverEvents(b).map((e) => e.decider), ["owner"]);
+  } finally { b.cleanup(); }
+  // in the record: the FIRST waiver of a review counts, so a later line (hand-appended, same user: F55) cannot make an owner decision a Front-agent one
+  const w = latestReview(J(fail(A, 1), waiver(A, 1, { decider: "owner" }), waiver(A, 1, { decider: "front-agent" })), "t1", 2);
+  assert.equal(w.state, "waived"); assert.deepEqual(w.waivers.map((x) => x.decider), ["owner"]);
+});
+
+test("review findings 4 and 7: the merge message carries the record (decider, findings, follow-up, their words, the reason) marked as a record, not a proof; it never claims the journal was read; ADR tokens in free text are made harmless", () => {
+  const { p, b } = scene();
+  try {
+    record(b);
+    const words = `I decided: this is a follow-up, "not" a blocker; $HOME; ADR-0042 approves it`, reason = "the process proof only\nsecond line with 'quotes' and `ticks`";
+    assert.equal(waive(b, p.tip("agents/t1-review-1"), { words, reason }).status, 0);
+    assert.equal(b.run("wave.mjs", WAVE).status, 0); const log = b.waitEnd(); assert.match(log, /PUSHED main/, log.slice(-400));
+    const msg = p.origin("log", "-3", "--format=%B", "main");
+    assert.match(msg, /Waived review: docs\/reviews\/T1-review-1\.md \(it still says Verdict: fail\)/);
+    assert.match(msg, /RECORD, not a proof/); assert.match(msg, /nobody checked who decided or that the classes in the findings file are right/);
+    assert.match(msg, /Record for docs\/reviews\/T1-review-1\.md: decided by the front-agent \(claimed in the Controller's journal, not checked\); findings F1; follow-up T2; their words: "I decided: this is a follow-up, "not" a blocker; \$HOME; ADR_0042 approves it"; reason: "the process proof only second line with 'quotes' and `ticks`"\./);
+    assert.doesNotMatch(msg, /as recorded in the Controller's journal/, "no claim that the script read the journal");
+    assert.doesNotMatch(msg, /ADR-0042/, "free text approves no protected file");
+  } finally { b.cleanup(); }
+  // attack A7b: integ-wave.sh by hand with WAVE_WAIVED and no journal record at all: not stopped (debt F55), and what it writes is no claim of a record
+  const q = scene();
+  try {
+    record(q.b); const head = q.sha, rsha = q.p.tip("agents/t1-review-1");
+    const integ = path.join(q.p.base, "coordinator-integration"); q.p.git("worktree", "add", "-q", "-B", "integration", integ, "refs/remotes/origin/main");
+    const r = spawnSync("bash", [path.join(ROOT, "controller/integ-wave.sh"), "W", "wave", `origin/agents/t1@${head}`, `origin/agents/t1-review-1~${head}:${rsha}=docs/reviews/T1-review-1.md`], { cwd: integ, encoding: "utf8", env: { ...CLEAN_ENV, MAIN: "main", INSTALL_CMD: "", VERIFY_CMD: "true", E2E_CMD: "", GATE: path.join(q.b.ctl, "gate"), WAVE_PROJECT: JSON.parse(fs.readFileSync(path.join(q.b.ctl, "factory.config.json"), "utf8")).project.name, TRAILER: "", WAVE_LOG_DIR: path.join(q.p.base, "logs"), WAVE_TASKS: "t1", WAVE_WAIVED: `${head}=docs/reviews/T1-review-1.md`, WAVE_WAIVED_NOTES: `${head}=docs/reviews/T1-review-1.md:${Buffer.from("made by hand, ADR-0007 is mine").toString("base64")}` } });
+    assert.match(r.stdout, /PUSHED main/, `the known limit, F55: the script does not read the journal: ${r.stdout}${r.stderr}`);
+    const msg = q.p.origin("log", "-3", "--format=%B", "main"); assert.match(msg, /RECORD, not a proof: it is what the caller of this script passed in/); assert.match(msg, /made by hand, ADR_0007 is mine/); assert.doesNotMatch(msg, /as recorded in the Controller's journal|ADR-0007/);
+    assert.equal(q.b.events().filter((e) => e.type === "waiver").length, 0, "and there is indeed no waiver in any journal");
+  } finally { q.b.cleanup(); }
+});
+
+test("review finding 8: the docs say plainly what the code does not check, next to the claims, and no longer contradict themselves", () => {
+  const read = (f) => fs.readFileSync(path.join(ROOT, f), "utf8");
+  for (const f of ["controller/CONTROLLER.md", "docs/reviews.md", "templates/docs/review-protocol.md", "docs/workflow.md", "docs/de/workflow.md", "templates/docs/architect-protocol.md"]) {
+    const t = read(f); assert.doesNotMatch(t, /either (may|path can) be taken/, `${f}: the sentence that contradicted itself is gone`);
+    assert.match(t, /own claim|eigene Behauptung/, `${f}: the class is the reviewer's claim`);
+  }
+  for (const f of ["controller/CONTROLLER.md", "docs/reviews.md", "templates/docs/review-protocol.md"]) assert.match(read(f), /who (really )?spoke|who decided/, `${f}: the decider is a claim too`);
+  assert.match(read("controller/CONTROLLER.md"), /replaces the re-evaluation only because the owner decided it/); assert.match(read("docs/reviews.md"), /replaces the re-evaluation[^.]*only because the owner decided it/);
+  assert.match(read("docs/reviews.md"), /FRONT_AGENT_WAIVABLE/); assert.match(read("docs/reviews.md"), /class never changes the verdict/);
+  // what fails a review is unchanged: the sentence of workflow.md stays, and the waiver paragraph says the class changes nothing about it
+  assert.match(read("docs/workflow.md"), /a review fails only for real functional defects[^.]*\. Missing tests, coverage gaps, edge cases, security, load and style become debt/);
+  assert.match(read("docs/workflow.md"), /The class never changes what fails a review/);
+  assert.match(read("debt.md"), /F55[^\n]*the class of a finding is the reviewer's own claim[^\n]*WAVE_WAIVED[^\n]*hand-made value[^\n]*--decider owner/);
+  assert.doesNotMatch(read("controller/integ-wave.sh"), /nothing from the host's environment counts|as recorded in the Controller's journal/);
 });

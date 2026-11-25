@@ -80,7 +80,7 @@ export function latestReview(text, key, maxRounds) {
     if (e.type === "waiver") {
       // A waiver covers exactly one failed review: the very review (branch, the commit of the review branch, file, kind) of the very reviewed commit, recorded earlier.
       const f = failByKey.get(reviewKey(e));
-      if (f && f.head === e.head && f.file === e.file && f.path === e.path) waivedBy.set(reviewKey(e), e);
+      if (f && f.head === e.head && f.file === e.file && f.path === e.path && !waivedBy.has(reviewKey(e))) waivedBy.set(reviewKey(e), e);   // the FIRST waiver of a review counts: a later line cannot replace who decided
       continue;
     }
     const conformance = e.path === "conformance";
@@ -156,7 +156,7 @@ export function bindBranches(branches, { prefix, read }) {
         // The failed review stays in the record and reaches the main branch as a file: its review branch must be in the wave.
         const missing = r.failures.filter((f) => !parsed.some((x) => x.name === f.branch));
         if (missing.length) { problems.push(`${p.b}: the review of ${p.key} at ${r.head} failed and is waived (waiver.mjs); its failed review stays a fail and its findings file goes to the main branch with the wave: add ${missing.map((f) => `origin/${f.branch}`).join(" ")} to the wave.`); continue; }
-        waived.push({ task: p.key, head: r.head, files: r.failures.map((f, i) => ({ file: f.file, branch: f.branch, decider: r.waivers[i].decider, followUp: r.waivers[i].followUp, at: r.waivers[i].ts })) });
+        waived.push({ task: p.key, head: r.head, files: r.failures.map((f, i) => ({ file: f.file, branch: f.branch, decider: r.waivers[i].decider, followUp: r.waivers[i].followUp, findings: r.waivers[i].findings, words: r.waivers[i].words, reason: r.waivers[i].reason, at: r.waivers[i].ts })) });
       }
       if (p.kind === "task") { args.push(`${p.b}@${r.head}`); continue; }
       const cov = r.covers.get(p.name);
@@ -186,4 +186,17 @@ export function failedTesterRounds(text, key) {
   if (text instanceof Error) return 0;
   const r = events(text, key);
   return new Set((r.list ?? []).filter((e) => e.path === "tester" && e.verdict === "fail").map((e) => e.branch ?? e.ts)).size;
+}
+
+/** GitHub-issues mode: the issue numbers the Controller's own records bind to a task id. `mkspec` writes a `taskref` event (by mkspec.mjs) the first time it
+ *  renders a spec for a task and its issue "#<n>"; a waiver reads the level through this binding and never from a reference the caller types.
+ *  A Set of issue-number strings: empty = no record, more than one = ambiguous (the caller treats both as "unknown"). `text` is the journal's text. */
+export function recordedIssues(text, task) {
+  const want = String(task).toLowerCase(), out = new Set();
+  for (const line of typeof text === "string" ? text.split("\n") : []) {
+    let e = null; try { e = JSON.parse(line); } catch { continue; }
+    const n = /^#(\d+)$/.exec(e?.ref ?? "")?.[1];
+    if (e?.type === "taskref" && e.by === "mkspec.mjs" && String(e.task).toLowerCase() === want && n) out.add(n);
+  }
+  return out;
 }

@@ -39,6 +39,11 @@ envs.WAVE_TASKS = bound.tasks.join(" ");   // the tasks of this wave: the only t
 // A task whose last review failed and was waived (waiver.mjs): `<reviewed commit>=<its failed findings file>` for each waived review, always set
 // (an empty value too), so nothing in the host's environment can stand in for it. integ-wave.sh checks every entry against the branches it binds.
 envs.WAVE_WAIVED = bound.waived.flatMap((w) => w.files.map((f) => `${w.head}=${f.file}`)).join(" ");
+// What the journal held for each waived review, as one line of text for the merge message on the main branch (integ-wave.sh decodes it): a RECORD of what was
+// claimed, not a proof of it. Free text (their words, the reason) is flattened to one line, capped, and stripped of anything the commit hooks read as an
+// approval (ADR-NNNN); base64 carries it through the terminal command and the shell without quoting trouble.
+const flat = (s, n = 400) => String(s ?? "").replace(/\bADR-(\d{4})\b/g, "ADR_$1").replace(/\s+/g, " ").trim().slice(0, n);
+envs.WAVE_WAIVED_NOTES = bound.waived.flatMap((w) => w.files.map((f) => `${w.head}=${f.file}:${Buffer.from(`decided by the ${flat(f.decider, 20)} (claimed in the Controller's journal, not checked); findings ${flat((f.findings ?? []).join(","), 80)}; follow-up ${flat(f.followUp, 100)}; their words: "${flat(f.words)}"; reason: "${flat(f.reason)}"`).toString("base64")}`)).join(" ");
 for (const w of bound.waived) console.log(`WAIVED: ${w.task} at ${w.head}: ${w.files.map((f) => `${f.file} (decided by the ${f.decider}, follow-up ${f.followUp})`).join("; ")}. The review stays a fail; the wave still runs the full gate.`);
 const exportLine =Object.entries(envs).map(([k, v]) => `export ${k}=${k === "GATE" ? `"${v}"` : q(v)}`).join("; ");
 const cmd = `clear; T=$(nproc 2>/dev/null || sysctl -n hw.ncpu); while [ "$(cut -d. -f1 /proc/loadavg 2>/dev/null || echo 0)" -ge "$T" ]; do sleep 15; done; ${exportLine}; echo ${b64} | base64 -d > /tmp/${PROJECT}-integ-wave.sh; WAVE_LOG_DIR=/tmp/${PROJECT}-wave bash /tmp/${PROJECT}-integ-wave.sh ${q(title)} ${q(summary)} ${bondedBranches.join(" ")} 2>&1 | tee /tmp/${PROJECT}-wave.out; echo WAVE-END`;

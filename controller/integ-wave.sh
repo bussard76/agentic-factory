@@ -11,12 +11,17 @@
 # WAVE_WAIVED: space separated <reviewed commit>=<findings file> of failed reviews that a waiver (waiver.mjs) covers; each must be the commit of a task branch AND the
 # file of a review branch of THIS wave's bound arguments, or the wave stops. Only then does the push gate get it (FACTORY_WAIVED, for the one push): it treats those
 # commits as reviewed, if the pushed tree holds that failed findings file. A wave with a waived review always runs the full gate: never the docs-only path.
+# WHAT THIS SCRIPT DOES NOT CHECK: WAVE_WAIVED is taken as given (wave.mjs builds it from the Controller's journal; this script does not read the journal and can
+# run on another host than the Controller). It only checks that the value fits the wave's own bound arguments. Whoever runs the script by hand with a hand-made
+# value is not stopped here (debt F55). WAVE_WAIVED_NOTES: the same entries with a base64 note (decider, findings, follow-up, words, reason) for the merge
+# message: a record of what the journal claimed, not a proof of it.
 # Docs-only path (docs/testing.md): with docsOnly.enabled in origin/MAIN's factory.config.json, a wave that changes
 # documentation only runs commands.formatCheck and commands.markdownCheck from that config instead of verify and e2e.
 # Every other wave runs commands.verify (and commands.e2e) through GATE on the merged candidate and pushes only on success:
 # no earlier result (a Developer's or Tester's run, a cached one, an evidence file) and no option or variable replaces it.
 set -uo pipefail
-# Only this script, for its one push, says what the push gate may take as waived: nothing from the host's environment counts.
+# Only this script, for its one push, sets FACTORY_WAIVED: an inherited one is dropped here. The script's own inputs (WAVE_WAIVED, from wave.mjs) are the
+# only way in, and they are checked against this wave's arguments, not against the journal (see the header).
 unset FACTORY_WAIVED
 # Step logs stay inspectable after the wave; wave.mjs sets a directory per project, so waves of two projects on one host never mix.
 LOGS="${WAVE_LOG_DIR:-${TMPDIR:-/tmp}/wave-$$}"; mkdir -p "$LOGS"
@@ -230,7 +235,15 @@ for entry in "${MERGES[@]}"; do
   # message, so a task that touches a protected file (an ADR, AGENTS.md, a hook) merges without a second approval.
   refs=$(git log --format=%B "refs/remotes/origin/$MAIN..$m" | grep -oE 'ADR-[0-9]{4}' | sort -u | tr '\n' ' ')
   waivedfiles=$(for w in $WAIVED_OK; do [ "${w%%=*}" = "$m" ] && printf '%s ' "${w#*=}"; done)
-  git commit -q -m "Merge $name ($TITLE)" -m "$SUMMARY" -m "Merged commit: $(git rev-parse "$m")" ${waivedfiles:+-m "Waived review: ${waivedfiles% } (it still says Verdict: fail; the Front agent or the owner decided it holds no blocker, as recorded in the Controller's journal)"} ${refs:+-m "Refs: $refs"} ${TRAILER:+-m "$TRAILER"} > "$LOGS/wave-commit.log" 2>&1 \
+  # What the waiver record says (WAVE_WAIVED_NOTES, from wave.mjs, base64): printed as a RECORD of a claim, never as a proof. ADR-NNNN is made harmless: no free text approves a protected file.
+  waivedrecord=""
+  for w in $WAIVED_OK; do
+    [ "${w%%=*}" = "$m" ] || continue
+    note=""
+    for n in ${WAVE_WAIVED_NOTES:-}; do case "$n" in "$w":*) note=$(printf %s "${n#*:}" | base64 -d 2>/dev/null | tr -d '\000-\037' | head -c 1500 | sed 's/ADR-\([0-9][0-9][0-9][0-9]\)/ADR_\1/g') ;; esac; done
+    waivedrecord="${waivedrecord:+$waivedrecord }Record for ${w#*=}: ${note:-(no note was passed)}."
+  done
+  git commit -q -m "Merge $name ($TITLE)" -m "$SUMMARY" -m "Merged commit: $(git rev-parse "$m")" ${waivedfiles:+-m "Waived review: ${waivedfiles% } (it still says Verdict: fail). The line below is a RECORD, not a proof: it is what the caller of this script passed in (wave.mjs copies it from the Controller's journal), this script did not read the journal, and nobody checked who decided or that the classes in the findings file are right."} ${waivedfiles:+-m "$waivedrecord"} ${refs:+-m "Refs: $refs"} ${TRAILER:+-m "$TRAILER"} > "$LOGS/wave-commit.log" 2>&1 \
     || { strip < "$LOGS/wave-commit.log" | grep -a -iE "fail|protected|factory" | head -6; echo "COMMIT-FAILED for $name"; exit 1; }
   echo "merged $name at $m"; merged=$((merged + 1))
 done
