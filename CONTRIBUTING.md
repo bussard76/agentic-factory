@@ -32,5 +32,20 @@ This applies on every remote, before anything is accepted, whoever or whatever w
 Every new state of `main` is released, so a project can always stay on a tagged version that has all fixes.
 
 1. **Set the version** in `package.json`, `factory.config.example.json` and `README.md`, and bring `site/index.html` up to date: the version it names, the link to the release notes (it carries the version tag, `releases/tag/v…`), the "Stand" and the block of changes on `main` that are not released yet (move what this release contains out of it).
+   **Write the release notes** in `releases/v<version>.md`: what changed, how to update and what has not run for real. The file is part of the release commit, so every remote has it, and `npm test` fails while the version in `package.json` has no notes file.
 2. **Tag it and push `main` and the tag to every remote.** There is no mirroring, so a merge on one remote does not reach the other.
-3. **Publish the release on every remote,** with what changed, how to update and what has not run for real.
+3. **Publish the release on every remote,** always from that one notes file:
+   - **GitHub:** `gh release create v<version> --verify-tag --title v<version> --notes-file releases/v<version>.md` (`--verify-tag` stops it from creating a tag that was not pushed).
+   - **GitLab:** nothing to do by hand. The tag pipeline's `gitlab-release` job creates the release from the same file, with the job's own token. It leaves a release that already exists as it is, and fails when the notes file is missing. Check that the job is green. Tags pushed before the job existed get their release by starting `gitlab-release-backfill` by hand in a pipeline of the default branch; it creates only what is missing and can be run again.
+   - **If `gitlab-release` failed** (no notes file in the tagged commit, no right to create the release): fix the cause, put the file on `main` through a pull request, and start `gitlab-release-backfill`. Re-running the failed job does not help when the file is missing, because it runs on the tagged commit. A failed backfill is an orange warning, not a red pipeline: its log ends with a `BACKFILL FAILED for:` line.
+   - **Versions:** a release is a tag like `v1.2.3` and nothing else. Pre-release suffixes get no GitLab release, and `npm test` rejects them in `releases/` and in `package.json`.
+   - **Link issues and pull requests in the notes by full URL,** not as `#12`: on GitLab `#12` points at that project's own issue 12.
+
+## Correcting release notes after the release
+
+The file in the repository is the source; the releases are copies. Change `releases/v<version>.md` on `main` through a pull request, then copy it to each remote, because nothing does it for you:
+
+- **GitHub:** `gh release edit v<version> --notes-file releases/v<version>.md`
+- **GitLab:** the job never updates an existing release. Run `glab release create v<version> --notes-file releases/v<version>.md` with a token that may create releases (without `--no-update` it updates the release that exists; there is no `glab release update`), or edit the release in the UI under **Deploy** > **Releases**.
+
+The backfill reads the file on the default branch, the tag job reads it on the tagged commit: a fix after tagging reaches GitLab only through the commands above, or through the backfill when no release exists yet.
