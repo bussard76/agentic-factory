@@ -97,7 +97,7 @@ test("open questions have one explicit form; a blocking one is closed by an Answ
   assert.deepEqual(readyProblems(ticket(["questions"])), [], "no such section: an old ticket never had one");
   assert.deepEqual(readyProblems(ticket([], { goal: "## Goal\n\nUnblocks the blocking export.\n" })), []);
   const bad = {
-    "- (blocking) Who may export?": /line \d+: a blocking question without an "Answer:" line under it/,
+    "- (blocking) Who may export?": /line \d+: a blocking question without an "Answer:" line with an answer under it/,
     "- (blocking) Who?\n  Answer:": /blocking question without an "Answer:"/,
     "- (blocking) Who?\n\nAnswer: admins": /not a list item/,
     "- (blocking: no) colour?": /line \d+: an open question that starts with neither "\(blocking\)" nor "\(not blocking\)"/,
@@ -162,7 +162,7 @@ function controller(steering) {
 }
 const ids = (r) => JSON.parse(r.stdout).map((t) => t.id);
 
-test("tasks: with enforce a ready ticket that is not ready to code is left out, with the reason once; warn and a missing key list it", () => {
+test("tasks: with enforce a ready ticket that is not ready to code is left out, named in one short line every time; warn and a missing key list it", () => {
   for (const [steering, listed] of [[{ tasksDir: "docs/tasks", readyCheck: "enforce" }, ["T01"]], [{ readyCheck: "warn" }, ["T01", "T02", "T03"]], [{}, ["T01", "T02", "T03"]]]) {
     const c = controller(steering);
     c.task("T01-sharp", ticket());
@@ -172,19 +172,12 @@ test("tasks: with enforce a ready ticket that is not ready to code is left out, 
     assert.equal(r.status, 0, r.stderr);
     assert.deepEqual(ids(r), listed, JSON.stringify(steering));
     if (listed.length === 1) {
-      assert.match(r.stderr, /T02 is not ready to code: the limits[\s\S]*T03 is not ready to code: no assessment/);
-      // the second listing (the next cycle) does not repeat it
-      assert.equal(c.run("steering/tasks.mjs", "list", "ready").stderr, "");
+      assert.match(r.stderr, /^Left out of the ready list, not ready to code: T02 \(the limits\); T03 \(no assessment[^;]*, \+\d more\)\. Keep one line for each under "Needs front agent" in status\.md for as long as it is left out/);
+      assert.equal(r.stderr.trim().split("\n").length, 1);
+      // the next cycle, and a restarted Controller, get it again: status.md is rewritten every cycle, so the reason must not be said only once
+      assert.equal(c.run("steering/tasks.mjs", "list", "ready").stderr, r.stderr);
     } else assert.equal(r.stderr, "", "warn says nothing when it only lists");
   }
-});
-
-test("tasks: the heartbeat's environment neither prints nor uses up the note", () => {
-  const c = controller({ readyCheck: "enforce" });
-  c.task("T02-no-limits", ticket(["limits"]));
-  const quiet = spawnSync("node", [path.join(c.ctl, "steering/tasks.mjs"), "list", "ready"], { encoding: "utf8", env: { ...process.env, FACTORY_NO_NOTES: "1" } });
-  assert.equal(quiet.stderr, "");
-  assert.match(c.run("steering/tasks.mjs", "list", "ready").stderr, /T02 is not ready to code/, "the Controller's own call still gets it");
 });
 
 test("tasks: a ticket in progress is untouched whatever the setting; needs-info and draft are never taken", () => {
@@ -253,8 +246,6 @@ test("mkspec: the first Developer or Architect spec for a ticket file is refused
   assert.equal(restart.status, 0, restart.stderr);
   assert.equal(restart.stderr, "");
   // a ticket changed after its architecture spec review: the dev spec carries the review, so it is not stopped halfway
-  const mid = mk("dev", "T05", "docs/tasks/T05-thin.md", "agents/t05", "--review", "agents/t05-specreview:docs/reviews/T05-architecture-spec.md");
-  assert.equal(mid.status, 0, mid.stderr);
   assert.match(mk("dev", "T08", "docs/tasks/T08-none.md", "agents/t08").stderr, /cannot be read/);
   assert.equal(mk("dev", "T08", "docs/tasks/T08-none.md", "agents/t08").status, 1);
   assert.equal(mk("test", "T05", "docs/tasks/T05-thin.md", "agents/t05", "abc").status, 0);
@@ -289,13 +280,11 @@ test("issues: the labels are the status; ready leaves a not-ready issue out and 
   const ready = c.run("steering/issues.mjs", "ready");
   assert.equal(ready.status, 0, ready.stderr);
   assert.deepEqual(JSON.parse(ready.stdout).map((i) => i.number), [1, 4], "the JSON shape is the one the heartbeat reads (the real query is label-filtered, so 4, in progress, would not be in it; the stub lists it and the check does not stop it)");
-  assert.match(ready.stderr, /#2 is not ready to code: the limits/);
-  assert.match(ready.stderr, /#3 is not ready to code/);
-  assert.match(ready.stderr, /#5 is not ready to code: its Status is "needs-info"/);
+  assert.match(ready.stderr, /^Left out of the ready list, not ready to code: #2 \(the limits\); #3 \([\s\S]*#5 \(it carries needs-info\)/);
   for (const n of ["2", "5", "6"]) {
     const refused = c.run("steering/issues.mjs", "claim", n);
     assert.equal(refused.status, 1, n);
-    assert.match(refused.stderr, new RegExp(`#${n} is not ready to code`));
+    assert.match(refused.stderr, new RegExp(`#${n} (is not ready to code|carries needs-info)`));
   }
   assert.match(c.run("steering/issues.mjs", "claim", "6").stderr, /its Status is "unlabelled", not "ready"/);
   assert.equal(calls().some((a) => a[0] === "issue" && a[1] === "edit"), false, "nothing was relabelled or assigned");
@@ -411,11 +400,162 @@ test("an existing project after update: the key is not added (so the check only 
   assert.match(text, /Waiting for the human \(needs-info\): T03/);
   assert.match(text, /Marked ready, not ready to code: T01 \(no assessment/);
   const doctor = p.cli("doctor").stdout;
-  assert.match(doctor, /1 ticket is marked ready but not ready to code: T01 \(no assessment[\s\S]*steering.readyCheck is warn, so they are still taken[\s\S]*set it to enforce in factory.config.json, then run update and start/);
+  assert.match(doctor, /1 ticket is marked ready but not ready to code \(T01: no assessment[\s\S]*steering.readyCheck is warn[\s\S]*set it to enforce in factory.config.json, then run update and start/);
+  assert.match(s.hints.join("\n"), /set it to enforce in factory.config.json, then run update and start/, "the status hint says how to switch it on");
   config.steering.readyCheck = "enforce";
   fs.writeFileSync(path.join(p.project, "factory.config.json"), JSON.stringify(config, null, 2));
   fs.rmSync(path.join(p.project, "docs/tasks/T04-building.md")); fs.rmSync(path.join(p.project, "docs/tasks/T02-sharp.md"));
   const e = JSON.parse(p.cli("status", "--json").stdout);
   assert.match(e.hints.join("\n"), /The Controller does not take them/);
-  assert.match(p.cli("doctor").stdout, /steering.readyCheck is enforce, so they are not taken/);
+  assert.match(p.cli("doctor").stdout, /The Controller does not take them \(steering.readyCheck is enforce\)/);
+});
+
+// --- the second review of #82 --------------------------------------------------------------------------------------------------------
+
+test("no blocking question is passed over in silence: sub-headings, a second section, nesting, other headings, code blocks", () => {
+  const one = (items) => readyProblems(withQuestions(items)).join("\n");
+  const cases = {
+    "grouped by a sub-heading": "### Data\n\n- (blocking) which DB?",
+    "after a sub-heading, also the unmarked one": "- (not blocking) c\n### UI\n- (blocking) which layout?\n- unmarked question?",
+    "a deeper heading as the question": "#### (blocking) which DB?",
+    "a question as a heading": "### which DB?",
+    "nested under another item": "- (not blocking) storage\n  - (blocking) which DB?",
+    "nested under a group item": "- (not blocking) about data:\n    - (blocking) retention?",
+    "the next line, not indented, no bullet": "- (not blocking) c\n(blocking) which DB?",
+    "under an answered parent": "- (blocking) DB?\n  - Answer: pg\n  - (blocking) and host?",
+    "under a checked parent": "- [x] (blocking) DB?\n  - (blocking) and host?",
+    "twice on one line": "- (not blocking) c, but (blocking) which DB?",
+    "in a code block": "```\n- (blocking) DB?\n```",
+    "under None": "- None\n  but which DB?",
+  };
+  for (const [name, items] of Object.entries(cases)) assert.match(one(items), /line \d+/, name);
+  assert.match(one(cases["after a sub-heading, also the unmarked one"]), /which layout[\s\S]*unmarked question/);
+  assert.match(readyProblems(ticket([], { questions: "## Open questions\n\n<!-- hint -->\n\n## Open questions\n\n- (blocking) DB?\n" })).join(), /line \d+: a blocking question/, "a second section appended to the template's");
+  for (const heading of ["## Open questions for the human", "## Open points", "## Questions", "## Offene Punkte"]) {
+    assert.match(readyProblems(ticket([], { questions: `${heading}\n\n- which DB?\n` })).join(), /looks like the open questions but is not read/, heading);
+  }
+  assert.match(readyProblems(`${ticket()}\n## Notes for the Developer\n\n- (blocking) which DB?\n`).join(), /says "\(blocking\)" but is not read/, "a blocking item under any other heading");
+  // what is clearly closed, or only mentions the marker as code, stays ready
+  for (const items of ["### Data\n\n- (not blocking) c\n\n### UI\n\n- (blocking) layout?\n  Answer: a table", "- (not blocking) storage\n  - [x] (blocking) which DB?", "- (not blocking) does the `(blocking)` marker stay?", "- (not blocking) c\n\n### Answered questions\n\n- (blocking) DB?"]) assert.deepEqual(readyProblems(withQuestions(items)), [], items);
+  assert.deepEqual(readyProblems(`${ticket()}\n## Answered questions\n\n- (blocking) DB? postgres\n`), []);
+});
+
+test("a section that says nothing is open is fine, as an item too; an unfilled answer and `[x]` without a marker are not", () => {
+  for (const items of ["- None", "- none.", "* None", "None.", "- n/a", "n/a", "-", "Keine offenen Fragen.", "- Keine offenen Fragen.", "- [x] None"]) assert.deepEqual(readyProblems(withQuestions(items)), [], items);
+  for (const answer of ["<the answer, decided by the human, the date>", "TBD", "tbd.", "TODO", "?"]) assert.match(readyProblems(withQuestions(`- (blocking) DB?\n  Answer: ${answer}`)).join(), /without an "Answer:" line with an answer/, answer);
+  assert.match(readyProblems(withQuestions("- [x] DB?")).join(), /starts with neither/);
+});
+
+test("a huge or hostile ticket neither crashes nor stalls the reader, and the message stays short", () => {
+  const many = readyProblems(withQuestions("- a\n".repeat(200_000)));
+  assert.equal(many.length, 6);
+  assert.match(many.at(-1), /199995 more problems in the open questions/);
+  const t = Date.now();
+  for (const heading of [`## a ${"(".repeat(50_000)}`, `## a${" #".repeat(20_000)}x`, `## ${" ".repeat(50_000)}x`]) readyProblems(`${ticket()}\n${heading}\n`);
+  assert.ok(Date.now() - t < 3000, `${Date.now() - t} ms`);
+});
+
+test("mkspec: only a dev spec from this task's real, passing spec review goes past the gate, and it still says what is missing", () => {
+  const c = controller({ readyCheck: "enforce" });
+  const git = (cwd, ...a) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...a], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const origin = path.join(c.dir, "origin.git");
+  git(c.dir, "init", "-q", "--bare", origin);
+  git(c.project, "init", "-q", "-b", "main"); git(c.project, "remote", "add", "origin", origin);
+  git(c.project, "commit", "-q", "--allow-empty", "-m", "i");
+  const review = (task, verdict) => {
+    const branch = `agents/${task.toLowerCase()}-specreview`, file = `docs/reviews/${task}-architecture-spec.md`;
+    git(c.project, "checkout", "-q", "-B", branch, "main");
+    fs.mkdirSync(path.join(c.project, "docs/reviews"), { recursive: true });
+    fs.writeFileSync(path.join(c.project, file), `# review\nVerdict: ${verdict}\n`);
+    git(c.project, "add", file); git(c.project, "commit", "-q", "-m", "r"); git(c.project, "push", "-q", "origin", branch); git(c.project, "checkout", "-q", "main");
+    return `${branch}:${file}`;
+  };
+  const passed = review("T20", "pass"), failed = review("T21", "change-spec");
+  const empty = "# T\n\nStatus: needs-info\n";
+  for (const t of ["T20", "T21", "T22"]) c.task(`${t}-x`, empty);
+  const mk = (role, T, value) => c.run("templates/mkspec.mjs", role, T, `docs/tasks/${T}-x.md`, "agents/x", ...(value ? ["--review", value] : []));
+  for (const [role, T, value, why] of [
+    ["specreview", "T20", "nope:nothing", "the report's case"], ["dev", "T20", "nope:nothing", "any value"], ["specreview", "T20", passed, "only the dev spec"],
+    ["dev", "T21", failed, "a review that did not pass"], ["dev", "T22", passed, "another task's review"], ["dev", "T22", "agents/t22-specreview:docs/reviews/T22-architecture-spec.md", "a review that does not exist"],
+  ]) {
+    const r = mk(role, T, value);
+    assert.equal(r.status, 1, why);
+    assert.match(r.stderr, /is not ready to code/, why);
+  }
+  const real = mk("dev", "T20", passed);
+  assert.equal(real.status, 0, real.stderr);
+  assert.match(real.stderr, /T20 is not ready to code[\s\S]*It is not stopped: its architecture spec review has passed/);
+});
+
+test("issues: needs-info beats the ready label with warn too; the configured in-progress label is the one claim sets and reads", () => {
+  const w = controller({});
+  const calls = ghStub(w, [issueNode(5, issueBody(), ["ready-for-agent", "needs-info"])]);
+  const ready = w.run("steering/issues.mjs", "ready");
+  assert.deepEqual(JSON.parse(ready.stdout), []);
+  assert.match(ready.stderr, /#5 \(it carries needs-info\)/);
+  const claim = w.run("steering/issues.mjs", "claim", "5");
+  assert.equal(claim.status, 1);
+  assert.match(claim.stderr, /#5 carries needs-info/);
+  assert.equal(calls().some((a) => a[1] === "edit"), false);
+  const c = controller({ readyCheck: "enforce", inProgressLabel: "wip" });
+  const log = ghStub(c, [issueNode(7, issueBody()), issueNode(8, "x", ["wip"])]);
+  assert.equal(c.run("steering/issues.mjs", "claim", "7").status, 0);
+  const edit = log().find((a) => a[1] === "edit");
+  assert.equal(edit[edit.indexOf("--add-label") + 1], "wip");
+  assert.equal(c.run("steering/issues.mjs", "claim", "8").status, 0, "a re-claim of what the factory claimed is not refused");
+});
+
+test("status and doctor read the same tickets: issues mode, one label precedence, the configured tasks directory", () => {
+  const p = initProject("terminal");
+  const config = JSON.parse(p.read("factory.config.json"));
+  const save = () => fs.writeFileSync(path.join(p.project, "factory.config.json"), JSON.stringify(config, null, 2));
+  // a tasks directory of the project's own
+  config.steering.tasksDir = "work/tickets"; save();
+  fs.mkdirSync(path.join(p.project, "work/tickets"), { recursive: true });
+  fs.writeFileSync(path.join(p.project, "work/tickets/T01-x.md"), ticket(["limits"], { status: "<!-- Status: integrated -->\nStatus: ready" }));
+  assert.deepEqual(JSON.parse(p.cli("status", "--json").stdout).work.tickets.notReadyToCode.map((t) => t.id), ["T01"]);
+  assert.match(p.cli("doctor").stdout, /marked ready but not ready to code \(T01: the limits/);
+  // issues mode, with a gh stub
+  config.steering = { ...config.steering, mode: "github-issues", inProgressLabel: "wip" }; save();
+  const bin = path.join(p.dir, "bin");
+  fs.mkdirSync(bin);
+  const issues = [[1, ["ready-for-agent"], "Level: 1"], [2, ["ready-for-agent", "wip"], ""], [3, ["ready-for-agent", "needs-info"], ""], [4, ["ready-for-agent"], issueBody()]]
+    .map(([number, labels, body]) => ({ number, title: `i${number}`, body, labels: labels.map((name) => ({ name })) }));
+  fs.writeFileSync(path.join(bin, "gh"), `#!/usr/bin/env node\nconsole.log(process.argv[2] === "issue" && process.argv[3] === "list" ? ${JSON.stringify(JSON.stringify(issues))} : "[]");\n`, { mode: 0o755 });
+  const before = process.env.PATH;
+  process.env.PATH = `${bin}:${before}`;
+  try {
+    const cli = (...a) => spawnSync("node", [CLI, ...a], { cwd: p.project, encoding: "utf8", env: { ...process.env, HOME: path.join(p.dir, "home"), FACTORY_SKIP_ORCA: "1" } });
+    const work = JSON.parse(cli("status", "--json").stdout).work.tickets;
+    assert.deepEqual(work.notReadyToCode.map((t) => t.id), ["#1"], "#2 is in progress, #3 waits for an answer");
+    assert.deepEqual(work.waitingForYou, ["#3"]);
+    assert.deepEqual(work.byStatus, { "ready-for-agent": 2, wip: 1, "needs-info": 1 });
+    assert.match(cli("doctor").stdout, /1 ticket is marked ready but not ready to code \(#1: no assessment/);
+  } finally { process.env.PATH = before; }
+});
+
+test("tasks: set rewrites the Status line that is read, not one in a comment", () => {
+  const c = controller({});
+  c.task("T01-x", ticket([], { status: "<!--\nStatus: draft\n-->\nStatus: ready" }));
+  assert.equal(c.run("steering/tasks.mjs", "set", "T01", "building").status, 0);
+  assert.match(fs.readFileSync(path.join(c.project, "docs/tasks/T01-x.md"), "utf8"), /<!--\nStatus: draft\n-->\nStatus: building\n/);
+});
+
+test("an older lib.mjs that `update` kept because it was edited still serves the new scripts: they take nothing new from it", () => {
+  const exported = ["PROJECT_DIR", "config", "declaredProblem", "journal", "sh", "ticketLevel", "BRANCH_PREFIX", "CMDS", "HUMAN", "MAIN", "PROJECT", "STEERING", "file", "questionBlock", "trySh"];
+  for (const f of ["steering/tasks.mjs", "steering/issues.mjs", "templates/mkspec.mjs"]) {
+    const names = /import \{([^}]*)\} from "\.\.\/lib\.mjs";/.exec(fs.readFileSync(path.join(ROOT, "controller", f), "utf8"))[1].split(",").map((n) => n.trim()).filter(Boolean);
+    assert.deepEqual(names.filter((n) => !exported.includes(n)), [], f);
+  }
+});
+
+test("the bundle copy puts ticket.mjs in place before lib.mjs, which imports it, locally and over ssh; the docs say what the code does", () => {
+  const cli = fs.readFileSync(CLI, "utf8");
+  assert.match(cli, /writeFileAtomic\(path\.join\(d, "ticket\.mjs"\)[^\n]*copyTreeAtomic\("\.factory\/controller", d\)/);
+  assert.ok(cli.indexOf('".factory/controller/ticket.mjs", `${ctl.ssh}') < cli.indexOf('".factory/controller/", `${ctl.ssh}'));
+  const handbook = fs.readFileSync(path.join(ROOT, "controller/CONTROLLER.md"), "utf8");
+  assert.match(handbook, /carry the line into every rewrite/);
+  assert.match(handbook, /fast-lane or debt task needs its ticket/);
+  assert.doesNotMatch(handbook, /once, not every cycle|once per ticket and reason/);
+  for (const f of ["docs/workflow.md", "docs/de/workflow.md", "docs/steering-modes.md"]) assert.doesNotMatch(fs.readFileSync(path.join(ROOT, f), "utf8"), /one message at its first start|einer Meldung beim ersten Start|one note per ticket and reason/, f);
 });

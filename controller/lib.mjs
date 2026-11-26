@@ -274,14 +274,3 @@ export function declaredProblem(text) {
 // The reading of a ticket's prose and its level is ticket.mjs's (one reader; no configuration there, so `agentic-factory status` uses it too).
 export { ticketLevel } from "./ticket.mjs";
 
-/** A note about a ticket (why it is not ready to code), once per ticket and reason: printed to stderr the first time and recorded in the Controller's journal
- *  (`ticketnote`), so a loop that lists tickets every cycle does not repeat it. The heartbeat sets FACTORY_NO_NOTES: it neither prints nor records, so it never
- *  uses up the note the Controller should read. */
-export function noteOnce(ticket, reason, message) {
-  if (process.env.FACTORY_NO_NOTES) return;
-  let known = ""; try { known = fs.readFileSync(file("journal.ndjson"), "utf8"); } catch { /* no journal yet */ }
-  const seen = known.split("\n").some((l) => { try { const e = JSON.parse(l); return e.type === "ticketnote" && e.task === ticket && e.reason === reason; } catch { return false; } });
-  if (seen) return;
-  console.error(message);
-  journalQuiet("ticketnote", ticket, { reason });
-}

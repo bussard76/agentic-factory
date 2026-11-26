@@ -49,7 +49,7 @@ New terms and decisions: the GLOSSARY.md terms and ADRs that came out of it. -->
 - (blocking) <the question>
   Answer: <the answer, decided by the human, the date>
 - (not blocking) <the question>
-The marker `(blocking)` or `(not blocking)` comes first. A blocking question is closed by an `Answer:` line under it (indented, or on the next line), by `[x]` in front of it, by striking it through (`~~...~~`), or by moving it to a section "Answered questions". An item without a marker, a line that is no list item and a blocking question without an answer make the ticket not ready to code, and the message names the line. -->
+The marker `(blocking)` or `(not blocking)` comes first. `- None` says nothing is open. Sub-headings may group the questions; never nest one question under another, and write `(blocking)` nowhere else. A blocking question is closed by an `Answer:` line under it (indented, or on the next line), by `[x]` in front of the marker, by striking it through (`~~...~~`), or by moving it to a section "Answered questions". An item without a marker, a line that is no list item and a blocking question without an answer make the ticket not ready to code, and the message names the line. -->
 
 ## References
 

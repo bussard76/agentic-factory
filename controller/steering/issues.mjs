@@ -7,8 +7,8 @@
 // node steering/issues.mjs close <n> <text>      → closes with a comment (after the wave reached main)
 import "../cli.mjs";
 import fs from "node:fs";
-import { PROJECT_DIR, config, declaredProblem, journal, noteOnce, sh, ticketLevel } from "../lib.mjs";
-import { readyGate, readyMode } from "../ticket.mjs";
+import { PROJECT_DIR, config, declaredProblem, journal, sh, ticketLevel } from "../lib.mjs";
+import { leftOutLine, readyGate, readyMode } from "../ticket.mjs";
 
 const ready = config.steering?.readyLabel ?? "ready-for-agent";
 const MODE = readyMode(config);
@@ -28,10 +28,20 @@ if (cmd === "ready") {
     if (!Number.isInteger(blockers)) console.error(`#${i.number}: its blockers cannot be read, so it is left out`);
     return blockers === 0;
   };
-  // With the check on enforce an issue that is not ready to code is left out and says why on stderr (once per issue and reason); with warn it stays in the list.
-  const sharp = (i) => { if (MODE === "warn") return true; const g = readyGate(`#${i.number}`, i.body ?? "", { mode: MODE, status: statusOf(i.labels.nodes.map((l) => l.name)) }); if (g.message) noteOnce(`#${i.number}`, g.problems.join("|"), `${g.message} It is left out of the ready list.`); return !g.stop; };
+  // With the check on enforce an issue that is not ready to code is left out; with warn it stays in the list. An issue that carries needs-info is left out
+  // whatever the setting: it waits for an answer. One short line on stderr names what was left out, every time.
+  const leftOut = [];
+  const sharp = (i) => {
+    const status = statusOf(i.labels.nodes.map((l) => l.name));
+    if (status === "needs-info") { leftOut.push({ id: `#${i.number}`, problems: ["it carries needs-info"] }); return false; }
+    if (MODE === "warn") return true;
+    const g = readyGate(`#${i.number}`, i.body ?? "", { mode: MODE, status });
+    if (g.stop) leftOut.push({ id: `#${i.number}`, problems: g.problems });
+    return !g.stop;
+  };
   const open = list.filter((i) => !i.assignees.nodes.length).filter(unblocked).filter(sharp).map((i) => ({ number: i.number, title: i.title, level: /level\s*(\d)/i.exec(i.body ?? "")?.[1] ?? "?", labels: i.labels.nodes.map((l) => l.name) }));
   console.log(JSON.stringify(open, null, 1));
+  if (leftOut.length) console.error(leftOutLine(leftOut));
 } else if (cmd === "claim") {
   // The issue's text as it is when the Controller takes it, before any worker runs: whether it declares a documentation ticket
   // (`Level: 1`, `Documentation only: yes`) goes into the Controller's own journal, which docsonly.mjs reads. Unreadable = not declared.
@@ -44,8 +54,9 @@ if (cmd === "ready") {
   const gate = body === null ? { stop: MODE !== "warn", message: `#${n} cannot be read, so it is not known to be ready to code.` } : readyGate(`#${n}`, body, { mode: MODE, status });
   if (gate.message) console.error(gate.message);
   if (gate.stop) process.exit(1);
+  if (status === "needs-info") { console.error(`#${n} carries needs-info: it waits for an answer, so it is not claimed, whatever steering.readyCheck says.`); process.exit(1); }
   try { documentation = declaredProblem(body ?? "") === ""; level = ticketLevel(body ?? ""); } catch { /* stays false and unknown */ }
-  gh("issue", "edit", n, "--add-assignee", "@me", "--remove-label", ready, "--add-label", "in-progress");
+  gh("issue", "edit", n, "--add-assignee", "@me", "--remove-label", ready, "--add-label", progress);
   journal("claim", n, { documentation, level });
   console.log("ok");
 }

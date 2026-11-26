@@ -61,7 +61,6 @@ let reached = true;
 try { fs.writeFileSync(file("heartbeat.alive"), ""); } catch { /* read-only directory: the beat still works */ }
 process.on("exit", (code) => { if (code === 0 && reached) try { fs.writeFileSync(file("heartbeat.ok"), ""); } catch { /* as above */ } });
 
-process.env.FACTORY_NO_NOTES = "1";   // the heartbeat only counts tickets: the notes about a ticket are for the Controller (lib.mjs, noteOnce)
 const steering = (...args) => JSON.parse(run("node", [file(`steering/${STEERING === "github-issues" ? "issues" : "tasks"}.mjs`), ...args]));
 const readyTickets = () => (STEERING === "github-issues" ? steering("ready") : steering("list", "ready"));
 const startedTickets = () => (STEERING === "github-issues"

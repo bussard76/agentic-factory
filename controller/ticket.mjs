@@ -13,15 +13,15 @@ export function scan(text) {
     if (!end) unclosed = src.slice(0, at).split("\n").length;
     return m.replace(/[^\n]/g, "");
   });
-  const lines = [];
+  const lines = [], fenced = [];
   let fence = "";
   prose.split(/\r?\n/).forEach((s, i) => {
     const m = /^ {0,3}(`{3,}|~{3,})/.exec(s);
-    if (fence) { if (m && m[1][0] === fence[0] && m[1].length >= fence.length) fence = ""; return; }
+    if (fence) { if (m && m[1][0] === fence[0] && m[1].length >= fence.length) fence = ""; else fenced.push({ n: i + 1, s }); return; }
     if (m) { fence = m[1]; return; }
     lines.push({ n: i + 1, s });
   });
-  return { lines, unclosed };
+  return { lines, fenced, unclosed };
 }
 /** The ticket's prose lines (as scan, without numbers). */
 export const proseLines = (text) => scan(text).lines.map((l) => l.s);
@@ -60,9 +60,16 @@ const SECTIONS = {
   questions: { label: "", names: ["open questions", "offene fragen"] },
 };
 const asked = (g) => `${SECTIONS[g].label} (a heading ${SECTIONS[g].names.map((n) => `"${n.replace(/\b\w/, (c) => c.toUpperCase())}"`).join(", ")}, level 1 to 6)`;
+// Read by hand, not by one expression: a long run of spaces, "#" or "(" in a heading line must not make the reading slow.
 const headingOf = (s) => {
-  const m = /^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$/.exec(s);
-  return m ? { level: m[1].length, name: m[2].replace(/\s*\([^)]*\)\s*$/, "").replace(/[:：]\s*$/, "").replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim().toLowerCase() } : null;
+  const m = /^ {0,3}(#{1,6})[ \t](.*)$/.exec(s);
+  if (!m) return null;
+  let name = m[2].trim(), end = name.length;
+  while (end && " \t#".includes(name[end - 1])) end--;
+  name = name.slice(0, end);
+  const open = name.endsWith(")") ? name.lastIndexOf("(") : -1;
+  if (open > 0) name = name.slice(0, open).trim();
+  return name ? { level: m[1].length, name: name.replace(/[:：]$/, "").replace(/[-_]/g, " ").split(/\s+/).filter(Boolean).join(" ").toLowerCase() } : null;
 };
 // The template's own hint sentences (older copies of docs/tasks/T00-template.md carry them as prose): a section that holds only these is unfilled.
 const PLACEHOLDERS = [
@@ -82,39 +89,84 @@ const filled = (body) => (body ?? []).filter((l) => l.s.trim() && !PLACEHOLDERS.
 const BULLET = /^(\s*)(?:[-*+]\s+|\d+[.)]\s*|[a-z][.)]\s+)(.*)$/i;
 const isItem = (l) => { const m = BULLET.exec(l); return Boolean(m) && m[2].trim() !== "" && !/^\d+[.)]\d/.test(l.trim()); };
 
-/** The one explicit form of an open question (docs/workflow.md, "Sharpen the ticket"), in the section "Open questions":
- *    - (blocking) <the question>            or            - (not blocking) <the question>
- *      Answer: <the answer, decided by the human, the date>
- *  The marker comes first and is exactly `(blocking)` or `(not blocking)`. A blocking question is answered by a line that starts with `Answer:` and holds
- *  text, among the lines under it (indented, or following without a blank line); or it is checked `[x]`, or struck through (`~~…~~`), or moved to a section
- *  "Answered questions". Anything else that is not clearly a closed question is a problem that names its line: unclear means not ready. */
-function openQuestions(lines) {
-  const body = filled(section(lines, SECTIONS.questions.names)), out = [];
-  const items = [];
-  for (const l of body) {
-    if (headingOf(l.s)) break;   // a sub-heading ("### Answered") ends the open ones
-    const m = BULLET.exec(l.s);
-    const indent = m ? m[1].length : /^\s*/.exec(l.s)[0].length;
-    const open = items.at(-1);
-    if (isItem(l.s) && (!open || indent <= open.indent)) items.push({ n: l.n, indent, text: m[2].trim(), rest: [], prev: l.n });
-    else if (open && (indent > open.indent || l.n === open.prev + 1)) { open.rest.push(l.s.trim().replace(/^(?:[-*+]|\d+[.)])\s+/, "")); open.prev = l.n; }
-    else if (!/^(none|nothing|no open questions|keine)\.?$/i.test(l.s.trim())) out.push(`line ${l.n} of the open questions is not a list item ("${l.s.trim().slice(0, 40)}")`);
-  }
-  for (const it of items) {
-    const whole = [it.text, ...it.rest].join(" ");
-    if (/^\[[xX]\]/.test(it.text) || /^~~.*~~$/.test(whole.trim())) continue;
-    const text = it.text.replace(/^\[ \]\s*/, "");
-    const marker = /^\((not blocking|blocking)\)/i.exec(text)?.[1].toLowerCase();
-    if (!marker) out.push(`line ${it.n}: an open question that starts with neither "(blocking)" nor "(not blocking)" ("${text.slice(0, 40)}")`);
-    else if (marker === "blocking" && !it.rest.some((r) => /^Answer:\s*\S/.test(r))) out.push(`line ${it.n}: a blocking question without an "Answer:" line under it ("${text.slice(0, 40)}")`);
+const ANSWERED = ["answered", "answered questions", "beantwortet", "beantwortete fragen"];
+// A heading that reads like the open questions but is not one of the names: what is under it would not be read as questions.
+const LOOKS_LIKE_QUESTIONS = /^(?:questions|fragen)$|\b(?:open|offene)\b.*\b(?:questions?|points?|issues|fragen|punkte)\b/;
+const NOTHING = /^(?:none|nothing|n\/a|no open questions|keine|keine offenen fragen|-|–)\.?$/i;
+const MARKER = /^\((not blocking|blocking)\)/i;
+const bare = (s) => s.replace(/`[^`]*`/g, "");
+const saysBlocking = (s) => /\(blocking\)/i.test(bare(s));
+const quote = (s) => s.trim().slice(0, 40);
+const answers = (r) => { const m = /^Answer:\s*(.*)$/.exec(r); return Boolean(m) && m[1] !== "" && !/^(?:<|(?:tbd|todo|pending|open|\?+|…|\.\.\.)\.?$)/i.test(m[1].trim()); };
+/** A line that is by itself a closed question: `[x]` before the marker, or struck through. */
+const closedLine = (s) => { const t = (BULLET.exec(s)?.[2] ?? s).trim(); return /^\[[xX]\]\s*\((?:not )?blocking\)/i.test(t) || (t.startsWith("~~") && t.endsWith("~~") && t.length > 4); };
+/** The line numbers under a heading "Answered questions": what stands there is closed. */
+function answeredLines(lines) {
+  const out = new Set();
+  let level = 0;
+  for (const l of lines) {
+    const h = headingOf(l.s);
+    if (h && level && h.level <= level) level = 0;
+    if (h && !level && ANSWERED.includes(h.name)) level = h.level;
+    if (level) out.add(l.n);
   }
   return out;
 }
 
+/** The one explicit form of an open question (docs/workflow.md, "Sharpen the ticket"), in a section "Open questions" (every such section is read, with its
+ *  sub-headings; only "Answered questions" is skipped):
+ *    - (blocking) <the question>            or            - (not blocking) <the question>
+ *      Answer: <the answer, decided by the human, the date>
+ *  The marker comes first and is exactly `(blocking)` or `(not blocking)`. A blocking question is answered by a line that starts with `Answer:` and holds a
+ *  real answer, among the lines under it (indented, or following without a blank line); or it is checked (`[x] (blocking) …`), or struck through (`~~…~~`), or
+ *  moved to a section "Answered questions". Nothing is passed over in silence: any other line that says `(blocking)`, anywhere in the ticket, and anything in
+ *  these sections that is not clearly a closed question, is a problem that names its line. */
+function openQuestions({ lines, fenced }) {
+  const out = [], skip = answeredLines(lines), read = new Set(), ranges = [], items = [];
+  const heads = lines.map((l, i) => ({ i, n: l.n, h: headingOf(l.s) })).filter((x) => x.h);
+  for (const { i, n, h } of heads) {
+    if (!SECTIONS.questions.names.includes(h.name)) {
+      if (!skip.has(n) && LOOKS_LIKE_QUESTIONS.test(h.name)) out.push(`line ${n}: the heading "${quote(lines[i].s)}" looks like the open questions but is not read as them; name it "Open questions"`);
+      continue;
+    }
+    if (ranges.some((r) => n > r.from && n < r.to)) continue;
+    const next = heads.find((x) => x.i > i && x.h.level <= h.level);
+    ranges.push({ from: n, to: next ? next.n : Infinity });
+    let open = null;
+    for (const l of lines.slice(i + 1, next ? next.i : lines.length)) {
+      if (skip.has(l.n) || !filled([l]).length) continue;
+      const sub = headingOf(l.s);
+      if (sub) { open = null; if (sub.name.endsWith("?")) out.push(`line ${l.n}: a question written as a heading ("${quote(l.s)}")`); continue; }
+      const m = BULLET.exec(l.s);
+      const indent = m ? m[1].length : /^\s*/.exec(l.s)[0].length;
+      if (isItem(l.s) && (!open || indent <= open.indent)) { open = { n: l.n, indent, text: m[2].trim(), rest: [], prev: l.n }; items.push(open); }
+      else if (open && (indent > open.indent || l.n === open.prev + 1)) { open.rest.push(l.s.trim().replace(/^(?:[-*+]|\d+[.)])\s+/, "")); open.prev = l.n; }
+      else if (!NOTHING.test(l.s.trim())) out.push(`line ${l.n} of the open questions is not a list item ("${quote(l.s)}")`);
+    }
+  }
+  for (const it of items) {
+    const whole = [it.text, ...it.rest].join(" ").trim();
+    if (NOTHING.test(it.text.replace(/^\[[ xX]\]\s*/, ""))) {
+      if (it.rest.length) out.push(`line ${it.n}: "${quote(it.text)}" has lines under it, so it is not clear that nothing is open`);
+      continue;
+    }
+    if (whole.startsWith("~~") && whole.endsWith("~~") && whole.length > 4) { read.add(it.n); continue; }
+    const checked = /^\[[xX]\]/.test(it.text), text = it.text.replace(/^\[[ xX]\]\s*/, ""), marker = MARKER.exec(text)?.[1].toLowerCase();
+    if (!marker) { out.push(`line ${it.n}: an open question that starts with neither "(blocking)" nor "(not blocking)" ("${quote(text)}")`); read.add(it.n); continue; }
+    if (checked || !saysBlocking(text.replace(MARKER, ""))) read.add(it.n);
+    if (!checked && marker === "blocking" && !it.rest.some(answers)) out.push(`line ${it.n}: a blocking question without an "Answer:" line with an answer under it ("${quote(text)}")`);
+  }
+  for (const l of lines) if (!read.has(l.n) && !skip.has(l.n) && saysBlocking(l.s) && !closedLine(l.s)) out.push(`line ${l.n}: says "(blocking)" but is not read as an open question of its own ("${quote(l.s)}"); write it as its own item under "Open questions"`);
+  for (const l of fenced) if (saysBlocking(l.s) && ranges.some((r) => l.n > r.from && l.n < r.to)) out.push(`line ${l.n}: a "(blocking)" question inside a code block of the open questions`);
+  return out;
+}
+/** At most five of the open-question problems are named, the rest counted: a message stays readable and a huge ticket crashes nothing. */
+const capped = (list) => (list.length > 5 ? [...list.slice(0, 5), `${list.length - 5} more problems in the open questions`] : list);
+
 /** What is missing from a ticket for it to be ready to code, as short phrases; [] when nothing is. `status` (default: the ticket's own Status line) must be
  *  "ready". An assessment of "needs clarification" is never ready. Form only. */
 export function readyProblems(text, { status } = {}) {
-  const { lines, unclosed } = scan(text), out = [];
+  const scanned = scan(text), { lines, unclosed } = scanned, out = [];
   const st = status ?? statusOf(text);
   if (st !== "ready") out.push(`its Status is ${st ? `"${st}"` : "missing"}, not "ready"`);
   const a = assessmentOf(text);
@@ -125,8 +177,7 @@ export function readyProblems(text, { status } = {}) {
   if (!filled(section(lines, SECTIONS.acceptance.names)).some((l) => isItem(l.s))) out.push(asked("acceptance"));
   if (!filled(section(lines, SECTIONS.limits.names)).length) out.push(asked("limits"));
   if (ticketLevel(text) === null) out.push("the architecture level (`Level: 1`, `2` or `3`, as its own line)");
-  out.push(...openQuestions(lines));
-  return out;
+  return out.concat(capped(openQuestions(scanned)));
 }
 
 /** The ticket's own Status states in which work on it has begun or ended: the readiness check never touches them (a worker may be running on it). */
@@ -137,15 +188,20 @@ export const readyMode = (config) => (config?.steering?.readyCheck ?? "warn") ==
 /** The gate at the moment a ticket would get a worker: { stop, message, problems }. stop only when the project enforces the check and the ticket is not ready
  *  to code. Never stopped: a ticket whose work has begun (`started`, or a Status in STARTED). `status` is the ticket's status where it is not in its text (issues:
  *  the label). The message is empty when nothing is missing. */
-export function readyGate(id, text, { mode, started = false, status } = {}) {
+export function readyGate(id, text, { mode, started = false, reviewed = false, status } = {}) {
   const st = status ?? statusOf(text);
   const problems = started || STARTED.includes(st) ? [] : readyProblems(text, { status: st });
   if (!problems.length) return { stop: false, message: "", problems };
-  const enforce = mode !== "warn";
+  const enforce = mode !== "warn" && !reviewed;
   return {
     stop: enforce, problems,
     message: `${id} is not ready to code: ${problems.join("; ")}. The Front agent's "sharpen the ticket" step fills this in (it assesses the ticket, writes the result into it and marks it ready). `
-      + (enforce ? "steering.readyCheck is enforce, so the ticket is not taken: write it as \"Needs front agent\" in status.md and take the next ticket."
+      + (reviewed ? "It is not stopped: its architecture spec review has passed, so work on it has begun."
+        : enforce ? "steering.readyCheck is enforce, so the ticket is not taken: write it as \"Needs front agent\" in status.md and take the next ticket."
         : "steering.readyCheck is warn, so the ticket is still taken; to stop such tickets, set steering.readyCheck to \"enforce\" in factory.config.json, run `agentic-factory update` and `start` (do it once `agentic-factory status` lists no ticket as not ready to code)."),
   };
 }
+
+/** The one line a ready listing prints, every time, about what it left out: `[{ id, problems }]`. Short, so that it can stand in every cycle, and it lets a
+ *  Controller whose status.md was rewritten (or that was restarted) write the line again. */
+export const leftOutLine = (list) => `Left out of the ready list, not ready to code: ${list.map((t) => `${t.id} (${t.problems[0].split(" (a heading")[0].slice(0, 100)}${t.problems.length > 1 ? `, +${t.problems.length - 1} more` : ""})`).join("; ")}. Keep one line for each under "Needs front agent" in status.md for as long as it is left out (carry it into every rewrite; do not announce it again).`;
