@@ -559,3 +559,49 @@ test("the bundle copy puts ticket.mjs in place before lib.mjs, which imports it,
   assert.doesNotMatch(handbook, /once, not every cycle|once per ticket and reason/);
   for (const f of ["docs/workflow.md", "docs/de/workflow.md", "docs/steering-modes.md"]) assert.doesNotMatch(fs.readFileSync(path.join(ROOT, f), "utf8"), /one message at its first start|einer Meldung beim ersten Start|one note per ticket and reason/, f);
 });
+
+// --- the final check of #82 ----------------------------------------------------------------------------------------------------------
+
+const LOOKS = /looks like the open questions/;
+
+test("a title, or a heading that merely contains words like open questions, passes; one meant as the section is still refused", () => {
+  const titled = (title) => ticket().replace("# T05: Export", title);
+  for (const title of ["# T12: List open issues on the dashboard", "# T13: Export the open points of a meeting", "# T14: Offene Punkte exportieren", "# Questions", "# Open points"]) assert.deepEqual(readyProblems(titled(title)), [], title);
+  for (const extra of ["## How open issues are counted\n\ntext", "## Known open issues (not this ticket)\n\n- a", "## Fragen\n\nFAQ page text", "## Resolved open questions\n\n- DB: pg", "## No open questions", "## Closed open points\n\n- x", "## Offene Punkte exportieren\n\n- a", "## Open points\n\n- None", "## Questions\n\nThe help page answers them."]) {
+    assert.deepEqual(readyProblems(`${ticket()}\n${extra}\n`), [], extra);
+  }
+  for (const extra of ["## Open questions for the human\n\n- which DB?", "## Open points\n\nwhich DB?", "## Open issues\n\n- which DB?", "## Offene Punkte\n\n- which DB?", "## Offene Fragen an Alex\n\n- which DB?", "## Questions\n\n- which DB?", "## Fragen\n\n1. which DB?", "# Open points\n\n- which DB?"]) {
+    assert.match(readyProblems(`${ticket()}\n${extra}\n`).join(), LOOKS, extra);
+  }
+});
+
+test("regression: none of the repository's own Markdown files (templates, example tickets and the rest) is refused for a heading", () => {
+  const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => ([".git", "node_modules", ".build"].includes(e.name) ? [] : e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith(".md") ? [path.join(d, e.name)] : []));
+  const files = walk(ROOT);
+  assert.ok(files.includes(path.join(ROOT, "templates/docs/tasks/T00-template.md")));
+  assert.deepEqual(files.filter((f) => readyProblems(fs.readFileSync(f, "utf8"), { status: "ready" }).some((x) => LOOKS.test(x))), []);
+});
+
+test("issues: with warn, claim of a ready + needs-info issue says only that it is not claimed; a re-claim of one in progress goes through in either setting", () => {
+  for (const steering of [{}, { readyCheck: "enforce" }]) {
+    const c = controller(steering);
+    const calls = ghStub(c, [issueNode(3, issueBody(["limits"]), ["ready-for-agent", "needs-info"]), issueNode(4, "x", ["in-progress", "needs-info"])]);
+    const refused = c.run("steering/issues.mjs", "claim", "3");
+    assert.equal(refused.status, 1);
+    assert.equal(refused.stderr.trim(), "#3 carries needs-info: it waits for an answer, so it is not claimed, whatever steering.readyCheck says.");
+    assert.equal(calls().some((a) => a[1] === "edit"), false);
+    const again = c.run("steering/issues.mjs", "claim", "4");
+    assert.equal(again.status, 0, again.stderr);
+    assert.equal(again.stderr, "");
+  }
+});
+
+test("the one change under warn is announced where an updating project reads it, and nothing says warn stops nothing", () => {
+  const read = (f) => fs.readFileSync(path.join(ROOT, f), "utf8");
+  const existing = (f, start) => read(f).split("\n").find((l) => l.startsWith(start));
+  assert.match(existing("docs/workflow.md", "**Existing projects.**"), /After `update`, in GitHub-issues mode, an issue that carries `needs-info`, also next to the ready label, is no longer listed or claimed, also with `warn`; remove the label once it is answered/);
+  assert.match(existing("docs/de/workflow.md", "**Bestehende Projekte.**"), /Nach `update` wird im GitHub-Issue-Modus ein Issue mit `needs-info`[^.]*nicht mehr gelistet oder übernommen, auch mit `warn`/);
+  assert.match(JSON.parse(read("factory.config.example.json")).steering.$readyCheck, /needs-info, also next to the ready label, is no longer listed or claimed/);
+  assert.match(read("site/index.html"), /auch mit <code>warn<\/code>: Im GitHub-Issue-Modus wird ein Issue mit <code>needs-info<\/code>/);
+  for (const f of ["docs/workflow.md", "docs/de/workflow.md", "docs/steering-modes.md", "factory.config.example.json"]) assert.doesNotMatch(read(f), /check stops nothing|hält die Prüfung nichts an|never stops an existing project/, f);
+});

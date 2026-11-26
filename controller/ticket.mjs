@@ -90,8 +90,10 @@ const BULLET = /^(\s*)(?:[-*+]\s+|\d+[.)]\s*|[a-z][.)]\s+)(.*)$/i;
 const isItem = (l) => { const m = BULLET.exec(l); return Boolean(m) && m[2].trim() !== "" && !/^\d+[.)]\d/.test(l.trim()); };
 
 const ANSWERED = ["answered", "answered questions", "beantwortet", "beantwortete fragen"];
-// A heading that reads like the open questions but is not one of the names: what is under it would not be read as questions.
-const LOOKS_LIKE_QUESTIONS = /^(?:questions|fragen)$|\b(?:open|offene)\b.*\b(?:questions?|points?|issues|fragen|punkte)\b/;
+// A heading meant as the open questions but not one of the names: what stands under it would not be read as questions. Only a heading that as a whole is such
+// a name ("Open points", "Open questions for …"), never one that merely contains the words; a bare "Questions" or "Fragen" can also be a topic of its own.
+const MEANT_AS_QUESTIONS = /^(?:open|offene) (?:questions?|points?|issues?|fragen|punkte)(?: (?:for|to|für|an) .+)?$/;
+const MAYBE_QUESTIONS = /^(?:questions|fragen)$/;
 const NOTHING = /^(?:none|nothing|n\/a|no open questions|keine|keine offenen fragen|-|–)\.?$/i;
 const MARKER = /^\((not blocking|blocking)\)/i;
 const bare = (s) => s.replace(/`[^`]*`/g, "");
@@ -126,7 +128,12 @@ function openQuestions({ lines, fenced }) {
   const heads = lines.map((l, i) => ({ i, n: l.n, h: headingOf(l.s) })).filter((x) => x.h);
   for (const { i, n, h } of heads) {
     if (!SECTIONS.questions.names.includes(h.name)) {
-      if (!skip.has(n) && LOOKS_LIKE_QUESTIONS.test(h.name)) out.push(`line ${n}: the heading "${quote(lines[i].s)}" looks like the open questions but is not read as them; name it "Open questions"`);
+      // The ticket's title (a level-1 first heading) is never meant as a section; another one is refused only when something stands under it that would be
+      // lost: anything for a name meant as the open questions, a list item for a bare "Questions".
+      const end = heads.find((x) => x.i > i && x.h.level <= h.level)?.i ?? lines.length;
+      const held = () => filled(lines.slice(i + 1, end)).filter((l) => !headingOf(l.s) && !NOTHING.test((BULLET.exec(l.s)?.[2] ?? l.s).trim()));
+      const lost = MEANT_AS_QUESTIONS.test(h.name) ? held().length > 0 : MAYBE_QUESTIONS.test(h.name) && held().some((l) => isItem(l.s));
+      if (!skip.has(n) && !(n === heads[0].n && h.level === 1) && lost) out.push(`line ${n}: the heading "${quote(lines[i].s)}" looks like the open questions but is not read as them; name it "Open questions"`);
       continue;
     }
     if (ranges.some((r) => n > r.from && n < r.to)) continue;
@@ -182,8 +189,8 @@ export function readyProblems(text, { status } = {}) {
 
 /** The ticket's own Status states in which work on it has begun or ended: the readiness check never touches them (a worker may be running on it). */
 export const STARTED = ["building", "review", "passed", "integrated", "paused"];
-/** The project's setting, `steering.readyCheck`: "enforce" stops a ticket that is not ready to code, "warn" (also when the key is missing, so `update` never
- *  stops an existing project) only says so. Any other value counts as enforce: a typo must not switch the check off. */
+/** The project's setting, `steering.readyCheck`: "enforce" stops a ticket that is not ready to code, "warn" (also when the key is missing, so the check
+ *  stops nothing in an existing project) only says so (the one thing steering/issues.mjs refuses in either setting is an issue that carries needs-info). Any other value counts as enforce: a typo must not switch the check off. */
 export const readyMode = (config) => (config?.steering?.readyCheck ?? "warn") === "warn" ? "warn" : "enforce";
 /** The gate at the moment a ticket would get a worker: { stop, message, problems }. stop only when the project enforces the check and the ticket is not ready
  *  to code. Never stopped: a ticket whose work has begun (`started`, or a Status in STARTED). `status` is the ticket's status where it is not in its text (issues:

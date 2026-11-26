@@ -24,7 +24,7 @@
     "readyLabel": "ready-for-agent",
     "tasksDir": "docs/tasks",
     "readyCheck": "enforce",
-    "$readyCheck": "enforce: the Controller takes only a ticket that is ready to code (status ready, an Assessed: line with a ready outcome, goal, acceptance criteria, limits, level, no unanswered blocking open question), and stops one that is not before a worker starts for it. warn: the same check, but the ticket is still taken, with a message; this is what a project without the key gets, so that `update` never stops an existing project. A ticket already in progress is never stopped. See docs/workflow.md, Sharpen the ticket."
+    "$readyCheck": "enforce: the Controller takes only a ticket that is ready to code (status ready, an Assessed: line with a ready outcome, goal, acceptance criteria, limits, level, no unanswered blocking open question), and stops one that is not before a worker starts for it. warn: the same check, but a ticket that is not ready to code is still taken, with a message; this is what a project without the key gets. One case is refused in either setting, so after `update` it changes what an existing project does: in github-issues mode an issue that carries needs-info, also next to the ready label, is no longer listed or claimed; remove the label once it is answered. A ticket already in progress is never stopped. See docs/workflow.md, Sharpen the ticket."
   },
   "context": {
     "sources": [],

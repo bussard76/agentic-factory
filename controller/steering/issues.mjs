@@ -49,12 +49,13 @@ if (cmd === "ready") {
   let documentation = false, level = null;
   // Before anything changes: an issue that is not ready to code is not claimed (enforce) or claimed with the warning (warn). One that cannot be read counts as
   // not ready. One that is already in progress is never stopped.
+  // (a re-claim of work in progress is never stopped: the in-progress label decides before needs-info)
   let body = null, status = "";
-  try { const v = JSON.parse(gh("issue", "view", n, "--json", "body,labels")); body = v.body ?? ""; status = statusOf((v.labels ?? []).map((l) => l.name)); } catch { /* unreadable */ }
+  try { const v = JSON.parse(gh("issue", "view", n, "--json", "body,labels")); body = v.body ?? ""; const names = (v.labels ?? []).map((l) => l.name); status = names.includes(progress) ? "building" : statusOf(names); } catch { /* unreadable */ }
+  if (status === "needs-info") { console.error(`#${n} carries needs-info: it waits for an answer, so it is not claimed, whatever steering.readyCheck says.`); process.exit(1); }
   const gate = body === null ? { stop: MODE !== "warn", message: `#${n} cannot be read, so it is not known to be ready to code.` } : readyGate(`#${n}`, body, { mode: MODE, status });
   if (gate.message) console.error(gate.message);
   if (gate.stop) process.exit(1);
-  if (status === "needs-info") { console.error(`#${n} carries needs-info: it waits for an answer, so it is not claimed, whatever steering.readyCheck says.`); process.exit(1); }
   try { documentation = declaredProblem(body ?? "") === ""; level = ticketLevel(body ?? ""); } catch { /* stays false and unknown */ }
   gh("issue", "edit", n, "--add-assignee", "@me", "--remove-label", ready, "--add-label", progress);
   journal("claim", n, { documentation, level });
