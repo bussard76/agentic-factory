@@ -43,7 +43,7 @@ Beginne jede spätere Sitzung mit demselben Satz; der Agent liest dann `~/front-
 
 ## 3. Das erste Feature, outside-in
 
-Sag dem Front-Agenten, was du möchtest. Er erarbeitet mit dir zuerst die Oberfläche (Entwurf oder klickbarer Prototyp), dann die ein- und ausgehenden Daten und schließlich die Logik in Worten und als Diagramm. Nach deiner Zustimmung schreibt er ein fertiges Ticket und informiert den Controller. Halte das erste Feature klein: ein sichtbares Verhalten und ein oder zwei Abnahmesätze.
+Sag dem Front-Agenten, was du möchtest. Er erarbeitet mit dir zuerst die Oberfläche (Entwurf oder klickbarer Prototyp), dann die ein- und ausgehenden Daten und schließlich die Logik in Worten und als Diagramm. Nach deiner Zustimmung schreibt er das Ticket, schärft es (er prüft es gegen deine Spezifikation, den Code und das Glossar, schließt, was die schon beantworten, und fragt dich nur die echten Lücken, eine nach der anderen), markiert es als fertig und informiert den Controller. Halte das erste Feature klein: ein sichtbares Verhalten und ein oder zwei Abnahmesätze.
 
 Der Controller organisiert Architekturprüfung, Umsetzung, unabhängigen Test und Integrations-Wave. Die [Branch- und Worktree-Mechanik](workflow.md#branches-und-worktrees-die-mechanik-eines-tickets) erklärt die Einzelheiten.
 

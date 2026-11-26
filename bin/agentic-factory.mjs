@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { check } from "../controller/cli.mjs";
+import { readyMode, readyProblems, statusOf } from "../controller/ticket.mjs";
 import { KEEP_OPEN_FROM, controllerPlaces, controllerSession, createArgs, createdHandle, locateController } from "../controller/controller-terminal.mjs";
 import { heartbeatCronCheckScript, heartbeatCronScript, heartbeatLabel, heartbeatPlist, statusWatchCronScript, statusWatchLabel, statusWatchPlist } from "./heartbeat-cron.mjs";
 import { staleLimit } from "../front-agent/hosts.mjs";
@@ -441,6 +442,9 @@ function templateVars(c) {
     CONTROLLER_LOCATION: ctl.kind === "local" ? `on this machine (\`${c.hosts.controller.controllerDir ?? "~/controller"}\`)` : `on the server \`${ctl.name}\` (ssh alias \`${ctl.ssh}\`, \`${c.hosts.controller.controllerDir ?? "~/controller"}\`)`,
     STATUS_READ: ctl.kind === "local" ? "a file on this machine" : `on \`${ctl.name}\`: \`ssh ${ctl.ssh} cat ${c.hosts.controller.controllerDir ?? "~/controller"}/status.md\``,
     FRONT_BOT: c.hosts.frontAgent?.bot || "<bot name>",
+    // Where the overall specification and earlier material live: stated once by the project (context.sources), never assumed as a layout.
+    CONTEXT_SOURCES: (c.context?.sources ?? []).length ? c.context.sources.map((s) => `   - ${s}`).join("\n")
+      : `   - none stated yet: ask ${c.project.humanName ?? "the human"} once where the overall specification and any earlier material (a predecessor project, an earlier system) live, write the answer into \`context.sources\` (a list of paths, links or short descriptions) in \`factory.config.json\`, record it in the process decisions, and run \`update\`. Until then use the project's own documents and the code.`,
     // Empty for the terminal Front agent, so its CONTROLLER.md stays as it was.
     FRONT_BOT_EVENTS: frontKind(c) !== "orca-bot" ? "" : `\n- **With an Orca bot as the Front agent** (\`${c.hosts.frontAgent.bot || "<bot name>"}\`): on the same events, append the same line to \`${c.hosts.controller.controllerDir ?? "~/controller"}/front-events.log\`${ctl.kind === "local"
       ? ` and send it to the bot: \`orca orchestration send --to "bot:${c.hosts.frontAgent.bot || "<bot name>"}" --type question --subject "<KIND>" --body "<the line>"\` for a new "Needs ${c.project.humanName}" item or a block, \`--type status\` for every other event. \`inbox.md\` stays the record of orders.`
@@ -752,6 +756,42 @@ async function initNonInteractiveRefresh() {
 }
 
 // --- doctor ----------------------------------------------------------------------------------------
+/** The open tickets by status and, for the "sharpen the ticket" step (docs/workflow.md), those that wait for the human's answer (needs-info) and those marked
+ *  ready that are not ready to code (form only, as controller/ticket.mjs reads it). In issues mode the labels are the status, ranked as steering/issues.mjs
+ *  ranks them (needs-info, then in progress, then ready), after needs-human. */
+function readTickets(c) {
+  const tickets = { total: 0, byStatus: {}, waitingForYou: [], notReadyToCode: [] }, needsHuman = [];
+  const add = (id, st, text, ready) => {
+    tickets.total++; tickets.byStatus[st] = (tickets.byStatus[st] ?? 0) + 1;
+    if (st === "needs-info") tickets.waitingForYou.push(id);
+    if (st === ready) { const missing = readyProblems(text, { status: "ready" }); if (missing.length) tickets.notReadyToCode.push({ id, missing }); }
+  };
+  if (c.steering?.mode === "github-issues") {
+    const ready = c.steering.readyLabel ?? "ready-for-agent";
+    const ranked = ["needs-info", c.steering.inProgressLabel ?? "in-progress", ready, "needs-triage", "ready-for-human", "blocked"];
+    const out = has("gh") ? sh("gh", ["issue", "list", "--state", "open", "--limit", "200", "--json", "number,title,labels,body"], { timeout: 15000 }) : "";
+    if (!out) tickets.unavailable = "gh not available or not logged in";
+    else for (const i of JSON.parse(out)) {
+      const labels = i.labels.map((l) => l.name), human = labels.includes("needs-human");
+      add(`#${i.number}`, human ? "needs-human" : ranked.find((n) => labels.includes(n)) ?? "open", i.body ?? "", ready);
+      if (human) needsHuman.push(`Issue #${i.number}: ${i.title}`);
+    }
+  } else {
+    const dir = c.steering?.tasksDir ?? "docs/tasks";
+    if (fs.existsSync(dir)) for (const f of fs.readdirSync(dir).filter((f) => /^T\d+.*\.md$/.test(f) && !/^T00-/.test(f))) {
+      const text = fs.readFileSync(path.join(dir, f), "utf8");
+      add(/^T\d+/.exec(f)[0], statusOf(text) || "unknown", text, "ready");
+    }
+  }
+  return { tickets, needsHuman };
+}
+/** What doctor and the status hint say about tickets marked ready that are not ready to code, with what to do about it in this project's setting. */
+function notReadyText(c, list) {
+  const named = list.slice(0, 20).map((t) => `${t.id}: ${t.missing.join(", ")}`).join("; ") + (list.length > 20 ? `; and ${list.length - 20} more` : "");
+  return `${list.length} ticket${list.length > 1 ? "s are" : " is"} marked ready but not ready to code (${named}): sharpen ${list.length > 1 ? "them" : "it"} (assess, write the result into the ticket). `
+    + (readyMode(c) === "warn" ? "steering.readyCheck is warn, so the Controller still takes them; once they are sharpened, set it to enforce in factory.config.json, then run update and start" : "The Controller does not take them (steering.readyCheck is enforce)");
+}
+
 function doctor() {
   let fail = 0;
   const ok = (m) => say(`OK      ${m}`), bad = (m) => { say(`MISSING ${m}`); fail++; }, info = (m) => say(`info    ${m}`);
@@ -760,6 +800,10 @@ function doctor() {
   const c = JSON.parse(fs.readFileSync("factory.config.json", "utf8")); ok(`factory.config.json (project ${c.project.name}, factory ${c.factoryVersion})`);
   if (minimal(c)) doctorStandard(ok, bad, info);
   else doctorTracked(c, ok, bad, info);
+  // The "sharpen the ticket" step: tickets marked ready that are not ready to code (with warn they are still taken, so say it where the human looks).
+  const { tickets } = readTickets(c);
+  if (tickets.notReadyToCode.length) info(notReadyText(c, tickets.notReadyToCode));
+  if (tickets.unavailable) info(`tickets not checked for being ready to code: ${tickets.unavailable}`);
   if (watchRequired(c) && readWatchProblem(c)) info(`status watch cannot reach the terminal: ${readWatchProblem(c)}`);
   // Under WSL the cron service does not always run, and then the schedule is there but nothing happens.
   if (watchRequired(c)) statusWatchRuns(c) ? ok("status watch running") : info(`status watch not running: without it, finished work and open questions do not reach the Front agent. Run start${/microsoft/i.test(os.release()) ? "; under WSL also check the cron service (sudo service cron start)" : ""}`);
@@ -1086,20 +1130,15 @@ function collectStatus() {
   if (frontKind(c) === "orca-bot") { s.setup.frontAgent = { kind: "orca-bot", ...botWatchStatus(c) }; s.setup.statusWatch = false; }   // a bot is woken by its automation (setup.frontAgent.watchAutomation), not by a status watch
   // The work: design exports, tickets by status, domain and architecture documents, open debt, open questions.
   const features = fs.existsSync("design") ? fs.readdirSync("design", { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) : [];
-  const tickets = { total: 0, byStatus: {} };
-  if (c.steering.mode === "github-issues") {
-    const out = has("gh") ? sh("gh", ["issue", "list", "--state", "open", "--limit", "200", "--json", "number,title,labels"], { timeout: 15000 }) : "";
-    if (out) for (const i of JSON.parse(out)) { tickets.total++; const labels = i.labels.map((l) => l.name); const st = labels.includes("needs-human") ? "needs-human" : labels.find((n) => [c.steering.readyLabel ?? "ready-for-agent", "needs-triage", "needs-info", "ready-for-human", "in-progress", "blocked"].includes(n)) ?? "open"; tickets.byStatus[st] = (tickets.byStatus[st] ?? 0) + 1; if (labels.includes("needs-human")) ctl.needs.push(`Issue #${i.number}: ${i.title}`); }
-    else tickets.unavailable = "gh not available or not logged in";
-  } else if (fs.existsSync("docs/tasks")) {
-    for (const f of fs.readdirSync("docs/tasks").filter((f) => /^T\d+.*\.md$/.test(f) && !/^T00-/.test(f))) {
-      const st = (/^Status:\s*([a-z-]+)/m.exec(fs.readFileSync(path.join("docs/tasks", f), "utf8")) ?? [])[1] ?? "unknown";
-      tickets.total++; tickets.byStatus[st] = (tickets.byStatus[st] ?? 0) + 1;
-    }
-  }
+  const { tickets, needsHuman } = readTickets(c);
+  ctl.needs.push(...needsHuman);
+  const readyCheck = readyMode(c), inProgress = c.steering?.inProgressLabel ?? "in-progress";
   const n = (k) => tickets.byStatus[k] ?? 0;
-  const active = n("ready") + n("building") + n("review") + n("passed") + n(c.steering.readyLabel ?? "ready-for-agent") + n("in-progress");
-  const drafts = n("draft") + n("needs-triage") + n("needs-info");
+  // With the check on enforce a ready ticket that is not ready to code is not taken, so it is no running work.
+  const stuck = readyCheck === "warn" ? 0 : tickets.notReadyToCode.length;
+  const readyCount = c.steering.mode === "github-issues" ? n(c.steering.readyLabel ?? "ready-for-agent") : n("ready");   // the one state that means ready to code in this mode
+  const active = readyCount - stuck + n("building") + n("review") + n("passed") + n(inProgress);
+  const drafts = n("draft") + n("needs-triage") + n("needs-info") + stuck;
   const adrs = fs.existsSync("docs/adr") ? fs.readdirSync("docs/adr").filter((f) => /\.md$/.test(f) && !/0000-template/.test(f)).length : 0;
   // The template's example row (placeholders in angle brackets) is not debt.
   const debtOpen = fs.existsSync("docs/debt.md") ? fs.readFileSync("docs/debt.md", "utf8").split("\n").filter((l) => /\|\s*open\s*\|/.test(l) && !/<[a-z][^>]*>/.test(l)).length : 0;
@@ -1110,7 +1149,7 @@ function collectStatus() {
   else if (setupMissing) [s.phase, s.next] = ["start", `run \`start\`: user-level skills, the Front agent bundle and the Controller`];
   else if (ctl.needs.length) [s.phase, s.next] = ["decisions", "the Controller waits for the human: ask the open questions one at a time"];
   else if (!features.length && !tickets.total) [s.phase, s.next] = ["outside-in: surface", "sketch the surface of the first feature with the human (design tool or a clickable fake with the prototype skill), export it to design/<feature>/"];
-  else if (drafts || (features.length > tickets.total && !active)) [s.phase, s.next] = ["outside-in: data and logic", "for the designed features: list data in and out on the fake, agree the logic in words and a diagram (grilling), then write the tickets as ready"];
+  else if (drafts || (features.length > tickets.total && !active)) [s.phase, s.next] = ["outside-in: data and logic", "for the designed features: list data in and out on the fake, agree the logic in words and a diagram (grilling), then write the tickets and sharpen each before it becomes ready (grill-with-docs against the specification, the code and the glossary; the result goes into the ticket)"];
   else if (active) [s.phase, s.next] = ["building", "the Controller works on the ready tickets: show the status table; accept what reaches main on the preview"];
   else [s.phase, s.next] = ["accept and next", "accept what was integrated on the preview, then choose the next feature"];
   // A hint, not a phase: a laptop that slept or a machine without cron must not hide open questions behind `start`.
@@ -1124,6 +1163,8 @@ function collectStatus() {
   if (s.setup.handbook?.problem && s.phase !== "start") s.next = `The Controller's handbook is old: ${s.setup.handbook.problem}. Then: ${s.next}`;
   s.hints = [
     ...(s.setup.gate.sharedLeftover ? ["a shared gate is still in ~/.local/bin: this project does not use it (its gate is in its Controller directory); delete it once no older project on this host uses it"] : []),
+    ...(s.work.tickets.waitingForYou?.length ? [`${s.work.tickets.waitingForYou.length} ticket${s.work.tickets.waitingForYou.length > 1 ? "s wait" : " waits"} for the human's answer (needs-info: ${s.work.tickets.waitingForYou.join(", ")}): put them in the status table, ask the open questions one at a time`] : []),
+    ...(s.work.tickets.notReadyToCode?.length ? [notReadyText(c, s.work.tickets.notReadyToCode)] : []),
     ...(!s.work.glossary ? ["the business terms are not written down yet (no GLOSSARY.md): capture them with domain-modeling while specifying"] : []),
     ...(c.architecture?.mode === undefined ? ["no decision on ARCHITECTURE.md yet: ask the human, then set architecture.mode to architect or off in factory.config.json and run update"] : []),
     ...(c.architecture?.mode === "architect" && !s.work.architecture ? ["no ARCHITECTURE.md yet: the Controller starts the baseline (mkspec baseline)"] : []),
@@ -1153,6 +1194,8 @@ function status() {
     const w = s.work;
     say(`\nDesigned features: ${w.designedFeatures.length ? w.designedFeatures.join(", ") : "none"}`);
     say(`Tickets: ${w.tickets.total ? Object.entries(w.tickets.byStatus).map(([k, v]) => `${v} ${k}`).join(", ") : w.tickets.unavailable ?? "none"}`);
+    if (w.tickets.waitingForYou?.length) say(`Waiting for the human (needs-info): ${w.tickets.waitingForYou.join(", ")}`);
+    if (w.tickets.notReadyToCode?.length) say(`Marked ready, not ready to code: ${w.tickets.notReadyToCode.map((t) => `${t.id} (${t.missing.join(", ")})`).join("; ")}`);
     say(`ADRs: ${w.adrs} · ARCHITECTURE.md: ${w.architecture ? "yes" : "no"} · glossary: ${w.glossary ? "yes" : "no"} · open debt: ${w.debtOpen}`);
     if (w.needsHuman.length) say(`Needs the human:\n  ${w.needsHuman.join("\n  ")}`);
     if (w.waivers.count) say(`Waivers (a failed review decided to hold no blocker, ${w.waivers.count}):\n  ${w.waivers.list.map((x) => `${x.task} ${String(x.commit).slice(0, 10)} by the ${x.decider}, follow-up ${x.followUp}`).join("\n  ")}`);
@@ -1507,7 +1550,7 @@ async function start() {
   if (owner && owner !== c.project.name) { say(`Controller directory ${dir}${ctl.kind === "local" ? "" : ` on ${ctl.name}`} belongs to the project ${owner}. Set hosts.controller.controllerDir in factory.config.json to a directory of its own (for example ~/controller-${c.project.name}), run \`agentic-factory update\`, then start again. Nothing was copied.`); process.exit(1); }
   if (ctl.kind === "local") {
     const d = expandHome(dir);
-    fs.mkdirSync(d, { recursive: true }); copyTreeAtomic(".factory/controller", d); say(`Controller bundle: ${dir}`);
+    fs.mkdirSync(d, { recursive: true }); writeFileAtomic(path.join(d, "ticket.mjs"), fs.readFileSync(".factory/controller/ticket.mjs")); copyTreeAtomic(".factory/controller", d); say(`Controller bundle: ${dir}`);
     warnCleanupTrap();
     say(`Gate: ${dir}/gate (this project's own; the shared ~/.local/bin/gate is neither used nor touched)`);
     const loadlog = path.join(d, "loadlog.sh");
@@ -1523,6 +1566,7 @@ async function start() {
     // One logger per Controller directory, not one per host. The trailing space is the project argument: a logger from before it was
     // passed (started as "bash loadlog.sh" in this directory, writing untagged lines) is stopped, found by its working directory (Linux).
     const remoteDir = dir, remoteLoadlog = `${dir.replace(/^~(?=\/|$)/, "$HOME")}/loadlog.sh`, quoted = `'${c.project.name.replace(/'/g, "'\\''")}'`;
+    spawnSync("rsync", ["-a", "-e", `ssh ${sshArgsFor(ctl).slice(0, -1).map((a) => JSON.stringify(a)).join(" ")}`, ".factory/controller/ticket.mjs", `${ctl.ssh}:${remoteDir}/`], { encoding: "utf8" });   // first, as lib.mjs imports it; the copy below reports any failure
     const r = spawnSync("rsync", ["-a", "-e", `ssh ${sshArgsFor(ctl).slice(0, -1).map((a) => JSON.stringify(a)).join(" ")}`, ".factory/controller/", `${ctl.ssh}:${remoteDir}/`], { encoding: "utf8" });
     if (r.status !== 0) { failed++; say(`Controller bundle: copy to ${ctl.name} failed: ${(r.stderr || "").trim().slice(0, 200)}`); }
     else {

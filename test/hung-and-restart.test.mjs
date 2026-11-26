@@ -12,7 +12,7 @@ import path from "node:path";
 
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
-const FILES = ["heartbeat.mjs", "cli.mjs", "controller-terminal.mjs", "front-notice.mjs", "inbox.mjs", "restart.mjs", "lib.mjs", "steering/tasks.mjs"];
+const FILES = ["heartbeat.mjs", "cli.mjs", "controller-terminal.mjs", "front-notice.mjs", "inbox.mjs", "restart.mjs", "lib.mjs", "steering/tasks.mjs", "ticket.mjs"];
 const ago = (ms) => new Date(Date.now() - ms);
 const MIN = 60_000;
 

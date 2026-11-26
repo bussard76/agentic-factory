@@ -616,7 +616,14 @@ test("controller scripts run against the generated config", () => {
   const run = (...a) => execFileSync("node", a, { cwd: ctl, encoding: "utf8", env }).trim();
   const verdict = JSON.parse(run("capacity.mjs", "--verbose"));
   assert.ok(["start", "wait"].includes(verdict.suite)); assert.equal(verdict.caps.calibration, "auto");
+  // A new project enforces the readiness check: a ticket that was never sharpened gets no Developer spec, a sharpened one does.
+  const ticketFile = path.join(tmp, "docs/tasks/T01-x.md");
+  fs.mkdirSync(path.dirname(ticketFile), { recursive: true });
+  fs.writeFileSync(ticketFile, "# T01: x\n\nStatus: ready\n");
+  assert.throws(() => run("templates/mkspec.mjs", "dev", "T01", "docs/tasks/T01-x.md", "agents/t01"), /T01 is not ready to code: no assessment/);
+  fs.writeFileSync(ticketFile, "# T01: x\n\nStatus: ready\nAssessed: ready as written, 2026-11-25\nLevel: 1\n\n## Goal\n\nA goal.\n\n## Observable acceptance\n\n1. It works.\n\n## Out of scope\n\nNothing else.\n");
   assert.match(run("templates/mkspec.mjs", "dev", "T01", "docs/tasks/T01-x.md", "agents/t01"), /t01-dev\.txt$/);
+  fs.rmSync(ticketFile);
   assert.match(run("templates/mkspec.mjs", "baseline"), /baseline/);
   // Every placeholder is filled, including those with a digit, and a release is one runnable command.
   for (const f of ["AGENTS.md", "docs/coordinator.md", "docs/review-protocol.md", "docs/architect-protocol.md", "docs/dev-workflow.md", ".factory/controller/CONTROLLER.md"]) assert.doesNotMatch(fs.readFileSync(path.join(tmp, f), "utf8"), /\{\{[A-Z0-9_]+\}\}/, f);
@@ -638,7 +645,7 @@ test("gate runs commands in slots and survives without flock", () => {
 
 test("a worker's setup or shell terminal does not keep its worktree from cleanup", () => {
   const dir = tempDir("af-holds-");
-  fs.copyFileSync(path.join(ROOT, "controller", "lib.mjs"), path.join(dir, "lib.mjs"));
+  for (const f of ["lib.mjs", "ticket.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
   fs.writeFileSync(path.join(dir, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local" }] } }));
   const titles = ["T1 · Worker Developer", "T1 · Worker Developer · Setup", "T1 · Worker Developer · Shell", "p · Controller", "p · Integration · Wave 3", "Coordinator old", "my notes"];
   const code = `import { holdsWorktree } from ${JSON.stringify(path.join(dir, "lib.mjs"))}; console.log(JSON.stringify(${JSON.stringify(titles)}.map((t) => holdsWorktree(t))));`;
@@ -650,7 +657,7 @@ test("a worker's setup or shell terminal does not keep its worktree from cleanup
 
 test("stallwatch watches a worker's own terminal, not its setup or shell terminal", async () => {
   const dir = tempDir("af-stall-");
-  for (const f of ["stallwatch.mjs", "cli.mjs", "lib.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
+  for (const f of ["stallwatch.mjs", "cli.mjs", "lib.mjs", "ticket.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
   fs.writeFileSync(path.join(dir, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "local" }, workers: [{ name: "local", kind: "local" }] } }));
   const ws = path.join(os.homedir(), "orca/workspaces/p/");
   const terminals = [{ handle: "worker", title: "T1 · Worker Developer", worktreePath: ws + "t1" }, { handle: "setup", title: "T1 · Worker Developer · Setup", worktreePath: ws + "t1" }, { handle: "shell", title: "T1 · Worker Developer · Shell", worktreePath: ws + "t1" },
@@ -673,7 +680,7 @@ console.log(JSON.stringify({ ok: true, result: { terminals: ${JSON.stringify(ter
 
 test("names.mjs corrects only automatic names, by role, and leaves an unknown entry alone", () => {
   const dir = tempDir("af-names-");
-  for (const f of ["names.mjs", "cli.mjs", "lib.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
+  for (const f of ["names.mjs", "cli.mjs", "lib.mjs", "ticket.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(dir, f));
   fs.writeFileSync(path.join(dir, "factory.config.json"), JSON.stringify({ project: { name: "p", mainBranch: "main" }, agents: { runner: "orca" }, commands: {}, hosts: { controller: { host: "server" }, workers: [{ name: "server", kind: "remote", ssh: "s", orcaEnvironment: "Server", orcaRepoId: "r" }] } }));
   fs.writeFileSync(path.join(dir, "workers.json"), JSON.stringify({ t1: { name: "T1 · Worker Developer", host: "server", worktree: "~/w/p/t1" } }));
   const worktrees = [

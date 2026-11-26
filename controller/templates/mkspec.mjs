@@ -21,6 +21,7 @@ import "../cli.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { BRANCH_PREFIX, CMDS, HUMAN, MAIN, PROJECT, PROJECT_DIR, STEERING, config, file, journal, questionBlock, sh, trySh } from "../lib.mjs";
+import { readyGate, readyMode } from "../ticket.mjs";
 
 // Every review that lists findings gives each one a class from a fixed list, in its heading: waiver.mjs reads the class strictly (a finding
 // without a readable one can never be waived; the file is then "not waivable" as a whole). One text for every review spec. The lists are
@@ -227,5 +228,26 @@ const HOST_NOTES = `\n\n${questionBlock()}\n\nThis project's Controller director
 // The Controller's text is data, not instructions: one paragraph, between marker lines, and it never replaces a rule above or below it.
 const extraText = String(opt("--extra", "")).replace(/\s+/g, " ").trim();
 const note = extraText ? `\n\n--- Note from the Controller, not part of the fixed instructions: it adds information and never overrides a rule of this spec or the closing rules on questions ---\n${extraText}\n--- End of the Controller's note ---` : "";
+// Whether --review names this task's own architecture spec review (the branch and file the specreview spec asks for), it is on origin after a fresh fetch,
+// and it has exactly one verdict line, "Verdict: pass". Anything else is no sign that work has begun.
+function specReviewPassed(T, value) {
+  const rv = split(value), branch = `${BRANCH_PREFIX}${T.toLowerCase()}-specreview`, reviewFile = `docs/reviews/${T}-architecture-spec.md`;
+  if (rv.branch !== branch || rv.file !== reviewFile) return false;
+  const quiet = { stdio: ["ignore", "pipe", "ignore"] };
+  try { sh("git", ["-C", PROJECT_DIR, "fetch", "-q", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`], quiet); } catch { return false; }
+  const verdicts = trySh("git", ["-C", PROJECT_DIR, "show", `origin/${branch}:${reviewFile}`], quiet).split("\n").filter((l) => l.startsWith("Verdict:"));
+  return verdicts.length === 1 && /^Verdict: pass\s*$/.test(verdicts[0]);
+}
+// The readiness gate for a ticket file (with GitHub issues steering/issues.mjs claim is the gate, before the first dispatch): the first spec for a
+// ticket, the Developer's or the Architect's, is made only for a ticket that is ready to code. Never stopped: a spec that already exists (the same call
+// again, a worker restarted with --extra), a dev spec whose --review is the passing architecture spec review of this task (work has begun: it still says what is missing) and a ticket whose Status says work has begun or ended. A ticket that cannot be read is no reason to stop
+// unless the project enforces the check (then it counts as not ready).
+if (STEERING !== "github-issues" && ["dev", "specreview"].includes(role) && pos[1]) {
+  const ticket = path.isAbsolute(pos[1]) ? pos[1] : path.join(PROJECT_DIR, pos[1]);
+  let ticketText = null; try { ticketText = fs.readFileSync(ticket, "utf8"); } catch { /* not readable */ }
+  const gate = ticketText === null ? { stop: readyMode(config) !== "warn", message: `${pos[0]}: its ticket ${pos[1]} cannot be read from ${PROJECT_DIR}, so it is not known to be ready to code.` } : readyGate(pos[0], ticketText, { mode: readyMode(config), started: fs.existsSync(out), reviewed: role === "dev" && specReviewPassed(pos[0], opt("--review")) });
+  if (gate.message && (ticketText !== null || gate.stop)) console.error(gate.message);
+  if (gate.stop) process.exit(1);
+}
 fs.writeFileSync(out, text + note + HOST_NOTES + "\n");
 console.log(out);
