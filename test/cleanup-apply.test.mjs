@@ -11,7 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const FILES = ["cli.mjs", "cleanup.mjs", "lib.mjs", "journal.mjs", "names.mjs"];
+const FILES = ["cli.mjs", "cleanup.mjs", "lib.mjs", "ticket.mjs", "journal.mjs", "names.mjs"];
 
 function setup() {
   const dir = fs.realpathSync(tempDir("af-cleanup-apply-"));

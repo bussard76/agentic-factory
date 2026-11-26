@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { check } from "../controller/cli.mjs";
-import { readyProblems } from "../controller/ticket.mjs";
+import { readyProblems, statusOf } from "../controller/ticket.mjs";
 import { KEEP_OPEN_FROM, controllerPlaces, controllerSession, createArgs, createdHandle, locateController } from "../controller/controller-terminal.mjs";
 import { heartbeatCronCheckScript, heartbeatCronScript, heartbeatLabel, heartbeatPlist, statusWatchCronScript, statusWatchLabel, statusWatchPlist } from "./heartbeat-cron.mjs";
 import { staleLimit } from "../front-agent/hosts.mjs";
@@ -764,6 +764,15 @@ function doctor() {
   const c = JSON.parse(fs.readFileSync("factory.config.json", "utf8")); ok(`factory.config.json (project ${c.project.name}, factory ${c.factoryVersion})`);
   if (minimal(c)) doctorStandard(ok, bad, info);
   else doctorTracked(c, ok, bad, info);
+  // The "sharpen the ticket" step: tickets marked ready that are not ready to code (with warn they are still taken, so say it where the human looks).
+  if (c.steering?.mode !== "github-issues" && fs.existsSync("docs/tasks")) {
+    const stuck = [];
+    for (const f of fs.readdirSync("docs/tasks").filter((f) => /^T\d+.*\.md$/.test(f) && !/^T00-/.test(f))) {
+      const text = fs.readFileSync(path.join("docs/tasks", f), "utf8"), missing = statusOf(text) === "ready" ? readyProblems(text) : [];
+      if (missing.length) stuck.push(`${/^T\d+/.exec(f)[0]} (${missing.join(", ")})`);
+    }
+    if (stuck.length) info(`${stuck.length} ticket${stuck.length > 1 ? "s are" : " is"} marked ready but not ready to code: ${stuck.join("; ")}. ${(c.steering?.readyCheck ?? "warn") === "warn" ? "steering.readyCheck is warn, so they are still taken; once the Front agent has sharpened them, set it to enforce in factory.config.json, then run update and start" : "steering.readyCheck is enforce, so they are not taken until the Front agent has sharpened them"}`);
+  }
   if (watchRequired(c) && readWatchProblem(c)) info(`status watch cannot reach the terminal: ${readWatchProblem(c)}`);
   // Under WSL the cron service does not always run, and then the schedule is there but nothing happens.
   if (watchRequired(c)) statusWatchRuns(c) ? ok("status watch running") : info(`status watch not running: without it, finished work and open questions do not reach the Front agent. Run start${/microsoft/i.test(os.release()) ? "; under WSL also check the cron service (sudo service cron start)" : ""}`);
@@ -1097,11 +1106,11 @@ function collectStatus() {
   tickets.waitingForYou = []; tickets.notReadyToCode = [];
   const sharpness = (id, st, text, ready) => {
     if (st === "needs-info") tickets.waitingForYou.push(id);
-    if (st === ready) { const missing = readyProblems(text); if (missing.length) tickets.notReadyToCode.push({ id, missing }); }
+    if (st === ready) { const missing = readyProblems(text, { status: "ready" }); if (missing.length) tickets.notReadyToCode.push({ id, missing }); }
   };
   if (c.steering.mode === "github-issues") {
     const out = has("gh") ? sh("gh", ["issue", "list", "--state", "open", "--limit", "200", "--json", "number,title,labels,body"], { timeout: 15000 }) : "";
-    if (out) for (const i of JSON.parse(out)) { tickets.total++; const labels = i.labels.map((l) => l.name); const st = labels.includes("needs-human") ? "needs-human" : labels.find((n) => [c.steering.readyLabel ?? "ready-for-agent", "needs-triage", "needs-info", "ready-for-human", "in-progress", "blocked"].includes(n)) ?? "open"; tickets.byStatus[st] = (tickets.byStatus[st] ?? 0) + 1; if (labels.includes("needs-human")) ctl.needs.push(`Issue #${i.number}: ${i.title}`); sharpness(`#${i.number}`, st, i.body ?? "", c.steering.readyLabel ?? "ready-for-agent"); }
+    if (out) for (const i of JSON.parse(out)) { tickets.total++; const labels = i.labels.map((l) => l.name); const st = labels.includes("needs-human") ? "needs-human" : ["needs-info", c.steering.readyLabel ?? "ready-for-agent", "needs-triage", "ready-for-human", "in-progress", "blocked"].find((n) => labels.includes(n)) ?? "open"; tickets.byStatus[st] = (tickets.byStatus[st] ?? 0) + 1; if (labels.includes("needs-human")) ctl.needs.push(`Issue #${i.number}: ${i.title}`); sharpness(`#${i.number}`, st, i.body ?? "", c.steering.readyLabel ?? "ready-for-agent"); }
     else tickets.unavailable = "gh not available or not logged in";
   } else if (fs.existsSync("docs/tasks")) {
     for (const f of fs.readdirSync("docs/tasks").filter((f) => /^T\d+.*\.md$/.test(f) && !/^T00-/.test(f))) {
@@ -1113,7 +1122,8 @@ function collectStatus() {
   const n = (k) => tickets.byStatus[k] ?? 0;
   // With the check on enforce a ready ticket that is not ready to code is not taken, so it is no running work.
   const stuck = readyCheck === "warn" ? 0 : tickets.notReadyToCode.length;
-  const active = n("ready") - stuck + n("building") + n("review") + n("passed") + n(c.steering.readyLabel ?? "ready-for-agent") + n("in-progress");
+  const readyCount = c.steering.mode === "github-issues" ? n(c.steering.readyLabel ?? "ready-for-agent") : n("ready");   // the one state that means ready to code in this mode
+  const active = readyCount - stuck + n("building") + n("review") + n("passed") + n("in-progress");
   const drafts = n("draft") + n("needs-triage") + n("needs-info") + stuck;
   const adrs = fs.existsSync("docs/adr") ? fs.readdirSync("docs/adr").filter((f) => /\.md$/.test(f) && !/0000-template/.test(f)).length : 0;
   // The template's example row (placeholders in angle brackets) is not debt.

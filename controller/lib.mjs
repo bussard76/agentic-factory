@@ -271,25 +271,17 @@ export function declaredProblem(text) {
   if (decl.length !== 1 || !/^Documentation only: yes[ \t]*$/.test(decl[0])) return "it does not say `Documentation only: yes`";
   return "";
 }
-// The ticket's prose only, as declaredProblem reads it (not an HTML comment, not a fenced code block). Kept apart from it: a test holds
-// declaredProblem byte for byte equal to the guardrails' copy.
-function proseLines(text) {
-  const prose = String(text).replace(/<!--[\s\S]*?(-->|$)/g, ""), kept = [];
-  let fence = "";
-  for (const l of prose.split(/\r?\n/)) {
-    const m = /^ {0,3}(`{3,}|~{3,})/.exec(l);
-    if (fence) { if (m && m[1][0] === fence[0] && m[1].length >= fence.length) fence = ""; continue; }
-    if (m) { fence = m[1]; continue; }
-    kept.push(l);
-  }
-  return kept;
-}
-/** The change level a ticket states (1, 2 or 3), from its prose only (as declaredProblem). Every `Level:` line must read `Level: <1|2|3>`; with
- *  several (a ticket repeats it under "Architecture impact") the highest counts. null when there is none or one is not a plain level
- *  (an unfilled template `Level: 1 | 2 | 3`): unknown, which a caller treats as the highest. */
-export function ticketLevel(text) {
-  const lines = proseLines(text).filter((l) => /^level:/i.test(l));
-  if (!lines.length) return null;
-  const levels = lines.map((l) => /^Level: ([123])[ \t]*$/.exec(l)?.[1]);
-  return levels.some((v) => !v) ? null : Math.max(...levels.map(Number));
+// The reading of a ticket's prose and its level is ticket.mjs's (one reader; no configuration there, so `agentic-factory status` uses it too).
+export { ticketLevel } from "./ticket.mjs";
+
+/** A note about a ticket (why it is not ready to code), once per ticket and reason: printed to stderr the first time and recorded in the Controller's journal
+ *  (`ticketnote`), so a loop that lists tickets every cycle does not repeat it. The heartbeat sets FACTORY_NO_NOTES: it neither prints nor records, so it never
+ *  uses up the note the Controller should read. */
+export function noteOnce(ticket, reason, message) {
+  if (process.env.FACTORY_NO_NOTES) return;
+  let known = ""; try { known = fs.readFileSync(file("journal.ndjson"), "utf8"); } catch { /* no journal yet */ }
+  const seen = known.split("\n").some((l) => { try { const e = JSON.parse(l); return e.type === "ticketnote" && e.task === ticket && e.reason === reason; } catch { return false; } });
+  if (seen) return;
+  console.error(message);
+  journalQuiet("ticketnote", ticket, { reason });
 }

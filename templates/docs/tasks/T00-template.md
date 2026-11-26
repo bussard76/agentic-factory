@@ -4,6 +4,7 @@ Status: draft | needs-info | ready | building | review | passed | integrated | p
 Decided by: <human>, <date>
 Origin: <wish, live-test finding, audit, retro, debt item, a ticket brought over from an outside tracker>
 Depends on: <tasks or shared interfaces that must exist first, or "nothing">
+<!-- Documentation only: yes -- add this line (and `Level: 1` below) ONLY when the result is Markdown or images and nothing else. It is what lets a docs-only task skip its Tester (docsOnly.enabled); it must be there when the work starts and still when the check runs (read from the ticket on the main branch, never from the task branch), as shown, once, outside code blocks and comments: this comment itself does not count. Leave it out otherwise: absent means the full path. A ticket that asks for code, an export, a dependency or a route never carries it, whatever its level. -->
 Assessed: <ready as written | ready after gaps closed from context | needs clarification>, <YYYY-MM-DD>
 
 ## Goal
@@ -35,11 +36,20 @@ Numbered, observable statements of what the system does.
 
 ## Assessment
 
-<!-- Written by the Front agent's "sharpen the ticket" step, with the `Assessed:` line above. Outcome and why. What the specification, the code, the glossary or an ADR already answered, each with its source (file and section). Every `Assumption:` the agent made, marked until the human confirms it. New terms (GLOSSARY.md) and decisions that are hard to reverse (ADR) that came out of it. -->
+<!-- Written by the Front agent's "sharpen the ticket" step, together with the `Assessed:` line above, so that a later reader can see why the ticket was called ready. Keep these five parts:
+Outcome: ready as written | ready after gaps closed from context | needs clarification, and the short reason. For the short step (Level 1 and no new interface, data or state) say that this is why it was short.
+Sources read: every source consulted, one per line, with file and section (the overall specification, other documents named in `context.sources`, GLOSSARY.md, ADRs, code files).
+Closed from context: what a source already answered, each with the source.
+Assumptions: every `Assumption: ...` made (it stays until the human confirms it).
+New terms and decisions: the GLOSSARY.md terms and ADRs that came out of it. -->
 
 ## Open questions
 
-<!-- One list item per question. Mark it `(blocking)` when the ticket cannot be built without the answer, `(not blocking)` otherwise. An answer is written on the item as `Answer: …` (decided by the human, date). A ticket with an unanswered blocking question is not ready to code. -->
+<!-- One list item per question, in exactly this form (the check reads nothing else):
+- (blocking) <the question>
+  Answer: <the answer, decided by the human, the date>
+- (not blocking) <the question>
+The marker `(blocking)` or `(not blocking)` comes first. A blocking question is closed by an `Answer:` line under it (indented, or on the next line), by `[x]` in front of it, by striking it through (`~~...~~`), or by moving it to a section "Answered questions". An item without a marker, a line that is no list item and a blocking question without an answer make the ticket not ready to code, and the message names the line. -->
 
 ## References
 

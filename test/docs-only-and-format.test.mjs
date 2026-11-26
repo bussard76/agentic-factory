@@ -543,7 +543,7 @@ test("docsonly.mjs uses main's setting and check, journals only a docs-only verd
   branch(r, "agents/t1", () => r.write("docs/guide.md", "v2\n")); r.git("push", "-q", "origin", "agents/t1");
   branch(r, "agents/t2", () => r.write("src/app.js", "export const a = 7;\n")); r.git("push", "-q", "origin", "agents/t2");
   const ctl = path.join(r.base, "controller"); fs.mkdirSync(ctl);
-  for (const f of ["lib.mjs", "cli.mjs", "docsonly.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
+  for (const f of ["lib.mjs", "ticket.mjs", "cli.mjs", "docsonly.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
   // The Controller's copy says enabled; only main's config counts.
   fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "demo", mainBranch: "main" }, docsOnly: { enabled: true }, hosts: { controller: { host: "local", controllerDir: ctl }, workers: [{ name: "local", kind: "local", projectDir: r.dir }] } }));
   const run = (...a) => spawnSync("node", [path.join(ctl, "docsonly.mjs"), ...a], { encoding: "utf8", env: { ...process.env, FACTORY_CONFIG: "" } });
@@ -608,7 +608,7 @@ function ticketRepo(cfg = {}) {
 // The Controller's own checkout and scripts around that project; run() is `node docsonly.mjs …`.
 function docsController(r) {
   const ctl = fs.mkdtempSync(path.join(r.base, "ctl-docsonly-"));
-  for (const f of ["lib.mjs", "cli.mjs", "docsonly.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
+  for (const f of ["lib.mjs", "ticket.mjs", "cli.mjs", "docsonly.mjs"]) fs.copyFileSync(path.join(ROOT, "controller", f), path.join(ctl, f));
   fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ project: { name: "demo", mainBranch: "main" }, hosts: { controller: { host: "local", controllerDir: ctl }, workers: [{ name: "local", kind: "local", projectDir: r.dir }] } }));
   fs.copyFileSync(path.join(ROOT, "controller/ticket.mjs"), path.join(ctl, "ticket.mjs")); fs.mkdirSync(path.join(ctl, "steering")); fs.copyFileSync(path.join(ROOT, "controller/steering/issues.mjs"), path.join(ctl, "steering/issues.mjs"));
   const env = () => ({ ...process.env, FACTORY_CONFIG: "", ...(r.env ?? {}) });

@@ -181,7 +181,7 @@ test("the Controller's --extra text is one paragraph between marker lines in eve
 function watchRig({ verdict, attention, screen = ["PRIVATE QUESTION TEXT", "> "], config = {}, workers, panes = 1 }) {
   const dir = tempDir("af-askwatch-"), ctl = path.join(dir, "ctl"), ws = path.join(dir, "ws", "p");
   fs.mkdirSync(ctl); fs.mkdirSync(path.join(ws, "t1"), { recursive: true });
-  for (const f of ["stallwatch.mjs", "cli.mjs", "lib.mjs"]) fs.copyFileSync(path.join(CTL, f), path.join(ctl, f));
+  for (const f of ["stallwatch.mjs", "cli.mjs", "lib.mjs", "ticket.mjs"]) fs.copyFileSync(path.join(CTL, f), path.join(ctl, f));
   fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify({ ...COMMON, agents: { runner: "orca", ...config.agents }, ...(config.stall ? { stall: config.stall } : {}), hosts: hostsFor(dir) }));
   fs.writeFileSync(path.join(ctl, "workers.json"), JSON.stringify(workers ?? Object.fromEntries(Array.from({ length: panes }, (_, i) => [`t${i + 1}`, { name: `T${i + 1} · Worker Developer`, host: "local", terminal: `w${i + 1}`, dispatch: `d${i + 1}` }]))));
   const calls = path.join(dir, "calls.log"), fake = path.join(dir, "fake-orca.mjs"), verdictFile = path.join(dir, "verdict.json");

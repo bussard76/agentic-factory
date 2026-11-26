@@ -7,11 +7,15 @@
 // node steering/issues.mjs close <n> <text>      → closes with a comment (after the wave reached main)
 import "../cli.mjs";
 import fs from "node:fs";
-import { PROJECT_DIR, config, declaredProblem, journal, sh, ticketLevel } from "../lib.mjs";
+import { PROJECT_DIR, config, declaredProblem, journal, noteOnce, sh, ticketLevel } from "../lib.mjs";
 import { readyGate, readyMode } from "../ticket.mjs";
 
 const ready = config.steering?.readyLabel ?? "ready-for-agent";
 const MODE = readyMode(config);
+const progress = config.steering?.inProgressLabel ?? "in-progress";
+// In this mode the issue's labels are its status (one source of truth); the body holds the rest (assessment, sections). `needs-info` wins over the ready
+// label: an issue that waits for the human's answer is not ready whatever else it carries.
+const statusOf = (labels) => (labels.includes("needs-info") ? "needs-info" : labels.includes(progress) ? "building" : labels.includes(ready) ? "ready" : "unlabelled");
 const gh = (...a) => sh("gh", a, { cwd: PROJECT_DIR });
 const [cmd, n, arg] = process.argv.slice(2);
 if (cmd === "ready") {
@@ -24,8 +28,8 @@ if (cmd === "ready") {
     if (!Number.isInteger(blockers)) console.error(`#${i.number}: its blockers cannot be read, so it is left out`);
     return blockers === 0;
   };
-  // With the check on enforce an issue that is not ready to code is left out and says why on stderr; with warn it stays in the list.
-  const sharp = (i) => { if (MODE === "warn") return true; const g = readyGate(`#${i.number}`, i.body ?? "", { mode: MODE }); if (g.message) console.error(`${g.message} It is left out of the ready list.`); return !g.stop; };
+  // With the check on enforce an issue that is not ready to code is left out and says why on stderr (once per issue and reason); with warn it stays in the list.
+  const sharp = (i) => { if (MODE === "warn") return true; const g = readyGate(`#${i.number}`, i.body ?? "", { mode: MODE, status: statusOf(i.labels.nodes.map((l) => l.name)) }); if (g.message) noteOnce(`#${i.number}`, g.problems.join("|"), `${g.message} It is left out of the ready list.`); return !g.stop; };
   const open = list.filter((i) => !i.assignees.nodes.length).filter(unblocked).filter(sharp).map((i) => ({ number: i.number, title: i.title, level: /level\s*(\d)/i.exec(i.body ?? "")?.[1] ?? "?", labels: i.labels.nodes.map((l) => l.name) }));
   console.log(JSON.stringify(open, null, 1));
 } else if (cmd === "claim") {
@@ -35,9 +39,9 @@ if (cmd === "ready") {
   let documentation = false, level = null;
   // Before anything changes: an issue that is not ready to code is not claimed (enforce) or claimed with the warning (warn). One that cannot be read counts as
   // not ready. One that is already in progress is never stopped.
-  let body = null, started = false;
-  try { const v = JSON.parse(gh("issue", "view", n, "--json", "body,labels")); body = v.body ?? ""; started = (v.labels ?? []).some((l) => l.name === (config.steering?.inProgressLabel ?? "in-progress")); } catch { /* unreadable */ }
-  const gate = body === null ? { stop: MODE !== "warn", message: `#${n} cannot be read, so it is not known to be ready to code.` } : readyGate(`#${n}`, body, { mode: MODE, started });
+  let body = null, status = "";
+  try { const v = JSON.parse(gh("issue", "view", n, "--json", "body,labels")); body = v.body ?? ""; status = statusOf((v.labels ?? []).map((l) => l.name)); } catch { /* unreadable */ }
+  const gate = body === null ? { stop: MODE !== "warn", message: `#${n} cannot be read, so it is not known to be ready to code.` } : readyGate(`#${n}`, body, { mode: MODE, status });
   if (gate.message) console.error(gate.message);
   if (gate.stop) process.exit(1);
   try { documentation = declaredProblem(body ?? "") === ""; level = ticketLevel(body ?? ""); } catch { /* stays false and unknown */ }

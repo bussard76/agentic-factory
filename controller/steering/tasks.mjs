@@ -8,8 +8,8 @@
 import "../cli.mjs";
 import fs from "node:fs";
 import path from "node:path";
-import { PROJECT_DIR, config } from "../lib.mjs";
-import { STARTED, readyGate, readyMode, readyProblems } from "../ticket.mjs";
+import { PROJECT_DIR, config, noteOnce } from "../lib.mjs";
+import { readyGate, readyMode, readyProblems } from "../ticket.mjs";
 
 const MODE = readyMode(config);
 
@@ -30,11 +30,12 @@ function dependenciesDone(task, all) {
   });
 }
 const textOf = (t) => fs.readFileSync(path.join(dir, t.file), "utf8");
-// With the check on enforce a ready task that is not ready to code is left out, and says why on stderr; with warn it stays in the list.
+// With the check on enforce a ready task that is not ready to code is left out and says why on stderr, once per task and reason (the heartbeat stays silent);
+// with warn it stays in the list and the list says nothing: `agentic-factory status` and `doctor` name such tasks, and the first start of one warns.
 function sharp(task) {
   if (MODE === "warn") return true;
   const g = readyGate(task.id, textOf(task), { mode: MODE });
-  if (g.message) console.error(`${g.message} It is left out of the ready list.`);
+  if (g.message) noteOnce(task.id, g.problems.join("|"), `${g.message} It is left out of the ready list.`);
   return !g.stop;
 }
 if (cmd === "list") { const all = tasks(); console.log(JSON.stringify(all.filter((t) => !a || t.status === a).filter((t) => a !== "ready" || (dependenciesDone(t, all) && sharp(t))), null, 1)); }
@@ -44,8 +45,8 @@ else if (cmd === "check") {
 }
 else if (cmd === "set") {
   const t = tasks().find((t) => t.id === a); if (!t) throw new Error(`no task ${a}`);
-  // A task goes to building only when it is ready to code; one that already is building (or beyond) is never stopped.
-  if (b === "building" && !STARTED.includes(t.status)) { const g = readyGate(t.id, textOf(t), { mode: MODE }); if (g.message) console.error(g.message); if (g.stop) process.exit(1); }
+  // A task goes to building only when its Status is ready and it is ready to code; one that already is building (or beyond) is never stopped (the gate knows).
+  if (b === "building") { const g = readyGate(t.id, textOf(t), { mode: MODE }); if (g.message) console.error(g.message); if (g.stop) process.exit(1); }
   const p = path.join(dir, t.file); fs.writeFileSync(p, fs.readFileSync(p, "utf8").replace(/^Status:.*$/m, `Status: ${b}`)); console.log("ok"); }
 else if (cmd === "next-id") { const n = Math.max(0, ...tasks().map((t) => Number(t.id.slice(1)))) + 1; console.log(`T${String(n).padStart(2, "0")}`); }
 else throw new Error("usage: list [status] | check <T> | set <T> <status> | next-id");
