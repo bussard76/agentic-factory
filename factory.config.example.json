@@ -162,6 +162,12 @@
       "memoryAvg10MaxPercent": 5
     },
     "availableMemoryMinGb": 8,
+    "heavyLoadPerThread": 0.9,
+    "lightLoadPerThread": 1.5,
+    "$classes": "Two capacity classes. light: Developers. heavy: Testers and every other writing worker, and what runs full gates. Without PSI (macOS) a heavy start is allowed up to load1 = threads x heavyLoadPerThread, a light one up to threads x lightLoadPerThread. With PSI (Linux) heavy uses pressure.cpuAvg10MaxPercent and light pressure.lightCpuAvg10MaxPercent, which, when not set, is cpuAvg10MaxPercent x lightLoadPerThread / heavyLoadPerThread (33 with the defaults). See docs/capacity.md.",
+    "foreignLoadMaxPerThread": 0.25,
+    "foreignLoadMinLoadPerThread": 0.5,
+    "$foreignLoad": "Foreign load (CPU cores used during a one-second sample by processes working in another git checkout) holds a start only when it is above threads x foreignLoadMaxPerThread AND load1 is at least threads x foreignLoadMinLoadPerThread (below that the host is clearly not busy; 0 switches this second condition off). It never lowers a calibrated cap. Processes whose owner cannot be told are reported as unknown and never hold a start.",
     "gateQueueMax": 3,
     "worker": {
       "memoryMax": "6G",
