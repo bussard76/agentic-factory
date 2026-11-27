@@ -179,10 +179,11 @@ for (const os of BOTH) test(`${os}: a process whose directory says nothing takes
     { pid: P(4), name: "their-runner", at: "other", had: 1, uses: 0 },
     busy(5, "root", 0.4, { ppid: P(4) }),                                           // foreign
     busy(6, "worktree", 0.8, { ppid: P(4) }),                                       // own directory beats a foreign parent
-    busy(7, "other", 1.6, { ppid: P(1) }),                                          // own agent's tool working in another checkout
+    busy(7, "other", 1.6, { ppid: P(1) }),                                          // own agent's tool working in another checkout: not clearly foreign
+    busy(8, "root", 3.2, { ppid: P(7) }),                                           // and what that tool starts
   ] });
   const m = h.run().measured;
-  assert.deepEqual([m.own, m.foreign, m.unknown], [1.1, 2, 0]);
+  assert.deepEqual([m.own, m.foreign, m.unknown], [1.1, 0.4, 4.8]);
 });
 
 for (const os of BOTH) test(`${os}: foreign load holds a start only when load1 is not clearly below the threads`, () => {

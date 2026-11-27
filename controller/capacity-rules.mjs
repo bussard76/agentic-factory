@@ -117,15 +117,20 @@ function byDirectory(p, { project, own, tmp }) {
 }
 /**
  * Cores used over the sample, by owner. A process is judged by its own working directory; one whose directory says
- * nothing takes the verdict of its nearest parent that has one. Only what is positively in another git checkout is
- * foreign; everything else that is not this project's own is unknown.
+ * nothing takes the verdict of its nearest parent that has one. Foreign must be clear: a process judged foreign that
+ * has one of this project's own further up (a tool of an own agent working in another checkout) is unknown.
  */
 export function attribute({ procs, own, tmp }, project) {
   const byPid = new Map(procs.map((p) => [p.pid, p])), sum = { own: 0, foreign: 0, unknown: 0 };
   for (const p of procs) {
     if (!(p.cores > 0)) continue;
     let verdict = null;
-    for (let q = p, n = 0; q && n < 64 && !verdict; q = byPid.get(q.ppid), n++) verdict = byDirectory(q, { project, own, tmp });
+    for (let q = p, n = 0; q && n < 64; q = byPid.get(q.ppid), n++) {
+      const here = byDirectory(q, { project, own, tmp });
+      if (!verdict) verdict = here;
+      else if (verdict === "foreign" && here === "own") verdict = "unknown";
+      if (verdict === "own" || verdict === "unknown") break;
+    }
     sum[verdict ?? "unknown"] += p.cores;
   }
   return sum;
