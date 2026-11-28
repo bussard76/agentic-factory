@@ -110,7 +110,8 @@
         "enabled": true,
         "port": 8180,
         "command": "pnpm dev",
-        "envFile": "~/.config/my-app/preview.env"
+        "envFile": "~/.config/my-app/preview.env",
+        "$worktree": "Optional \"worktree\": where the preview clone lies when PREVIEW_WORKTREE puts it somewhere other than ~/Development/<project>-preview, so that capacity.mjs counts what runs there as the project's own load."
       }
     }
   },
@@ -162,6 +163,14 @@
       "memoryAvg10MaxPercent": 5
     },
     "availableMemoryMinGb": 8,
+    "heavyLoadPerThread": 0.9,
+    "lightLoadPerThread": 1.5,
+    "$classes": "Two capacity classes. light: Developers. heavy: Testers and every other writing worker, and what runs full gates. Without PSI (macOS) a heavy start is allowed up to load1 = threads x heavyLoadPerThread, a light one up to threads x lightLoadPerThread. With PSI (Linux) heavy uses pressure.cpuAvg10MaxPercent and light pressure.lightCpuAvg10MaxPercent, which, when not set, is cpuAvg10MaxPercent x lightLoadPerThread / heavyLoadPerThread (33 with the defaults), at most 13 above the heavy limit and below 100; 0 is refused. The factors 0.9 and 1.5 are starting values not yet backed by measurement. See docs/capacity.md.",
+    "lightUnattributedLoadMaxPerThread": 0.25,
+    "$lightUnattributed": "Above the heavy CPU limit a light start needs an attributed load: foreign plus unknown load at most threads x this value, and readable at all; otherwise light falls back to the heavy limit. 0 switches the condition off.",
+    "foreignLoadMaxPerThread": 0.25,
+    "foreignLoadMinLoadPerThread": 0.5,
+    "$foreignLoad": "Foreign load (CPU cores used during a one-second sample by processes working in another git checkout) holds a start only when it is above threads x foreignLoadMaxPerThread AND load1 is at least threads x foreignLoadMinLoadPerThread (below that the host is clearly not busy; 0 switches this second condition off). As a reason it never lowers a calibrated cap (overload that foreign work causes still does). Processes whose owner cannot be told are reported as unknown; they never hold a start as foreign load, but a large unknown load takes away the light class's extra room.",
     "gateQueueMax": 3,
     "worker": {
       "memoryMax": "6G",

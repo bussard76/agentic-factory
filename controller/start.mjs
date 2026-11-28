@@ -25,12 +25,13 @@ const effort = opt("--effort", "high");
 const worktree = opt("--worktree", "new");
 const dir = worktree === "new" ? slug(key) : worktree;
 const readonly = has("--readonly");
+// The capacity class (docs/capacity.md): a Developer is light; every other worker that is not read-only is heavy.
+const kind = readonly ? "readonly" : role.trim() === "Developer" ? "light" : "heavy";
 
 // Capacity verdict first (docs/capacity.md). --force skips it for rework of an already running task.
 if (!has("--force")) {
   const verdict = JSON.parse(sh("node", [file("capacity.mjs"), "--on", host.name]));
-  const kind = readonly ? "readonly" : "suite";
-  if (verdict[kind] !== "start") { console.log(JSON.stringify({ started: false, host: host.name, waiting: kind, reason: verdict.reason })); process.exit(2); }
+  if (verdict[kind] !== "start") { console.log(JSON.stringify({ started: false, host: host.name, waiting: kind, reason: kind === "light" ? verdict.lightReason : verdict.reason })); process.exit(2); }
 }
 
 const workers = readJson("workers.json", {});
@@ -88,7 +89,7 @@ if (RUNNER === "orca") {
 }
 workers[key] = record;
 writeJson("workers.json", workers);
-journal("start", key, { role: name.split(" · Worker ")[1], model, agent, host: host.name, note: readonly ? "readonly" : "suite" });
+journal("start", key, { role: name.split(" · Worker ")[1], model, agent, host: host.name, note: readonly ? "readonly" : "suite", class: kind });
 console.log(JSON.stringify({ started: true, key, ...record }));
 
 function quotaFallback() {

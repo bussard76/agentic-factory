@@ -7,26 +7,96 @@ Origin: the Controller used to count workers (8 with test suites plus 6 read-onl
 `controller/capacity.mjs` prints a verdict before every start:
 
 ```json
-{ "suite": "start|wait", "readonly": "start|wait", "gateUnitSlots": 3, "gateE2eSlots": 2, "reason": "..." }
+{ "heavy": "start|wait", "light": "start|wait", "readonly": "start|wait", "suite": "same as heavy",
+  "reason": "why heavy waits", "lightReason": "why light waits", "foreignLoad": 0.4, "unknownLoad": 2.8,
+  "gateUnitSlots": 3, "gateE2eSlots": 2 }
 ```
 
-Inputs:
+Inputs, all measured in one round trip to the host (one `sh` script, locally or in one ssh call; a second call writes the gate slots to a remote host). It takes the one second of the CPU sample plus the time of the commands:
 
-- Linux pressure stall information: `/proc/pressure/cpu`, `/proc/pressure/memory`, `/proc/pressure/io` (avg10, avg60). It tells how much of the time processes waited, which is far more telling than the load average and also sees foreign load.
+- Linux pressure stall information (PSI): `/proc/pressure/cpu`, `/proc/pressure/memory`, `/proc/pressure/io` (avg10). It tells how much of the time processes waited, which is far more telling than the load average.
+- the load average (`load1`) and the number of threads
 - available memory
 - the `gate` queue length per pool
-- the number of running suite and read-only workers
-- foreign load: processes outside the project's workspaces
+- CPU use per process over about one second, with each busy process's working directory (see "Foreign load")
+- the number of running workers (heavy and light together, and read-only)
+- load timeouts recorded in the journal
 - the latest quota readings for the agent CLIs
 
-Rules (thresholds in `factory.config.json` → `capacity`):
+## Two capacity classes
 
-- a new **suite worker** starts only when CPU pressure avg10 is below `cpuAvg10MaxPercent`, memory pressure avg10 below `memoryAvg10MaxPercent`, available memory above `availableMemoryMinGb`, the gate queue shorter than `gateQueueMax`, and the count below `suiteWorkersMax`
-- **read-only workers** (Architects, Auditors, spec reviews) are cheap and start unless memory is short, up to `readOnlyWorkersMax`
+| Class | Who | CPU limit with PSI | CPU limit without PSI (macOS) |
+|---|---|---|---|
+| **heavy** | Testers (with a browser too) and every other worker that is not read-only, except Developers; what runs the full tests and gates | CPU avg10 ≤ `pressure.cpuAvg10MaxPercent` (20) | load1 ≤ threads × `heavyLoadPerThread` (0.9) |
+| **light** | Developers | CPU avg10 ≤ `pressure.lightCpuAvg10MaxPercent` (default: the heavy limit × light factor ÷ heavy factor, 33) | load1 ≤ threads × `lightLoadPerThread` (1.5) |
+| **read-only** | `--readonly` workers (Architects, Auditors, spec reviews, Retros) | no CPU limit | no CPU limit |
+
+`start.mjs` picks the class from the worker's name: `<Task> · Worker Developer` is light, `--readonly` is read-only, **everything else is heavy**. A light limit below the heavy one counts as the heavy one. **The factors 0.9 and 1.5 are starting values that no measurement backs yet**; watch what they do on your hosts. On a host with PSI the load factors do not decide the CPU rule; the light PSI default is derived from them, but is at most 13 points above the heavy limit and never 100 or more (so a heavy limit of 60 gives 73, not 100). `lightCpuAvg10MaxPercent: 0` is refused with an error: remove the key for the derived limit, or set it to the heavy limit for no extra room.
+
+**The extra room needs an attributed load.** Above the heavy CPU limit, light starts only while foreign plus unknown load (see "Foreign load") is at most threads × `lightUnattributedLoadMaxPerThread` (0.25). With more than that, or when it cannot be told (processes not sampled, no working directory readable), light falls back to the heavy limit, and `lightReason` says why. The project's own load does not count against it. This holds starts only; the calibration keeps using the light limit. `0` switches the condition off. Containers and virtual machines count as unknown, so on a host that runs its browser gates in containers light often stays on the heavy limit.
+
+**A failed or partial probe** (the host unreachable, output cut off, no load or thread count, or no answer within 30 s) holds every class, read-only too, with the reason `probe failed (…)`. The calibration makes no step in either direction, the quiet time starts again and the gate slots are set to the low end of their ranges. `--force` of `start.mjs` skips capacity as before.
+
+What holds which class:
+
+| | heavy | light | read-only |
+|---|---|---|---|
+| its CPU limit | yes | yes | |
+| memory: pressure avg10 above `memoryAvg10MaxPercent` (5), or available below `availableMemoryMinGb` | yes | yes | yes |
+| foreign load (below) | yes | yes | |
+| the cap | `suiteMax`, shared | `suiteMax`, shared | `readonlyMax` |
+| gate queue of `gateQueueMax` (3) or more | yes | | |
+| a load timeout in the journal in the last 30 minutes | yes | | |
+
+There is one cap for heavy and light together: it bounds how many writing workers run on a host. The gate queue and load timeouts are about full runs. **Full gates still go through the gate slots** whoever starts them: a light start is no permission to run a full gate outside `gate`. A Developer who runs full suites outside the gate loads the host like a heavy worker.
+
+`suite` is the heavy verdict under its old name, so a handbook that only knows `suite` stays with the stricter class.
+
+Other rules:
+
 - only **running** workers count: an Orca worker until Orca reports its dispatch `succeeded`, `failed` or `stopped`, even if its agent still sits at the prompt after `worker_done`; an `abandoned` worker (Orca: it may still run) and a worker whose state cannot be read count as running
-- a `wait` verdict carries `measureAgainAt` (one minute later; asking earlier gives the same answer) and `capOnly`: `true` when nothing but a cap (suite or read-only) holds a start back, no pressure
+- a `wait` verdict carries `measureAgainAt` (one minute later; asking earlier gives the same answer) and `capOnly`: `true` when a pool waits and only a cap holds it back (the suite cap with nothing else against a Developer, or the read-only cap on a quiet host)
 - the **gate slot counts** rise and fall with pressure within the configured ranges; `gate` reads them from `gate-slots.json`
 - every worker terminal gets a memory and process limit (`capacity.worker`) where the runner supports it
+
+All thresholds are in `factory.config.json` → `capacity`; a worker host's own `capacity` block overrides single values (its `pressure` block replaces the whole `pressure` object).
+
+## Foreign load
+
+Foreign load is the CPU, in cores, that processes **clearly belonging to something else** used during the sample. It holds heavy and light starts when both are true:
+
+- foreign cores > threads × `foreignLoadMaxPerThread` (0.25), and
+- load1 ≥ threads × `foreignLoadMinLoadPerThread` (0.5).
+
+**How CPU is measured.** The CPU time each process used between two samples one second apart, not a lifetime average. The whole probe runs under `LC_ALL=C` (only `lsof` gets a UTF-8 locale, so that non-ASCII directory names come through).
+
+**What changed against earlier versions.** On Linux they overstated foreign load. **On macOS their foreign figure was always 0** (BSD `ps` rejects the option they used), so a Mac that was never held for foreign load can be now. And on a Mac whose scripts run with a decimal-comma locale (for example `LANG=de_DE.UTF-8`) the load average could not be read (`2,99`): such a Mac **ran without any load limit**. It has one now.
+
+- Linux: `utime + stime` from `/proc/<pid>/stat`, divided by the elapsed time from `/proc/uptime`.
+- macOS: two `ps -A -o pid=,ppid=,time=,comm=` readings of accumulated CPU time (resolution 0.01 s), then one `lsof` call for the working directories of the busy processes and their parents. `top -l 2` was not chosen: it waits for its own sample interval as well, and its output is harder to read reliably.
+
+Processes under 5 % of a core are left out. The probe leaves out itself: its shell, everything the shell starts, and the processes above it (the ssh session or the Controller's command).
+
+**Who owns a process.** Judged by its working directory:
+
+1. **own:** it lies in the project's checkout, its workspaces (`<workspacesDir>/<project>`), the Controller directory, `~/front-agent/<project>`, `~/Development/<project>-preview` or the directory in `hosts.frontAgent.preview.worktree` (set it when `PREVIEW_WORKTREE` puts the preview clone elsewhere) (on the Controller's host also the directory the scripts run from); or it is in a linked git worktree of one of these repositories, wherever that lies. A directory that merely has a part named like the project is not own.
+2. **foreign:** it is not own, not under a temp directory (`/tmp`, `/var/tmp`, `/var/folders`, `$TMPDIR`), and lies inside a git checkout. A repository in the home directory itself (dotfiles kept in git) does not count.
+3. **says nothing:** everything else: `/`, the home directory, plain directories, temp directories, a working directory that cannot be read.
+
+A process whose directory says nothing takes the verdict of its nearest parent that has one (a browser started from your worker is yours; one started by another project's test run is foreign). Without such a parent it is **unknown**. Foreign must be clear: a process that would be foreign but has an own process further up (a tool of your agent working in another checkout) is unknown as well. So a terminal multiplexer started from a directory of this project makes other projects' processes under it unknown. Unknown is reported (`unknownLoad` in the verdict and the journal) and never holds a start as foreign load; a large unknown load only takes away light's extra room above the heavy CPU limit (above).
+
+**Why a second condition on load1.** If load1 is below half the threads, at least half the host has been free over the last minute, so there is room whatever the process figures say. That also covers a wrong figure: the case that led to this rule showed about 7 cores of "foreign load" on a 12-thread host with load1 1.2, which is 0.1 per thread. `0` switches the cross-check off. When the figure is over its limit but load1 is not, the verdict says so in `loadNote`. load1 lags by up to a minute, so foreign load that just started holds a start a little later. A high load with a low foreign figure is judged by the CPU limits, as before.
+
+**Why 0.25 stays.** On a correct figure it means a quarter of the host is busy with other work; no measurement argues for another value. It was not configurable before.
+
+**What this can miss** (nearly always in the direction of not holding a start; the CPU, memory and PSI rules still see the load itself):
+
+- containers and virtual machines (Docker, including the VM process on macOS), which also carry your own browser gates
+- other users' and root processes, services, and anything with its working directory in `/`, the home directory or a temp directory, without a parent that says more
+- another project that does not work in a git checkout, such as its Controller
+- CPU of processes that start and end within the sampled second (a build of many short compiles), and many processes below 5 % each; such load is not in `unknownLoad` either
+
+The other way round, **any** git checkout that is not this project's counts as foreign, including a person's own work in another repository and a tool that is installed as a git checkout. If the processes cannot be sampled at all, `lsof` is missing (it lives in `/usr/sbin`, which a narrow PATH may lack) or the working directory of no busy process can be read, `foreignLoad` is `null`, never 0; `loadNote` says so, the foreign-load rule is skipped and light stays on the heavy CPU limit. Windows is not measured.
 
 When capacity is short, the Controller starts in this order:
 
@@ -36,7 +106,7 @@ When capacity is short, the Controller starts in this order:
 4. new development
 5. debt and improvements
 
-`gate` (`controller/gate.mjs`, Node only, no `flock`) queues waiters as ticket files per pool and host and lets only the oldest live ticket take a free slot, so a project's gates run first come, first served. The queue and the slots belong to one project (`$TMPDIR/<project>-gate-<pool>`), as they always did: **there is no host-wide cap on full gates.** Two projects on one host run their gates at the same time, and `capacity.mjs` sees the other project only as load. A host-wide pool would be a separate change; stale tickets and slots of dead processes are swept. It logs wait time and run time per gate to the journal (`type: gate`); `loadlog.sh` writes load, memory, pressure and agent counts once a minute (into `~/load.log`, each line ending in `project=<name>`; the queue and the slots above belong to one project, not to the host). The nightly audit reads both and answers: does more parallelism raise throughput, or only waiting?
+`gate` (`controller/gate.mjs`, Node only, no `flock`) queues waiters as ticket files per pool and host and lets only the oldest live ticket take a free slot, so a project's gates run first come, first served. The queue and the slots belong to one project (`$TMPDIR/<project>-gate-<pool>`), as they always did: **there is no host-wide cap on full gates.** Two projects on one host run their gates at the same time, and `capacity.mjs` sees the other project only as load (as foreign load where its processes work in its own git checkouts). A host-wide pool would be a separate change; stale tickets and slots of dead processes are swept. It logs wait time and run time per gate to the journal (`type: gate`); `loadlog.sh` writes load, memory, pressure and agent counts once a minute (into `~/load.log`, each line ending in `project=<name>`; the queue and the slots above belong to one project, not to the host). The nightly audit reads both and answers: does more parallelism raise throughput, or only waiting?
 
 ## The caps are starting values: calibration
 
@@ -45,14 +115,41 @@ The capacity of a host (local or remote) is open. It is probed and adjusted step
 With `capacity.calibration.mode: auto`, `capacity.mjs` keeps a state file per host (`capacity-state.<host>.json`):
 
 - it starts at `startSuite` / `startReadonly` workers, low on purpose
-- it raises the cap by `step` when the host has been at the cap and quiet (no pressure, short gate queue, no load timeouts in the journal) for `raiseAfterQuietMinutes`
-- it lowers the cap by `step` on pressure or load timeouts, at most once per 15 minutes, never below the start value
+- it raises the cap by `step` when the host has been at the cap and quiet (nothing that holds a heavy start) for `raiseAfterQuietMinutes`
+- it lowers the suite cap by `step` on **overload**: CPU past the **light** limit, memory short, a full gate queue or load timeouts; at most once per 15 minutes, never below the start value
+- **foreign load as a reason never lowers a cap** (foreign work that pushes the load past the light limit or the host short of memory still does, under `cpu pressure` or `memory`), and neither does CPU between the heavy and the light limit (Developers are allowed to load the host that far). Both hold starts and begin the quiet time again. Before the two classes, CPU past the heavy limit lowered the cap; a project that wants that back sets `lightLoadPerThread` equal to `heavyLoadPerThread` (with PSI: `pressure.lightCpuAvg10MaxPercent` equal to `cpuAvg10MaxPercent`)
 - it never exceeds `maxSuite` / `maxReadonly`
-- every step is recorded in the state's history and in the journal; the nightly audit checks whether a step raised throughput or only waiting
+- every step is recorded in the state's history (the last 40 entries) and in the journal; the nightly audit checks whether a step raised throughput or only waiting
 
 `manual` uses the configured caps as they are. `--reset` restarts the calibration.
 
-`--set-suite <n> --by "<quote>"` sets the suite cap by hand when the human asks for it, from 1 up to the larger of `maxSuite` and `suiteWorkersMax`. The run that sets it makes no automatic step. The quote and the new cap go into the journal as a `decision`. The calibration continues from there: the cap still rises while the host stays quiet and falls on pressure, but the step-down never goes below the start value, so a cap set below it stays until it is set again or reset.
+`--set-suite <n> --by "<quote>"` sets the suite cap by hand when the human asks for it, from 1 up to the larger of `maxSuite` and `suiteWorkersMax`. The run that sets it makes no automatic step. The quote and the new cap go into the journal as a `decision`. The calibration continues from there: the cap still rises while the host stays quiet and falls on overload, but the step-down never goes below the start value, so a cap set below it stays until it is set again or reset.
+
+### Caps lowered by the old foreign-load figure
+
+Earlier versions overstated foreign load on Linux and lowered the suite cap for it. This version gives back, once per host, what is **still owed** on the old state. It waits for the first run on which the host is measured and not overloaded. It replays the history since the last `--set-suite`:
+
+- a step down whose **only** recorded reason was foreign load is owed
+- a later step up has already won that much back; a step down with any other reason stays and does not reduce what is owed
+- the result is never above the cap before the steps still owed, and never above `calibration.maxSuite`
+- the state records it (`restore`), and the journal gets a `decision` that names the old and the new cap
+
+A cap that is too low costs time; one that is too high overloads a shared machine. So **nothing is restored in doubt**: in `manual` mode, when the saved cap does not match the end of its history or the history moves in jumps the calibration does not make (a hand edit, or a changed `step`), or when `maxSuite` leaves no room. The journal then gets one `decision` that says `NOT restored`, why, and how to raise the cap by hand. If the first run is itself `--set-suite`, the human's number stands and nothing is restored. A hand edit that happens to fit the history cannot be told apart.
+
+What is **not** given back: a step that also had another reason (CPU, memory, gate queue, load timeouts), steps that have left the 40-entry history, and the raises that did not happen while the false figure kept ending the quiet time (they come back at one step per `raiseAfterQuietMinutes` at the cap). An old step-down for foreign load that was real cannot be told apart and is given back too; real overload lowers the cap again. If a cap is still lower than it was, ask the human and set it: `node capacity.mjs --set-suite <n> --by "<their words>"` (with `--on <host>`). Do not use `--reset` for this: it goes back to the start values. In `capacity-state.<host>.json` and the journal (`capacity suiteMax down → …`) you can see what the cap was.
+
+### What an existing config gets after an update
+
+No config edit is needed, but behaviour changes. `update` and `start` print nothing about it.
+
+- **Developers** get the light class: they may start above the heavy CPU limit, up to the light one, while the load is attributed.
+- **The suite cap** no longer steps down for CPU between the two limits, or for foreign load as a reason.
+- **Caps lowered for foreign load** are restored as described above.
+- **macOS:** foreign load goes from always 0 to measured, so other projects' work on the same Mac can now hold starts.
+- **macOS with a decimal-comma locale:** the load limit works for the first time; such a Mac ran without one.
+- **A failed probe** now holds every start instead of letting everything start.
+- Each `capacity.mjs` call takes a one-second sample.
+- An edited `CONTROLLER.md` keeps its old text. It only knows `suite`, the stricter heavy verdict; `start.mjs` applies the light class by itself.
 
 ## Hosts are optional and plural
 

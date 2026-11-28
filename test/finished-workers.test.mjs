@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
-const FILES = ["cli.mjs", "keep.mjs", "cleanup.mjs", "capacity.mjs", "heartbeat.mjs", "controller-terminal.mjs", "front-notice.mjs", "inbox.mjs", "restart.mjs", "lib.mjs", "journal.mjs", "names.mjs", "steering/tasks.mjs", "ticket.mjs"];
+const FILES = ["cli.mjs", "keep.mjs", "cleanup.mjs", "capacity.mjs", "capacity-rules.mjs", "heartbeat.mjs", "controller-terminal.mjs", "front-notice.mjs", "inbox.mjs", "restart.mjs", "lib.mjs", "journal.mjs", "names.mjs", "steering/tasks.mjs", "ticket.mjs"];
 
 // dispatches: id → { state, retainedReason, ownership, owner (dispatch owning the terminal), noResource, setup: [terminal
 // handles], releaseFails, releaseAnswer (what the release leaves in terminalResource.releaseState: released, retained,
@@ -284,7 +284,8 @@ test("capacity: --set-suite needs a bounded number and a quote, is journaled, an
   assert.equal(v.caps.suite, 1);
   assert.equal(v.suite, "wait");
   // Without PSI (macOS) the CPU rule reads the load average, which a parallel test run can push up: then capOnly must be false.
-  const onlyCap = v.reason.split("; ").every((x) => /calibrated cap|available memory unknown/.test(x));
+  // capOnly asks about the class with the higher CPU limit: a Developer held by nothing but the cap.
+  const onlyCap = v.lightReason.split("; ").every((x) => /calibrated cap|available memory unknown/.test(x));
   assert.equal(v.capOnly, onlyCap, `capOnly says whether only the cap holds it: ${v.reason}`);
   assert.ok(Date.parse(v.measureAgainAt) - Date.now() > 30e3, "measure again in about a minute");
   const journal = fs.readFileSync(path.join(h.ctl, "journal.ndjson"), "utf8");

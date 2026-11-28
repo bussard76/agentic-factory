@@ -1,0 +1,187 @@
+// What capacity.mjs measures about processes and how it judges it (docs/capacity.md, "Foreign load"). No configuration
+// and no side effects, so the rules can be tested on stand-ins:
+//   probeScript()    the POSIX sh text that measures a worker host in one round trip (local sh, or one ssh call)
+//   parseProbe()     its output
+//   attribute()      which of the busy processes are this project's own, clearly foreign, or unknown
+//   repairCaps()     undo the cap step-downs that only the old, wrong foreign-load figure caused
+
+/** A word for sh. A leading ~ is the home directory of the host the script runs on. */
+const quote = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
+const hostPath = (p) => (/^~(?=$|\/)/.test(p) ? `"$HOME"${p.length > 1 ? quote(p.slice(1)) : ""}` : quote(p));
+export const shQuote = quote;
+
+/** A process below this share of one core (over the sample) is left out. */
+export const BUSY_CORES = 0.05;
+
+/**
+ * The probe. `ownDirs`: this project's directories on that host (absolute, or starting with ~). CPU per process is the
+ * CPU time used between two samples about one second apart: /proc/<pid>/stat where there is a /proc/uptime (Linux),
+ * else `ps` accumulated CPU time (macOS, 0.01 s resolution) with the working directories from one `lsof` call. The
+ * probe leaves itself out: its shell, everything that shell starts, and what is above it (the ssh session, the caller).
+ * FACTORY_PROC and FACTORY_PROBE_TMP exist for the tests' stand-ins (another /proc, other temp roots).
+ */
+export function probeScript({ project, ownDirs }) {
+  return `
+# One locale for every tool: with a decimal comma (LANG=de_DE.UTF-8) sysctl prints "2,99" and BSD awk reads "1.50" as 1.
+export LC_ALL=C
+P="\${FACTORY_PROC:-/proc}"
+for k in cpu memory io; do printf "psi_%s=%s\\n" $k "$(awk '/^some/{for(i=1;i<=NF;i++) if($i ~ /^avg10=/){split($i,a,"="); printf "%s", a[2]}}' "$P/pressure/$k" 2>/dev/null)"; done
+printf "avail_kb=%s\\n" "$( (awk '/MemAvailable/{print $2; f=1} END{exit !f}' "$P/meminfo" 2>/dev/null) || (vm_stat 2>/dev/null | awk -v ps="$(sysctl -n hw.pagesize 2>/dev/null || echo 16384)" '/Pages (free|inactive|speculative)/{gsub("\\\\.","",$NF); s+=$NF} END{if (s>0) print int(s*ps/1024)}') )"
+printf "load1=%s\\n" "$(cut -d' ' -f1 "$P/loadavg" 2>/dev/null || sysctl -n vm.loadavg | awk '{print $2}')"
+printf "threads=%s\\n" "$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
+for p in unit e2e; do d="\${TMPDIR:-/tmp}/"${quote(`${project}-gate-`)}"$p"; printf "queue_%s=%s\\n" $p "$(ls "$d" 2>/dev/null | grep -c '^ticket-')"; done
+home=$(cd "$HOME" 2>/dev/null && pwd -P)
+printf "home=%s\\n" "$home"
+for d in ${ownDirs.map(hostPath).join(" ")}; do r=$(cd "$d" 2>/dev/null && pwd -P) && printf "own=%s\\n" "$r"; done
+for d in \${FACTORY_PROBE_TMP-/tmp /var/tmp /var/folders $TMPDIR}; do r=$(cd "$d" 2>/dev/null && pwd -P) && printf "tmp=%s\\n" "$r"; done
+# One line per process: pid ppid cpu-seconds start-seconds(or -) name
+if [ -r "$P/uptime" ]; then
+  linux=1; hz=$(getconf CLK_TCK 2>/dev/null || echo 100)
+  now() { cut -d' ' -f1 "$P/uptime"; }
+  # cat, not awk on the files: a process that ends while they are read must not stop the reading.
+  # A name may hold a line break: a record starts with "<pid> (" and is read on until all its fields are there.
+  sample() { cat "$P"/[0-9]*/stat 2>/dev/null | awk -v hz="$hz" '{ r = (/^[0-9]+ \\(/ || r == "") ? $0 : r " " $0; e=0; for (j=length(r); j>0; j--) if (substr(r,j,1)==")") { e=j; break }; if (!e) next; o=index(r,"("); if (split(substr(r,e+2),f," ") < 20) next; printf "%s %s %.2f %.2f %s\\n", r+0, f[2], (f[12]+f[13])/hz, f[20]/hz, substr(r,o+1,e-o-1); r="" }'; }
+else
+  linux=
+  command -v lsof >/dev/null 2>&1 || echo "lsof=missing"
+  now() { perl -MTime::HiRes=time -e 'printf "%.3f\\n", time' 2>/dev/null; }
+  sample() { ps -A -o pid=,ppid=,time=,comm= 2>/dev/null | awk '{ d=0; t=$3; if (split(t,x,"-")==2) { d=x[1]; t=x[2] }; n=split(t,c,":"); s=0; for (j=1;j<=n;j++) s=s*60+c[j]; pid=$1; ppid=$2; sub(/^ *[0-9]+ +[0-9]+ +[^ ]+ +/,""); printf "%s %s %.2f - %s\\n", pid, ppid, s+d*86400, $0 }'; }
+fi
+t0=$(now); s1=$(sample); sleep 1; t1=$(now); s2=$(sample)
+if [ -n "$s1" ] && [ -n "$s2" ]; then echo "procs=ok"; fi
+# Busy processes (cores used over the sample) and their parents: pid ppid cores name
+rows=$( { printf '%s\\n' "$s1"; echo "=="; printf '%s\\n' "$s2"; } | awk -v self="$$" -v t0="$t0" -v t1="$t1" -v min=${BUSY_CORES} '
+  BEGIN { dt = t1 - t0; if (dt < 1) dt = 1 }
+  $0 == "==" { second = 1; next }
+  NF < 4 { next }
+  { pid=$1; name=$0; sub(/^[^ ]+ [^ ]+ [^ ]+ [^ ]+ ?/, "", name) }
+  !second { cpu1[pid]=$3; start1[pid]=$4; name1[pid]=name; next }
+  {
+    parent[pid]=$2; names[pid]=name
+    if ((pid in cpu1) && start1[pid]==$4 && ($4 != "-" || name1[pid]==name)) d = $3 - cpu1[pid]
+    else if ($4 == "-") { d = $3; if (d > dt) d = dt }   # new on macOS: at most one core
+    else if ($4 >= t0 - 0.1) d = $3                        # born during the sample
+    else d = 0                                           # older, but missed by the first sample: not judged
+    used[pid] = (d > 0 ? d / dt : 0)
+  }
+  END {
+    for (p = self; (p in parent) && !(p in probe); p = parent[p]) probe[p] = 1
+    for (p in parent) { q = p; for (n = 0; n < 64 && (q in parent); n++) { if (q == self) { probe[p] = 1; break }; q = parent[q] } }
+    for (p in used) if (used[p] >= min && !(p in probe)) { q = p; for (n = 0; n < 64 && q > 1 && (q in parent); n++) { show[q] = 1; q = parent[q] } }
+    for (p in show) printf "%s %s %.3f %s\\n", p, parent[p], ((p in probe) || used[p] < min ? 0 : used[p]), names[p]
+  }')
+if [ -n "$rows" ]; then
+  printf '%s\\n' "$rows" | sed 's/^/proc=/'
+  if [ -n "$linux" ]; then
+    cwds=$(printf '%s\\n' "$rows" | while read -r pid rest; do c=$(readlink "$P/$pid/cwd" 2>/dev/null) && printf '%s\\t%s\\n' "$pid" "$c"; done)
+  else
+    # -b: no kernel call that can block on a dead network mount; -w: without the warnings that brings.
+    # lsof gets a UTF-8 locale of its own: under C it writes non-ASCII names as \\xc3\\xbc. A backslash it doubles under
+    # either locale, which the awk takes back.
+    cwds=$(LC_ALL=en_US.UTF-8 lsof -b -w -a -d cwd -p "$(printf '%s\\n' "$rows" | awk '{printf "%s%s", s, $1; s=","}')" -Fpn 2>/dev/null | awk '/^p/{p=substr($0,2)} /^n\\//{ s=substr($0,2); o=""; while ((i=index(s,"\\\\\\\\"))>0) { o=o substr(s,1,i); s=substr(s,i+2) }; printf "%s\\t%s%s\\n", p, o, s }')
+  fi
+  printf '%s\\n' "$cwds" | sed -n 's/^./cwd=&/p'
+  # The git repository a working directory lies in (for a linked worktree, the repository it belongs to). Home itself does not count.
+  printf '%s\\n' "$cwds" | cut -f2- | sort -u | while IFS= read -r c; do
+    d=$c
+    while [ -n "$d" ] && [ "$d" != "$home" ]; do
+      if [ -e "$d/.git" ]; then
+        g="$d/.git"
+        if [ -f "$g" ]; then g=$(sed -n 's/^gitdir: //p' "$g" 2>/dev/null); case $g in /*) ;; *) g="$d/$g" ;; esac; g=\${g%/worktrees/*}; fi
+        r=$(cd "$g" 2>/dev/null && pwd -P) || r=$g
+        printf 'git=%s\\t%s\\n' "$c" "$r"; break
+      fi
+      d=\${d%/*}
+    done
+  done
+fi
+# Last line: without it the output is cut off.
+echo "probe=end"
+`;
+}
+
+export function parseProbe(text) {
+  const kv = {}, own = [], tmp = [], rows = [], cwds = new Map(), repos = new Map();
+  for (const line of String(text).split("\n")) {
+    const i = line.indexOf("=");
+    if (i < 0) continue;
+    const key = line.slice(0, i), value = line.slice(i + 1);
+    if (key === "own") own.push(value);
+    else if (key === "tmp") tmp.push(value);
+    else if (key === "proc") { const m = /^(\d+) (\d+) ([\d.]+) ?(.*)$/.exec(value); if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), cores: Number(m[3]), name: m[4] }); }
+    else if (key === "cwd" || key === "git") { const tab = value.indexOf("\t"); if (tab > 0) (key === "cwd" ? cwds : repos).set(value.slice(0, tab), value.slice(tab + 1)); }
+    else kv[key] = value.trim();
+  }
+  const procs = rows.map((r) => { const cwd = cwds.get(String(r.pid)) ?? ""; return { ...r, cwd, repo: repos.get(cwd) ?? "" }; });
+  return { kv, own, tmp, procs };
+}
+
+const within = (p, dir) => p === dir || p.startsWith(dir.endsWith("/") ? dir : `${dir}/`);
+/** "own", "foreign" or null (says nothing) for one process, judged by its working directory alone. */
+function byDirectory(p, { own, tmp }) {
+  if (!p.cwd) return null;
+  if (own.some((d) => within(p.cwd, d) || (p.repo && within(p.repo, d)))) return "own";
+  if (tmp.some((d) => within(p.cwd, d))) return null;
+  return p.repo ? "foreign" : null;
+}
+/**
+ * Cores used over the sample, by owner. A process is judged by its own working directory; one whose directory says
+ * nothing takes the verdict of its nearest parent that has one. Foreign must be clear: a process judged foreign that
+ * has one of this project's own further up (a tool of an own agent working in another checkout) is unknown.
+ */
+export function attribute({ procs, own, tmp }) {
+  const byPid = new Map(procs.map((p) => [p.pid, p])), sum = { own: 0, foreign: 0, unknown: 0 };
+  for (const p of procs) {
+    if (!(p.cores > 0)) continue;
+    let verdict = null;
+    for (let q = p, n = 0; q && n < 64; q = byPid.get(q.ppid), n++) {
+      const here = byDirectory(q, { own, tmp });
+      if (!verdict) verdict = here;
+      else if (verdict === "foreign" && here === "own") verdict = "unknown";
+      if (verdict === "own" || verdict === "unknown") break;
+    }
+    sum[verdict ?? "unknown"] += p.cores;
+  }
+  return sum;
+}
+
+/**
+ * Before this version the calibration lowered the suite cap whenever the foreign-load figure was over its limit, and that
+ * figure was wrong. Replays the history since the last cap set by hand (--set-suite) and keeps what is still owed: a step
+ * down whose only recorded reason was foreign load is owed, a later step up has already won that much back, and a step
+ * down with any other reason stays. The result is never above the cap before the steps still owed, nor above `max`
+ * (calibration.maxSuite), and never below today's cap. A cap that is too low costs time, one that is too high overloads a
+ * shared machine, so in doubt nothing is restored: in `manual` mode, and when the history does not add up to today's cap
+ * or moves in jumps the calibration does not make (someone edited the state).
+ * Returns null when nothing is owed, else { owed, steps, suiteMax } or, restoring nothing, { owed, steps, doubt }.
+ */
+export function repairCaps(state, { step, max, manual = false }) {
+  const history = state.history;
+  const lastSet = history.map((h) => h.dir).lastIndexOf("set");
+  const debts = [];   // the steps still owed, oldest first: { before: the cap before it, lost }
+  let cap = lastSet >= 0 ? history[lastSet].suiteMax : undefined, odd = false, foreignSteps = 0;
+  for (const h of history.slice(lastSet + 1)) {
+    if ((h.dir !== "down" && h.dir !== "up") || !Number.isFinite(h.suiteMax)) continue;
+    // The oldest entry kept has nothing before it: it was one step of the calibration.
+    const before = cap ?? (h.dir === "down" ? h.suiteMax + step : h.suiteMax - step);
+    const change = h.dir === "down" ? before - h.suiteMax : h.suiteMax - before;
+    if (change < 0 || change > step || (cap === undefined && step > 1)) odd = true;
+    cap = h.suiteMax;
+    if (h.dir === "down") {
+      if (change > 0 && String(h.why ?? "").split("; ").every((r) => r.startsWith("foreign load "))) { debts.push({ before, lost: change }); foreignSteps++; }
+    } else {
+      for (let won = change; won > 0 && debts.length;) {
+        const last = debts[debts.length - 1], part = Math.min(won, last.lost);
+        last.lost -= part; won -= part;
+        if (!last.lost) debts.pop();
+      }
+    }
+  }
+  const owed = debts.reduce((sum, d) => sum + d.lost, 0), found = { owed, steps: debts.length };
+  if (cap !== undefined && cap !== state.suiteMax && foreignSteps) return { ...found, doubt: `the cap is ${state.suiteMax} but its history ends at ${cap}: it was changed by hand` };
+  if (odd && foreignSteps) return { ...found, doubt: "the recorded history does not add up: it cannot be told what is owed" };
+  if (!owed) return null;
+  if (manual) return { ...found, doubt: "calibration.mode is manual" };
+  const suiteMax = Math.min(state.suiteMax + owed, Math.max(...debts.map((d) => d.before)), max);
+  return suiteMax > state.suiteMax ? { ...found, suiteMax } : { ...found, doubt: `calibration.maxSuite is ${max}` };
+}
