@@ -111,9 +111,9 @@ export function parseProbe(text) {
 
 const within = (p, dir) => p === dir || p.startsWith(dir.endsWith("/") ? dir : `${dir}/`);
 /** "own", "foreign" or null (says nothing) for one process, judged by its working directory alone. */
-function byDirectory(p, { project, own, tmp }) {
+function byDirectory(p, { own, tmp }) {
   if (!p.cwd) return null;
-  if (own.some((d) => within(p.cwd, d) || (p.repo && within(p.repo, d))) || p.cwd.split("/").includes(project)) return "own";
+  if (own.some((d) => within(p.cwd, d) || (p.repo && within(p.repo, d)))) return "own";
   if (tmp.some((d) => within(p.cwd, d))) return null;
   return p.repo ? "foreign" : null;
 }
@@ -122,13 +122,13 @@ function byDirectory(p, { project, own, tmp }) {
  * nothing takes the verdict of its nearest parent that has one. Foreign must be clear: a process judged foreign that
  * has one of this project's own further up (a tool of an own agent working in another checkout) is unknown.
  */
-export function attribute({ procs, own, tmp }, project) {
+export function attribute({ procs, own, tmp }) {
   const byPid = new Map(procs.map((p) => [p.pid, p])), sum = { own: 0, foreign: 0, unknown: 0 };
   for (const p of procs) {
     if (!(p.cores > 0)) continue;
     let verdict = null;
     for (let q = p, n = 0; q && n < 64; q = byPid.get(q.ppid), n++) {
-      const here = byDirectory(q, { project, own, tmp });
+      const here = byDirectory(q, { own, tmp });
       if (!verdict) verdict = here;
       else if (verdict === "foreign" && here === "own") verdict = "unknown";
       if (verdict === "own" || verdict === "unknown") break;

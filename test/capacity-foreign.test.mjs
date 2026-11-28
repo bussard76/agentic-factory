@@ -400,5 +400,13 @@ test("the probe runs with this system's sh, awk and process table", () => {
 test("parseProbe and attribute: an incomplete probe output says nothing rather than foreign", () => {
   const p = parseProbe("load1=1.2\nproc=garbage\nproc=7 1 2.000 name with = sign\ncwd=7\ngit=\n");
   assert.equal(p.procs.length, 1);
-  assert.deepEqual(attribute(p, "demo"), { own: 0, foreign: 0, unknown: 2 });
+  assert.deepEqual(attribute(p), { own: 0, foreign: 0, unknown: 2 });
+});
+
+test("a path part named like the project makes nothing own: only the own directories and linked worktrees do", () => {
+  const at = (cwd, repo = `${cwd}/.git`) => attribute({ procs: [{ pid: 100, ppid: 1, cores: 4, name: "cc", cwd, repo }], own: ["/home/f/projects/orca-demo"], tmp: ["/tmp"] });
+  const foreign = { own: 0, foreign: 4, unknown: 0 };
+  // Projects named api, orca, projects, web and like the user, each in the review's example directory.
+  for (const cwd of ["/home/f/projects/shop/api", "/home/f/orca/workspaces/other/t1", "/home/f/projects/other", "/srv/clientx/web/src"]) assert.deepEqual(at(cwd), foreign, cwd);
+  assert.deepEqual(at("/workspace/api", ""), { own: 0, foreign: 0, unknown: 4 }, "a container directory says nothing");
 });

@@ -37,7 +37,7 @@ const queue = { unit: num(kv.queue_unit) ?? 0, e2e: num(kv.queue_e2e) ?? 0 };
 const probeGaps = [...(num(kv.load1) === null ? ["load unknown"] : [])];
 const probeFailed = probeGaps.length ? [`probe failed (${probeGaps.join(", ")})`] : [];
 // Cores in use over the sample, by owner; null when the processes could not be sampled. Only `foreign` can hold a start.
-const cores = kv.procs === "ok" ? attribute(probe, PROJECT) : null;
+const cores = kv.procs === "ok" ? attribute(probe) : null;
 const round1 = (v) => (v === null || v === undefined ? null : Number(v.toFixed(1)));
 const foreign = cores?.foreign ?? null;
 // Count only running workers on this host (lib.mjs workerStatus): an Orca worker until its dispatch is settled, even if its
