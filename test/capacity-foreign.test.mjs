@@ -87,6 +87,9 @@ function host({ os = "linux", load1 = 1.2, threads = 12, psiCpu = null, psiMem =
     const own = [`echo "$shell ${probeParent} 0:01.00 sh"`, ...procs.filter((p) => p.ppid === "probe").map((p) => `echo "${p.pid} $shell ${time(p.uses)} ${p.name}"`)];
     sh(path.join(bin, "ps"), sampleFails ? "exit 1" : `if [ -e "${dir}/slept" ]; then shell=$(cat "${dir}/slept"); cat "${dir}/ps2"; ${own.join("; ")}; else cat "${dir}/ps1"; fi`);
     sh(path.join(bin, "sleep"), `echo "$PPID" > "${dir}/slept"`);
+    // The clock is made up too (the probe asks perl for the time): one second passes with the sleep, however long the
+    // stand-ins take on this machine.
+    sh(path.join(bin, "perl"), `if [ -e "${dir}/slept" ]; then echo 1001.000; else echo 1000.000; fi`);
     rewind = () => fs.rmSync(path.join(dir, "slept"), { force: true });
     // lsof -b -w -a -d cwd -p <pids> -Fpn
     sh(path.join(bin, "lsof"), `echo "$*" >> "${dir}/lsof.log"\nfor p in $(echo "$7"| tr ',' ' '); do case $p in\n${procs.filter((p) => where(p.at)).map((p) => `${p.pid}) printf 'p${p.pid}\\nfcwd\\nn%s\\n' "${where(p.at)}";;`).join("\n")}\n*) :;;\nesac; done\nexit 1`);
@@ -102,7 +105,7 @@ function host({ os = "linux", load1 = 1.2, threads = 12, psiCpu = null, psiMem =
   const run = (...args) => {
     rewind();
     const extraEnv = typeof args[0] === "object" ? args.shift() : {};
-    const r = spawnSync(process.execPath, [path.join(ctl, "capacity.mjs"), "--verbose", ...args], { cwd: ctl, env: { ...env, ...extraEnv }, encoding: "utf8", timeout: 60_000 });
+    const r = spawnSync(process.execPath, [path.join(ctl, "capacity.mjs"), "--verbose", ...args], { cwd: ctl, env: { ...env, FACTORY_PROBE_TIMEOUT_MS: "3600000", ...extraEnv },encoding: "utf8", timeout: 60_000 });
     assert.equal(r.status, 0, r.stderr);
     return JSON.parse(r.stdout);
   };
@@ -203,6 +206,14 @@ for (const os of BOTH) test(`${os}: foreign load holds a start only when load1 i
   assert.equal(host({ os, load1: 8, procs, capacity: { foreignLoadMaxPerThread: 0.5 } }).run().heavy, "start");
   assert.equal(host({ os, load1: 8, procs, capacity: { foreignLoadMinLoadPerThread: 0.75 } }).run().heavy, "start");
   assert.equal(host({ os, load1: 0.5, procs, capacity: { foreignLoadMinLoadPerThread: 0 } }).run().heavy, "wait");
+});
+
+test("the macOS stand-in does not depend on how fast this machine is", () => {
+  const h = host({ os: "macos", load1: 6, procs: [busy(1, "other", 4)] });
+  const ps = path.join(h.dir, "bin", "ps");
+  fs.writeFileSync(ps, fs.readFileSync(ps, "utf8").replace("#!/bin/sh\n", "#!/bin/sh\n/bin/sleep 2\n"));   // each reading takes 2 s longer
+  const v = h.run();
+  assert.deepEqual([v.foreignLoad, v.heavy], [4, "wait"]);
 });
 
 test("unknown load is reported and never holds a start", () => {
@@ -322,6 +333,28 @@ test("with PSI: heavy up to cpuAvg10MaxPercent, light up to the higher light lim
   assert.deepEqual(verdicts(at(34)), ["wait", "wait"]);
   assert.equal(at(1).measured.limits.lightCpuAvg10, 33);
   assert.deepEqual(verdicts(at(45, { pressure: { lightCpuAvg10MaxPercent: 50 } })), ["wait", "start"]);
+});
+
+test("light gets its extra room only while the load is attributed", () => {
+  const run = (options) => host({ load1: 17.9, ...options }).run();
+  for (const [what, options] of [
+    ["12 cores nobody can name (a container, another user)", { procs: [busy(1, null, 12)] }],
+    ["a compiler outside git, macOS", { os: "macos", procs: [busy(1, "plain", 12)] }],
+    ["foreign exactly 3.0 plus unknown 15", { procs: [busy(1, "other", 3), busy(2, "root", 15)] }],
+    ["PSI 33, load 40", { psiCpu: 33, load1: 40, procs: [busy(1, "root", 12)] }],
+    ["processes not sampled", { os: "macos", sampleFails: true }],
+  ]) {
+    const v = run(options);
+    assert.deepEqual(verdicts(v), ["wait", "wait"], what);
+    assert.match(v.lightReason, /no extra room for light/, what);
+  }
+  assert.deepEqual(verdicts(run({ procs: [busy(1, "root", 3), busy(2, "worktree", 12)] })), ["wait", "start"], "the limit itself is allowed; own load does not count");
+  assert.deepEqual(verdicts(run({ load1: 10, procs: [busy(1, null, 12)] })), ["start", "start"], "below the heavy limit nothing changes");
+  assert.deepEqual(verdicts(run({ procs: [busy(1, null, 12)], capacity: { lightUnattributedLoadMaxPerThread: 0 } })), ["wait", "start"], "0 switches the condition off");
+  assert.deepEqual(verdicts(run({ procs: [busy(1, null, 11), busy(2, "worktree", 1)], capacity: { lightUnattributedLoadMaxPerThread: 1 } })), ["wait", "start"], "a higher limit allows more");
+  // The calibration keeps the light limit: load between the limits, attributed or not, lowers no cap.
+  const h = host({ load1: 17.9, procs: [busy(1, null, 12)] }); h.workers(5); h.setState(saved());
+  assert.equal(h.run().caps.suite, 5);
 });
 
 test("a project's high PSI limit does not leave light without a CPU limit; an explicit 0 is refused", () => {

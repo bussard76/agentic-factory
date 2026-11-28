@@ -63,7 +63,7 @@ const recentTimeouts = recentLoadTimeouts(30);
 // Two classes: heavy (full test and gate runs, Testers with a browser) and light (Developers). Light has a higher CPU limit.
 const setting = (v, fallback) => (v !== undefined && v !== null && v !== "" && Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : fallback);
 const positive = (v, fallback) => setting(v, fallback) || fallback;
-const factor = { heavy: positive(CAP.heavyLoadPerThread, 0.9), light: positive(CAP.lightLoadPerThread, 1.5), foreignMax: setting(CAP.foreignLoadMaxPerThread, 0.25), foreignMinLoad: setting(CAP.foreignLoadMinLoadPerThread, 0.5) };
+const factor = { heavy: positive(CAP.heavyLoadPerThread, 0.9), light: positive(CAP.lightLoadPerThread, 1.5), foreignMax: setting(CAP.foreignLoadMaxPerThread, 0.25), foreignMinLoad: setting(CAP.foreignLoadMinLoadPerThread, 0.5), unattributedMax: setting(CAP.lightUnattributedLoadMaxPerThread, 0.25) };
 factor.light = Math.max(factor.light, factor.heavy);   // light is never stricter than heavy
 const t = { cpu: CAP.pressure?.cpuAvg10MaxPercent ?? 20, mem: CAP.pressure?.memoryAvg10MaxPercent ?? 5, avail: CAP.availableMemoryMinGb ?? 8, queue: CAP.gateQueueMax ?? 3 };
 // 0 would read as "not set"; say so instead of guessing what was meant.
@@ -80,14 +80,20 @@ const queueHot = queue.unit + queue.e2e >= t.queue;
 // Foreign load holds a start only on a host that is really busy: with a load clearly below its threads there is room.
 const foreignOver = foreign !== null && foreign > threads * factor.foreignMax;
 const foreignHot = foreignOver && load1 >= threads * factor.foreignMinLoad;
+// The light room above the heavy limit counts only while it is known what loads the host: foreign plus unknown load small,
+// and readable at all. Otherwise light falls back to the heavy limit. 0 switches this condition off. (Starts only: the
+// calibration below keeps the light limit, so load nobody can name never lowers a cap earlier.)
+const unattributed = foreign === null ? null : foreign + cores.unknown;
+const noExtraRoom = heavyCpuHot && !lightCpuHot && factor.unattributedMax > 0 && (unattributed === null || unattributed > threads * factor.unattributedMax);
 const cpuReason = `cpu pressure ${cpu ?? `load ${load1}`}`;
+const noRoomReason = `${cpuReason}, over the heavy limit; no extra room for light while ${unattributed === null ? "the load cannot be attributed" : `~${unattributed.toFixed(1)} cores are foreign or unknown (limit ${(threads * factor.unattributedMax).toFixed(1)})`}`;
 const memReason = memHot ? [`memory ${availGb.toFixed(1)} GB available${mem !== null ? `, pressure ${mem}` : ""}`] : [];
 const queueReason = queueHot ? [`gate queue ${queue.unit + queue.e2e}`] : [];
 const timeoutReason = recentTimeouts ? [`${recentTimeouts} load timeouts in 30 min`] : [];
 const foreignReason = foreignHot ? [`foreign load ~${foreign.toFixed(1)}`] : [];
 const pressure = [...(heavyCpuHot ? [cpuReason] : []), ...memReason, ...queueReason, ...timeoutReason, ...foreignReason];
 // The gate queue and load timeouts are about full runs: they hold heavy starts. Light: its CPU limit, memory, foreign load.
-const lightPressure = [...(lightCpuHot ? [cpuReason] : []), ...memReason, ...foreignReason];
+const lightPressure = [...(lightCpuHot ? [cpuReason] : noExtraRoom ? [noRoomReason] : []), ...memReason, ...foreignReason];
 // What the calibration steps the cap down for: the host past even the light limit, or short of memory, or full runs piling
 // up or timing out. Never foreign load: the cap says what this project's own workers can do on this host.
 const overload = [...(lightCpuHot ? [cpuReason] : []), ...memReason, ...queueReason, ...timeoutReason];
@@ -168,7 +174,7 @@ const text = (list) => [...list, ...notes].join("; ") || "capacity available";
 // `suite` is `heavy` under its old name, so a handbook that only knows `suite` stays with the stricter class.
 const verdict = { host: host.name, suite: heavyVerdict, heavy: heavyVerdict, light: lightVerdict, readonly: roVerdict, capOnly, ...(waiting ? { measureAgainAt: new Date(Date.now() + 60e3).toISOString() } : {}), caps: { suite: state.suiteMax, readonly: state.readonlyMax, calibration: CAL.mode }, gateUnitSlots: slots.unit, gateE2eSlots: slots.e2e, reason: text(reasons), lightReason: text(lightReasons),
   foreignLoad: round1(foreign), unknownLoad: round1(cores?.unknown), ...(loadNotes.length ? { loadNote: loadNotes.join("; ") } : {}),
-  measured: { cpuAvg10: cpu, memAvg10: mem, ioAvg10: io, load1: num(kv.load1), threads, availGb: Number(availGb.toFixed(1)), suite, readonly, queue, foreign: round1(foreign), unknown: round1(cores?.unknown), own: round1(cores?.own), limits: { heavyLoad: round1(threads * factor.heavy), lightLoad: round1(threads * factor.light), cpuAvg10: t.cpu, lightCpuAvg10: t.lightCpu, foreign: round1(threads * factor.foreignMax), foreignMinLoad: round1(threads * factor.foreignMinLoad) }, recentTimeouts, quota, history: state.history.slice(-5) } };
+  measured: { cpuAvg10: cpu, memAvg10: mem, ioAvg10: io, load1: num(kv.load1), threads, availGb: Number(availGb.toFixed(1)), suite, readonly, queue, foreign: round1(foreign), unknown: round1(cores?.unknown), own: round1(cores?.own), limits: { heavyLoad: round1(threads * factor.heavy), lightLoad: round1(threads * factor.light), cpuAvg10: t.cpu, lightCpuAvg10: t.lightCpu, foreign: round1(threads * factor.foreignMax), foreignMinLoad: round1(threads * factor.foreignMinLoad), lightUnattributed: round1(threads * factor.unattributedMax) }, recentTimeouts, quota, history: state.history.slice(-5) } };
 journal("capacity", "controller", { host: host.name, note: `heavy ${heavyVerdict}, light ${lightVerdict}, readonly ${roVerdict}, cap ${state.suiteMax}`, heavy: heavyVerdict, light: lightVerdict, readonly: roVerdict, load1: num(kv.load1), cpu, mem, avail_gb: verdict.measured.availGb, queue: queue.unit + queue.e2e, foreign: round1(foreign), unknown: round1(cores?.unknown) });
 console.log(JSON.stringify(process.argv.includes("--verbose") ? verdict : { ...verdict, measured: undefined }));
 
