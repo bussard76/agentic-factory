@@ -41,7 +41,7 @@ New features go from the outside in. Nothing is built until {{HUMAN}} has signed
 
 ## Capacity by measurement (decided by {{HUMAN}}, {{DATE}})
 
-The Controller runs `node capacity.mjs` before every start and follows its verdict (pressure stall information or load, available memory, gate queue, foreign load, quotas). Two classes: Developers are light (CPU up to a higher limit), Testers and every other writing worker are heavy; full gates always go through the gate slots. Starting values: at most {{SUITE_MAX}} suite workers and {{READONLY_MAX}} read-only workers; gate slots {{UNIT_SLOTS}} unit and {{E2E_SLOTS}} browser, adapted to pressure. Under pressure: critical path, nearly finished tasks, waves, new development, debt. Every worker gets a memory and process limit where the runner supports it.
+The Controller runs `node capacity.mjs` before every start and follows its verdict (pressure stall information or load, available memory, gate queue, foreign load, quotas). Two classes: Developers are light (CPU up to a higher limit while little load is foreign or unknown), Testers and every other writing worker are heavy; full gates always go through the gate slots. Starting values: at most {{SUITE_MAX}} suite workers and {{READONLY_MAX}} read-only workers; gate slots {{UNIT_SLOTS}} unit and {{E2E_SLOTS}} browser, adapted to pressure. Under pressure: critical path, nearly finished tasks, waves, new development, debt. Every worker gets a memory and process limit where the runner supports it.
 
 ## Models (decided by {{HUMAN}}, {{DATE}})
 

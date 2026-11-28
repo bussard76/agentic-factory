@@ -31,7 +31,11 @@ Inputs, all measured in one round trip to the host (one `sh` script, locally or 
 | **light** | Developers | CPU avg10 ≤ `pressure.lightCpuAvg10MaxPercent` (default: the heavy limit × light factor ÷ heavy factor, 33) | load1 ≤ threads × `lightLoadPerThread` (1.5) |
 | **read-only** | `--readonly` workers (Architects, Auditors, spec reviews, Retros) | no CPU limit | no CPU limit |
 
-`start.mjs` picks the class from the worker's name: `<Task> · Worker Developer` is light, `--readonly` is read-only, **everything else is heavy**. A light limit below the heavy one counts as the heavy one. On a host with PSI the load factors do not decide the CPU rule; the light PSI default is derived from them, a judgement that no measurement backs yet.
+`start.mjs` picks the class from the worker's name: `<Task> · Worker Developer` is light, `--readonly` is read-only, **everything else is heavy**. A light limit below the heavy one counts as the heavy one. **The factors 0.9 and 1.5 are starting values that no measurement backs yet**; watch what they do on your hosts. On a host with PSI the load factors do not decide the CPU rule; the light PSI default is derived from them, but is at most 13 points above the heavy limit and never 100 or more (so a heavy limit of 60 gives 73, not 100). `lightCpuAvg10MaxPercent: 0` is refused with an error: remove the key for the derived limit, or set it to the heavy limit for no extra room.
+
+**The extra room needs an attributed load.** Above the heavy CPU limit, light starts only while foreign plus unknown load (see "Foreign load") is at most threads × `lightUnattributedLoadMaxPerThread` (0.25). With more than that, or when it cannot be told (processes not sampled, no working directory readable), light falls back to the heavy limit, and `lightReason` says why. The project's own load does not count against it. This holds starts only; the calibration keeps using the light limit. `0` switches the condition off. Containers and virtual machines count as unknown, so on a host that runs its browser gates in containers light often stays on the heavy limit.
+
+**A failed or partial probe** (the host unreachable, output cut off, no load or thread count, or no answer within 30 s) holds every class, read-only too, with the reason `probe failed (…)`. The calibration makes no step in either direction, the quiet time starts again and the gate slots are set to the low end of their ranges. `--force` of `start.mjs` skips capacity as before.
 
 What holds which class:
 
@@ -64,7 +68,9 @@ Foreign load is the CPU, in cores, that processes **clearly belonging to somethi
 - foreign cores > threads × `foreignLoadMaxPerThread` (0.25), and
 - load1 ≥ threads × `foreignLoadMinLoadPerThread` (0.5).
 
-**How CPU is measured.** The CPU time each process used between two samples one second apart, not a lifetime average.
+**How CPU is measured.** The CPU time each process used between two samples one second apart, not a lifetime average. The whole probe runs under `LC_ALL=C` (only `lsof` gets a UTF-8 locale, so that non-ASCII directory names come through).
+
+**What changed against earlier versions.** On Linux they overstated foreign load. **On macOS their foreign figure was always 0** (BSD `ps` rejects the option they used), so a Mac that was never held for foreign load can be now. And on a Mac whose scripts run with a decimal-comma locale (for example `LANG=de_DE.UTF-8`) the load average could not be read (`2,99`): such a Mac **ran without any load limit**. It has one now.
 
 - Linux: `utime + stime` from `/proc/<pid>/stat`, divided by the elapsed time from `/proc/uptime`.
 - macOS: two `ps -A -o pid=,ppid=,time=,comm=` readings of accumulated CPU time (resolution 0.01 s), then one `lsof` call for the working directories of the busy processes and their parents. `top -l 2` was not chosen: it waits for its own sample interval as well, and its output is harder to read reliably.
@@ -73,11 +79,11 @@ Processes under 5 % of a core are left out. The probe leaves out itself: its she
 
 **Who owns a process.** Judged by its working directory:
 
-1. **own:** it lies in the project's checkout, its workspaces (`<workspacesDir>/<project>`), the Controller directory, `~/front-agent/<project>` or `~/Development/<project>-preview` (on the Controller's host also the directory the scripts run from); or it is in a linked git worktree of one of these repositories, wherever that lies; or one of its path parts is exactly the project's name.
+1. **own:** it lies in the project's checkout, its workspaces (`<workspacesDir>/<project>`), the Controller directory, `~/front-agent/<project>`, `~/Development/<project>-preview` or the directory in `hosts.frontAgent.preview.worktree` (set it when `PREVIEW_WORKTREE` puts the preview clone elsewhere) (on the Controller's host also the directory the scripts run from); or it is in a linked git worktree of one of these repositories, wherever that lies. A directory that merely has a part named like the project is not own.
 2. **foreign:** it is not own, not under a temp directory (`/tmp`, `/var/tmp`, `/var/folders`, `$TMPDIR`), and lies inside a git checkout. A repository in the home directory itself (dotfiles kept in git) does not count.
 3. **says nothing:** everything else: `/`, the home directory, plain directories, temp directories, a working directory that cannot be read.
 
-A process whose directory says nothing takes the verdict of its nearest parent that has one (a browser started from your worker is yours; one started by another project's test run is foreign). Without such a parent it is **unknown**. Foreign must be clear: a process that would be foreign but has an own process further up (a tool of your agent working in another checkout) is unknown as well. So a terminal multiplexer started from a directory of this project makes other projects' processes under it unknown. Unknown is reported (`unknownLoad` in the verdict and the journal) and **never holds a start**.
+A process whose directory says nothing takes the verdict of its nearest parent that has one (a browser started from your worker is yours; one started by another project's test run is foreign). Without such a parent it is **unknown**. Foreign must be clear: a process that would be foreign but has an own process further up (a tool of your agent working in another checkout) is unknown as well. So a terminal multiplexer started from a directory of this project makes other projects' processes under it unknown. Unknown is reported (`unknownLoad` in the verdict and the journal) and never holds a start as foreign load; a large unknown load only takes away light's extra room above the heavy CPU limit (above).
 
 **Why a second condition on load1.** If load1 is below half the threads, at least half the host has been free over the last minute, so there is room whatever the process figures say. That also covers a wrong figure: the case that led to this rule showed about 7 cores of "foreign load" on a 12-thread host with load1 1.2, which is 0.1 per thread. `0` switches the cross-check off. When the figure is over its limit but load1 is not, the verdict says so in `loadNote`. load1 lags by up to a minute, so foreign load that just started holds a start a little later. A high load with a low foreign figure is judged by the CPU limits, as before.
 
@@ -88,10 +94,9 @@ A process whose directory says nothing takes the verdict of its nearest parent t
 - containers and virtual machines (Docker, including the VM process on macOS), which also carry your own browser gates
 - other users' and root processes, services, and anything with its working directory in `/`, the home directory or a temp directory, without a parent that says more
 - another project that does not work in a git checkout, such as its Controller
-- CPU of processes that start and end within the sampled second (a build of many short compiles), and many processes below 5 % each
-- a directory outside the project with a part named exactly like the project counts as own
+- CPU of processes that start and end within the sampled second (a build of many short compiles), and many processes below 5 % each; such load is not in `unknownLoad` either
 
-The other way round, **any** git checkout that is not this project's counts as foreign, including a person's own work in another repository and a tool that is installed as a git checkout. If the processes cannot be sampled at all, `foreignLoad` is `null`, `loadNote` says so and the rule is skipped. Windows is not measured.
+The other way round, **any** git checkout that is not this project's counts as foreign, including a person's own work in another repository and a tool that is installed as a git checkout. If the processes cannot be sampled at all, `lsof` is missing (it lives in `/usr/sbin`, which a narrow PATH may lack) or the working directory of no busy process can be read, `foreignLoad` is `null`, never 0; `loadNote` says so, the foreign-load rule is skipped and light stays on the heavy CPU limit. Windows is not measured.
 
 When capacity is short, the Controller starts in this order:
 
@@ -112,7 +117,7 @@ With `capacity.calibration.mode: auto`, `capacity.mjs` keeps a state file per ho
 - it starts at `startSuite` / `startReadonly` workers, low on purpose
 - it raises the cap by `step` when the host has been at the cap and quiet (nothing that holds a heavy start) for `raiseAfterQuietMinutes`
 - it lowers the suite cap by `step` on **overload**: CPU past the **light** limit, memory short, a full gate queue or load timeouts; at most once per 15 minutes, never below the start value
-- **foreign load never lowers a cap**, and neither does CPU between the heavy and the light limit (Developers are allowed to load the host that far). Both hold starts and begin the quiet time again. Before the two classes, CPU past the heavy limit lowered the cap; a project that wants that back sets `lightLoadPerThread` equal to `heavyLoadPerThread` (with PSI: `pressure.lightCpuAvg10MaxPercent` equal to `cpuAvg10MaxPercent`)
+- **foreign load as a reason never lowers a cap** (foreign work that pushes the load past the light limit or the host short of memory still does, under `cpu pressure` or `memory`), and neither does CPU between the heavy and the light limit (Developers are allowed to load the host that far). Both hold starts and begin the quiet time again. Before the two classes, CPU past the heavy limit lowered the cap; a project that wants that back sets `lightLoadPerThread` equal to `heavyLoadPerThread` (with PSI: `pressure.lightCpuAvg10MaxPercent` equal to `cpuAvg10MaxPercent`)
 - it never exceeds `maxSuite` / `maxReadonly`
 - every step is recorded in the state's history (the last 40 entries) and in the journal; the nightly audit checks whether a step raised throughput or only waiting
 
@@ -122,13 +127,29 @@ With `capacity.calibration.mode: auto`, `capacity.mjs` keeps a state file per ho
 
 ### Caps lowered by the old foreign-load figure
 
-Earlier versions overstated foreign load on Linux and lowered the suite cap for it. The first run of this version on each host's old state gives those steps back, once:
+Earlier versions overstated foreign load on Linux and lowered the suite cap for it. This version gives back, once per host, what is **still owed** on the old state. It waits for the first run on which the host is measured and not overloaded. It replays the history since the last `--set-suite`:
 
-- only steps whose **only** recorded reason was foreign load, and only those after the last `--set-suite`: a cap a person set stays
-- never above the cap before the first of those steps, nor above the largest configured cap
+- a step down whose **only** recorded reason was foreign load is owed
+- a later step up has already won that much back; a step down with any other reason stays and does not reduce what is owed
+- the result is never above the cap before the steps still owed, and never above `calibration.maxSuite`
 - the state records it (`restore`), and the journal gets a `decision` that names the old and the new cap
 
+A cap that is too low costs time; one that is too high overloads a shared machine. So **nothing is restored in doubt**: in `manual` mode, when the saved cap does not match the end of its history or the history moves in jumps the calibration does not make (a hand edit, or a changed `step`), or when `maxSuite` leaves no room. The journal then gets one `decision` that says `NOT restored`, why, and how to raise the cap by hand. If the first run is itself `--set-suite`, the human's number stands and nothing is restored. A hand edit that happens to fit the history cannot be told apart.
+
 What is **not** given back: a step that also had another reason (CPU, memory, gate queue, load timeouts), steps that have left the 40-entry history, and the raises that did not happen while the false figure kept ending the quiet time (they come back at one step per `raiseAfterQuietMinutes` at the cap). An old step-down for foreign load that was real cannot be told apart and is given back too; real overload lowers the cap again. If a cap is still lower than it was, ask the human and set it: `node capacity.mjs --set-suite <n> --by "<their words>"` (with `--on <host>`). Do not use `--reset` for this: it goes back to the start values. In `capacity-state.<host>.json` and the journal (`capacity suiteMax down → …`) you can see what the cap was.
+
+### What an existing config gets after an update
+
+No config edit is needed, but behaviour changes. `update` and `start` print nothing about it.
+
+- **Developers** get the light class: they may start above the heavy CPU limit, up to the light one, while the load is attributed.
+- **The suite cap** no longer steps down for CPU between the two limits, or for foreign load as a reason.
+- **Caps lowered for foreign load** are restored as described above.
+- **macOS:** foreign load goes from always 0 to measured, so other projects' work on the same Mac can now hold starts.
+- **macOS with a decimal-comma locale:** the load limit works for the first time; such a Mac ran without one.
+- **A failed probe** now holds every start instead of letting everything start.
+- Each `capacity.mjs` call takes a one-second sample.
+- An edited `CONTROLLER.md` keeps its old text. It only knows `suite`, the stricter heavy verdict; `start.mjs` applies the light class by itself.
 
 ## Hosts are optional and plural
 
