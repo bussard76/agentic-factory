@@ -66,7 +66,12 @@ const positive = (v, fallback) => setting(v, fallback) || fallback;
 const factor = { heavy: positive(CAP.heavyLoadPerThread, 0.9), light: positive(CAP.lightLoadPerThread, 1.5), foreignMax: setting(CAP.foreignLoadMaxPerThread, 0.25), foreignMinLoad: setting(CAP.foreignLoadMinLoadPerThread, 0.5) };
 factor.light = Math.max(factor.light, factor.heavy);   // light is never stricter than heavy
 const t = { cpu: CAP.pressure?.cpuAvg10MaxPercent ?? 20, mem: CAP.pressure?.memoryAvg10MaxPercent ?? 5, avail: CAP.availableMemoryMinGb ?? 8, queue: CAP.gateQueueMax ?? 3 };
-t.lightCpu = Math.max(t.cpu, positive(CAP.pressure?.lightCpuAvg10MaxPercent, Math.round(t.cpu * factor.light / factor.heavy)));
+// 0 would read as "not set"; say so instead of guessing what was meant.
+if (CAP.pressure?.lightCpuAvg10MaxPercent !== undefined && Number(CAP.pressure.lightCpuAvg10MaxPercent) === 0) { console.error("capacity.pressure.lightCpuAvg10MaxPercent must not be 0: remove it for the derived limit, or set it to cpuAvg10MaxPercent for no extra room"); process.exit(1); }
+// Derived from the load factors, but PSI is a percentage: at most LIGHT_PSI_EXTRA above the heavy limit and below 100,
+// so a project's high heavy limit does not leave light without a CPU limit.
+const LIGHT_PSI_EXTRA = 13, derivedLightCpu = Math.min(Math.round(t.cpu * factor.light / factor.heavy), Number(t.cpu) + LIGHT_PSI_EXTRA, 99);
+t.lightCpu = Math.max(t.cpu, positive(CAP.pressure?.lightCpuAvg10MaxPercent, derivedLightCpu));
 const cpuOver = (psiMax, perThread) => (cpu === null ? load1 > threads * perThread : cpu > psiMax);   // without PSI (non-Linux): load vs threads
 const heavyCpuHot = cpuOver(t.cpu, factor.heavy), lightCpuHot = cpuOver(t.lightCpu, factor.light);
 const memKnown = (num(kv.avail_kb) ?? 0) > 0;                              // no MemAvailable and no vm_stat: skip the memory rule, say so

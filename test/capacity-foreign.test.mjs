@@ -324,6 +324,15 @@ test("with PSI: heavy up to cpuAvg10MaxPercent, light up to the higher light lim
   assert.deepEqual(verdicts(at(45, { pressure: { lightCpuAvg10MaxPercent: 50 } })), ["wait", "start"]);
 });
 
+test("a project's high PSI limit does not leave light without a CPU limit; an explicit 0 is refused", () => {
+  const at = (heavy, psiCpu) => host({ psiCpu, load1: 90, capacity: { pressure: { cpuAvg10MaxPercent: heavy } } }).run();
+  const sixty = at(60, 99);
+  assert.deepEqual([sixty.measured.limits.lightCpuAvg10, ...verdicts(sixty)], [73, "wait", "wait"]);
+  assert.equal(at(80, 99).measured.limits.lightCpuAvg10, 93);
+  assert.equal(at(90, 1).measured.limits.lightCpuAvg10, 99, "never 100 or above");
+  assert.throws(() => host({ psiCpu: 30, capacity: { pressure: { lightCpuAvg10MaxPercent: 0 } } }).run(), /lightCpuAvg10MaxPercent must not be 0/);
+});
+
 test("memory, foreign load and the cap hold both classes; the gate queue and load timeouts hold heavy only", () => {
   for (const [what, h] of [["available memory", host({ availKb: 1_000_000 })], ["memory pressure", host({ psiCpu: 1, psiMem: 30 })], ["foreign", host({ load1: 9, procs: [busy(1, "other", 5)] })]]) {
     assert.deepEqual(verdicts(h.run()), ["wait", "wait"], what);
