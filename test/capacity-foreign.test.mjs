@@ -50,6 +50,7 @@ function host({ os = "linux", load1 = 1.2, threads = 12, psiCpu = null, psiMem =
   fs.writeFileSync(path.join(dir, "elsewhere", "linked-own", ".git"), `gitdir: ${dirs.project}/.git/worktrees/linked-own\n`);
   fs.writeFileSync(path.join(dirs.linkedOther, ".git"), `gitdir: ${dirs.other}/.git/worktrees/linked-other\n`);
   const where = (at) => (at === null || at === undefined ? null : dirs[at] ?? at);
+  procs = [...procs, { pid: P(999), name: "init", at: "root", had: 1, uses: 0 }];   // no real host has an empty process table
 
   const config = {
     project: { name: "demo" }, agents: { runner: "terminal" }, capacity,
