@@ -39,7 +39,8 @@ if [ -r "$P/uptime" ]; then
   linux=1; hz=$(getconf CLK_TCK 2>/dev/null || echo 100)
   now() { cut -d' ' -f1 "$P/uptime"; }
   # cat, not awk on the files: a process that ends while they are read must not stop the reading.
-  sample() { cat "$P"/[0-9]*/stat 2>/dev/null | awk -v hz="$hz" '{ e=0; for (j=length($0); j>0; j--) if (substr($0,j,1)==")") { e=j; break }; if (!e) next; o=index($0,"("); if (split(substr($0,e+2),f," ") < 20) next; printf "%s %s %.2f %.2f %s\\n", $1, f[2], (f[12]+f[13])/hz, f[20]/hz, substr($0,o+1,e-o-1) }'; }
+  # A name may hold a line break: a record starts with "<pid> (" and is read on until all its fields are there.
+  sample() { cat "$P"/[0-9]*/stat 2>/dev/null | awk -v hz="$hz" '{ r = (/^[0-9]+ \\(/ || r == "") ? $0 : r " " $0; e=0; for (j=length(r); j>0; j--) if (substr(r,j,1)==")") { e=j; break }; if (!e) next; o=index(r,"("); if (split(substr(r,e+2),f," ") < 20) next; printf "%s %s %.2f %.2f %s\\n", r+0, f[2], (f[12]+f[13])/hz, f[20]/hz, substr(r,o+1,e-o-1); r="" }'; }
 else
   linux=
   command -v lsof >/dev/null 2>&1 || echo "lsof=missing"
@@ -75,7 +76,9 @@ if [ -n "$rows" ]; then
     cwds=$(printf '%s\\n' "$rows" | while read -r pid rest; do c=$(readlink "$P/$pid/cwd" 2>/dev/null) && printf '%s\\t%s\\n' "$pid" "$c"; done)
   else
     # -b: no kernel call that can block on a dead network mount; -w: without the warnings that brings.
-    cwds=$(lsof -b -w -a -d cwd -p "$(printf '%s\\n' "$rows" | awk '{printf "%s%s", s, $1; s=","}')" -Fpn 2>/dev/null | awk '/^p/{p=substr($0,2)} /^n\\//{printf "%s\\t%s\\n", p, substr($0,2)}')
+    # lsof gets a UTF-8 locale of its own: under C it writes non-ASCII names as \\xc3\\xbc. A backslash it doubles under
+    # either locale, which the awk takes back.
+    cwds=$(LC_ALL=en_US.UTF-8 lsof -b -w -a -d cwd -p "$(printf '%s\\n' "$rows" | awk '{printf "%s%s", s, $1; s=","}')" -Fpn 2>/dev/null | awk '/^p/{p=substr($0,2)} /^n\\//{ s=substr($0,2); o=""; while ((i=index(s,"\\\\\\\\"))>0) { o=o substr(s,1,i); s=substr(s,i+2) }; printf "%s\\t%s%s\\n", p, o, s }')
   fi
   printf '%s\\n' "$cwds" | sed -n 's/^./cwd=&/p'
   # The git repository a working directory lies in (for a linked worktree, the repository it belongs to). Home itself does not count.

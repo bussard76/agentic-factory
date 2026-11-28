@@ -16,12 +16,15 @@ import { attribute, parseProbe, probeScript, repairCaps } from "../controller/ca
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const sh = (file, body) => fs.writeFileSync(file, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
 
+/** A name as the real lsof prints it: a backslash doubled, and without a UTF-8 locale non-ASCII bytes as \xc3\xbc. */
+const asLsof = (name, utf8) => { const s = name.replace(/\\/g, "\\\\"); return utf8 ? s : [...Buffer.from(s)].map((b) => (b < 128 ? String.fromCharCode(b) : `\\x${b.toString(16)}`)).join(""); };
+
 /**
  * A made-up host. procs: [{ pid, ppid, name, at (directory: a key of `dirs`, a path, or null for unreadable),
  * had (CPU seconds before the sample; null: born during it), uses (cores during the 1 s sample) }]. ppid "probe" is the
  * probe's own shell, whose pid only the stand-in `sleep` knows; probeParent is that shell's parent.
  */
-function host({ os = "linux", load1 = 1.2, threads = 12, psiCpu = null, psiMem = null, availKb = 40_000_000, capacity = {}, procs = [], probeParent = 1, remote = false, sampleFails = false, locale = null } = {}) {
+function host({ os = "linux", load1 = 1.2, threads = 12, psiCpu = null, psiMem = null, availKb = 40_000_000, capacity = {}, procs = [], probeParent = 1, remote = false, sampleFails = false, locale = null, frontAgent = undefined, extra = null } = {}) {
   const dir = fs.realpathSync(tempDir("af-capacity-"));
   const ctl = path.join(dir, "ctl"), bin = path.join(dir, "bin"), home = path.join(dir, "home"), proc = path.join(dir, "proc"), after = path.join(dir, "after"), tmproot = path.join(dir, "tmproot");
   for (const d of [ctl, bin, home, proc, after, tmproot]) fs.mkdirSync(d);
@@ -43,13 +46,14 @@ function host({ os = "linux", load1 = 1.2, threads = 12, psiCpu = null, psiMem =
     linkedOther: mk("elsewhere", "linked-other"),
   };
   repo("ws", "other", "t9");
+  if (extra) Object.assign(dirs, extra({ mk, repo }));
   fs.writeFileSync(path.join(dir, "elsewhere", "linked-own", ".git"), `gitdir: ${dirs.project}/.git/worktrees/linked-own\n`);
   fs.writeFileSync(path.join(dirs.linkedOther, ".git"), `gitdir: ${dirs.other}/.git/worktrees/linked-other\n`);
   const where = (at) => (at === null || at === undefined ? null : dirs[at] ?? at);
 
   const config = {
     project: { name: "demo" }, agents: { runner: "terminal" }, capacity,
-    hosts: { controller: { host: "ctlhost" }, workers: [{ name: "local", kind: remote ? "remote" : "local", ssh: "stand-in", projectDir: dirs.project, workspacesDir: path.join(dir, "ws") }] },
+    hosts: { frontAgent, controller: { host: "ctlhost" },workers: [{ name: "local", kind: remote ? "remote" : "local", ssh: "stand-in", projectDir: dirs.project, workspacesDir: path.join(dir, "ws") }] },
   };
   fs.writeFileSync(path.join(ctl, "factory.config.json"), JSON.stringify(config));
 
@@ -92,7 +96,7 @@ function host({ os = "linux", load1 = 1.2, threads = 12, psiCpu = null, psiMem =
     sh(path.join(bin, "perl"), `if [ -e "${dir}/slept" ]; then echo 1001.000; else echo 1000.000; fi`);
     rewind = () => fs.rmSync(path.join(dir, "slept"), { force: true });
     // lsof -b -w -a -d cwd -p <pids> -Fpn
-    sh(path.join(bin, "lsof"), `echo "$*" >> "${dir}/lsof.log"\nfor p in $(echo "$7"| tr ',' ' '); do case $p in\n${procs.filter((p) => where(p.at)).map((p) => `${p.pid}) printf 'p${p.pid}\\nfcwd\\nn%s\\n' "${where(p.at)}";;`).join("\n")}\n*) :;;\nesac; done\nexit 1`);
+    sh(path.join(bin, "lsof"), `echo "$*" >> "${dir}/lsof.log"\nfor p in $(echo "$7"| tr ',' ' '); do case $p in\n${procs.filter((p) => where(p.at)).map((p) => `${p.pid}) case "$LC_ALL" in *UTF-8) n='${asLsof(where(p.at), true)}';; *) n='${asLsof(where(p.at), false)}';; esac; printf 'p${p.pid}\\nfcwd\\nn%s\\n' "$n";;`).join("\n")}\n*) :;;\nesac; done\nexit 1`);
     // Like the real one, it prints the load with the locale's decimal comma unless the caller runs under C.
     const comma = String(load1).replace(".", ",");
     sh(path.join(bin, "sysctl"), `case "$*" in *loadavg*) case "$LC_ALL" in C|"") echo "{ ${load1} 1.00 1.00 }";; *) echo "{ ${comma} 1,00 1,00 }";; esac;; *pagesize*) echo 16384;; *) echo ${threads};; esac`);
@@ -169,6 +173,26 @@ for (const os of BOTH) test(`${os}: only another git checkout is foreign; own di
     const m = h.run().measured;
     assert.deepEqual([m.own, m.foreign, m.unknown], ["own", "foreign", "unknown"].map((g) => (g === group ? sum : 0)), `${group}: ${mine.map(([at]) => at).join(", ")}`);
   }
+});
+
+test("macOS: directories with non-ASCII names or a backslash are recognised", () => {
+  const h = host({ os: "macos", procs: [] });
+  const extra = ({ mk }) => ({ umlautOwn: mk("ws", "demo", "Büro a\\b"), umlautOther: mk("projects", "other", "Ü a\\b") });
+  const m = host({ os: "macos", extra, procs: [busy(1, "umlautOwn", 1), busy(2, "umlautOther", 2)] }).run().measured;
+  assert.deepEqual([m.own, m.foreign, m.unknown], [1, 2, 0]);
+});
+
+test("a preview clone configured elsewhere is own", () => {
+  const options = { extra: ({ repo }) => ({ clone: repo("home", "clones", "demo-view") }), procs: [busy(1, "clone", 2)] };
+  const without = host(options).run().measured;
+  assert.deepEqual([without.own, without.foreign], [0, 2]);
+  const set = host({ ...options, frontAgent: { preview: { worktree: "~/clones/demo-view" } } }).run().measured;
+  assert.deepEqual([set.own, set.foreign], [2, 0]);
+});
+
+test("Linux: a process whose name holds a line break is counted", () => {
+  const m = host({ procs: [{ ...busy(1, "other", 2), name: "nl\nname" }, { ...busy(2, "other", 0.5), name: "x) R 1\n(y" }, busy(3, "other", 1)] }).run().measured;
+  assert.equal(m.foreign, 3.5);
 });
 
 test("the home directory kept in git makes nothing foreign", () => {

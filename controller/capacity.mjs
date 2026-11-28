@@ -7,7 +7,7 @@
 // still applies). Usage: node capacity.mjs [--on <host>] [--verbose] [--reset] [--set-suite <n> --by "<quote>"]
 import "./cli.mjs";
 import fs from "node:fs";
-import { CONTROLLER_HOME, DIR, ORCA, PROJECT, PROJECT_DIR, RUNNER, argHost, dispatchStates, file, journal, onHost, orcaEnvArgsOn, projectDirOn, readJson, readState, trySh, workerStatus, workspacesOn, writeJson } from "./lib.mjs";
+import { config, CONTROLLER_HOME, DIR,ORCA, PROJECT, PROJECT_DIR, RUNNER, argHost, dispatchStates, file, journal, onHost, orcaEnvArgsOn, projectDirOn, readJson, readState, trySh, workerStatus, workspacesOn, writeJson } from "./lib.mjs";
 import { attribute, parseProbe, probeScript, repairCaps, shQuote } from "./capacity-rules.mjs";
 
 const host = argHost(process.argv);
@@ -24,7 +24,7 @@ if (process.argv.includes("--set-suite") && !(/^[1-9]\d*$/.test(setSuite ?? "") 
 // --- measure (one shell round trip: PSI, memory, load, threads, gate queue, CPU per process over ~1 s with cwd) ------
 // This project's own directories: what runs from them is never foreign load. On the Controller's own host also the
 // directory these scripts run from and the checkout the Controller reads.
-const ownDirs = [projectDirOn(host), workspacesOn(host), CONTROLLER_HOME, `~/front-agent/${PROJECT}`, `~/Development/${PROJECT}-preview`, ...(host.kind === "local" ? [DIR, PROJECT_DIR] : [])];
+const ownDirs = [projectDirOn(host), workspacesOn(host), CONTROLLER_HOME, `~/front-agent/${PROJECT}`, `~/Development/${PROJECT}-preview`, ...(config.hosts?.frontAgent?.preview?.worktree ? [config.hosts.frontAgent.preview.worktree] : []), ...(host.kind === "local" ? [DIR, PROJECT_DIR] : [])];
 const script = probeScript({ project: PROJECT, ownDirs });
 // Over ssh the host's login shell reads the command, which need not be sh.
 // A probe that hangs (a dead mount, a stuck ssh) must not hang capacity.mjs and with it start.mjs: it counts as failed.
