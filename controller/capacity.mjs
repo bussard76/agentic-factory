@@ -29,10 +29,13 @@ const script = probeScript({ project: PROJECT, ownDirs });
 // Over ssh the host's login shell reads the command, which need not be sh.
 const probe = parseProbe(onHost(host, host.kind === "local" ? script : `sh -c ${shQuote(script)}`));
 const kv = probe.kv;
-const num = (v) => (v === "" || v === undefined ? null : Number(v));
+const num = (v) => (v === "" || v === undefined || !Number.isFinite(Number(v)) ? null : Number(v));   // never NaN
 const cpu = num(kv.psi_cpu), mem = num(kv.psi_memory), io = num(kv.psi_io);
 const availGb = (num(kv.avail_kb) ?? 0) / 1e6, load1 = num(kv.load1) ?? 0, threads = num(kv.threads) ?? 1;
 const queue = { unit: num(kv.queue_unit) ?? 0, e2e: num(kv.queue_e2e) ?? 0 };
+// What the probe did not deliver. With any of it missing, nothing is known well enough to start a worker.
+const probeGaps = [...(num(kv.load1) === null ? ["load unknown"] : [])];
+const probeFailed = probeGaps.length ? [`probe failed (${probeGaps.join(", ")})`] : [];
 // Cores in use over the sample, by owner; null when the processes could not be sampled. Only `foreign` can hold a start.
 const cores = kv.procs === "ok" ? attribute(probe, PROJECT) : null;
 const round1 = (v) => (v === null || v === undefined ? null : Number(v.toFixed(1)));
@@ -127,15 +130,15 @@ writeJson(stateName, state);
 // --- verdict -----------------------------------------------------------------------------------------------------------
 // One cap for heavy and light together: it bounds how many workers that are not read-only run on the host.
 const capReason = suite >= state.suiteMax ? [`suite workers ${suite}/${state.suiteMax} (calibrated cap)`] : [];
-const reasons = [...pressure, ...capReason], lightReasons = [...lightPressure, ...capReason];
+const reasons = probeFailed.length ? probeFailed : [...pressure, ...capReason], lightReasons = probeFailed.length ? probeFailed : [...lightPressure, ...capReason];
 const heavyVerdict = reasons.length ? "wait" : "start";
 const lightVerdict = lightReasons.length ? "wait" : "start";
-const roVerdict = memHot || readonly >= state.readonlyMax ? "wait" : "start";
+const roVerdict = probeFailed.length || memHot || readonly >= state.readonlyMax ? "wait" : "start";
 
 // Adaptive gate slots: scale within the configured ranges by CPU pressure (or load without PSI).
 const range = (r, d) => (Array.isArray(r) && r.length === 2 ? r : [d, d]);
 const [uMin, uMax] = range(CAP.gate?.unitSlotsRange, CAP.gate?.unitSlots ?? 2), [eMin, eMax] = range(CAP.gate?.e2eSlotsRange, CAP.gate?.e2eSlots ?? 1);
-const scale = cpu === null ? Math.max(0, 1 - load1 / threads) : Math.max(0, 1 - cpu / 50);
+const scale = probeFailed.length ? 0 : cpu === null ? Math.max(0, 1 - load1 / threads) : Math.max(0, 1 - cpu / 50);   // unmeasured: the fewest slots
 const slots = { unit: Math.round(uMin + (uMax - uMin) * scale), e2e: Math.round(eMin + (eMax - eMin) * scale) };
 writeJson(`gate-slots.${host.name}.json`, slots);
 if (host.kind === "local") writeJson("gate-slots.json", slots);
@@ -144,13 +147,13 @@ else onHost(host, `mkdir -p ${CONTROLLER_HOME} && printf '%s' '${JSON.stringify(
 // capOnly: a pool waits and only its cap holds it back: the suite cap with nothing else against a Developer, or the
 // read-only cap on a quiet host. The Controller can then ask the human to raise it.
 const waiting = heavyVerdict === "wait" || lightVerdict === "wait" || roVerdict === "wait";
-const capOnly = capReason.length ? !lightPressure.length : waiting && !hot;
+const capOnly = !probeFailed.length && (capReason.length ? !lightPressure.length : waiting && !hot);
 const text = (list) => [...list, ...notes].join("; ") || "capacity available";
 // `suite` is `heavy` under its old name, so a handbook that only knows `suite` stays with the stricter class.
 const verdict = { host: host.name, suite: heavyVerdict, heavy: heavyVerdict, light: lightVerdict, readonly: roVerdict, capOnly, ...(waiting ? { measureAgainAt: new Date(Date.now() + 60e3).toISOString() } : {}), caps: { suite: state.suiteMax, readonly: state.readonlyMax, calibration: CAL.mode }, gateUnitSlots: slots.unit, gateE2eSlots: slots.e2e, reason: text(reasons), lightReason: text(lightReasons),
   foreignLoad: round1(foreign), unknownLoad: round1(cores?.unknown), ...(loadNotes.length ? { loadNote: loadNotes.join("; ") } : {}),
-  measured: { cpuAvg10: cpu, memAvg10: mem, ioAvg10: io, load1, threads, availGb: Number(availGb.toFixed(1)), suite, readonly, queue, foreign: round1(foreign), unknown: round1(cores?.unknown), own: round1(cores?.own), limits: { heavyLoad: round1(threads * factor.heavy), lightLoad: round1(threads * factor.light), cpuAvg10: t.cpu, lightCpuAvg10: t.lightCpu, foreign: round1(threads * factor.foreignMax), foreignMinLoad: round1(threads * factor.foreignMinLoad) }, recentTimeouts, quota, history: state.history.slice(-5) } };
-journal("capacity", "controller", { host: host.name, note: `heavy ${heavyVerdict}, light ${lightVerdict}, readonly ${roVerdict}, cap ${state.suiteMax}`, heavy: heavyVerdict, light: lightVerdict, readonly: roVerdict, load1, cpu, mem, avail_gb: verdict.measured.availGb, queue: queue.unit + queue.e2e, foreign: round1(foreign), unknown: round1(cores?.unknown) });
+  measured: { cpuAvg10: cpu, memAvg10: mem, ioAvg10: io, load1: num(kv.load1), threads, availGb: Number(availGb.toFixed(1)), suite, readonly, queue, foreign: round1(foreign), unknown: round1(cores?.unknown), own: round1(cores?.own), limits: { heavyLoad: round1(threads * factor.heavy), lightLoad: round1(threads * factor.light), cpuAvg10: t.cpu, lightCpuAvg10: t.lightCpu, foreign: round1(threads * factor.foreignMax), foreignMinLoad: round1(threads * factor.foreignMinLoad) }, recentTimeouts, quota, history: state.history.slice(-5) } };
+journal("capacity", "controller", { host: host.name, note: `heavy ${heavyVerdict}, light ${lightVerdict}, readonly ${roVerdict}, cap ${state.suiteMax}`, heavy: heavyVerdict, light: lightVerdict, readonly: roVerdict, load1: num(kv.load1), cpu, mem, avail_gb: verdict.measured.availGb, queue: queue.unit + queue.e2e, foreign: round1(foreign), unknown: round1(cores?.unknown) });
 console.log(JSON.stringify(process.argv.includes("--verbose") ? verdict : { ...verdict, measured: undefined }));
 
 function recentLoadTimeouts(minutes) {

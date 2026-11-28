@@ -21,7 +21,7 @@ const sh = (file, body) => fs.writeFileSync(file, `#!/bin/sh\n${body}\n`, { mode
  * had (CPU seconds before the sample; null: born during it), uses (cores during the 1 s sample) }]. ppid "probe" is the
  * probe's own shell, whose pid only the stand-in `sleep` knows; probeParent is that shell's parent.
  */
-function host({ os = "linux", load1 = 1.2, threads = 12, psiCpu = null, psiMem = null, availKb = 40_000_000, capacity = {}, procs = [], probeParent = 1, remote = false, sampleFails = false } = {}) {
+function host({ os = "linux", load1 = 1.2, threads = 12, psiCpu = null, psiMem = null, availKb = 40_000_000, capacity = {}, procs = [], probeParent = 1, remote = false, sampleFails = false, locale = null } = {}) {
   const dir = fs.realpathSync(tempDir("af-capacity-"));
   const ctl = path.join(dir, "ctl"), bin = path.join(dir, "bin"), home = path.join(dir, "home"), proc = path.join(dir, "proc"), after = path.join(dir, "after"), tmproot = path.join(dir, "tmproot");
   for (const d of [ctl, bin, home, proc, after, tmproot]) fs.mkdirSync(d);
@@ -90,13 +90,15 @@ function host({ os = "linux", load1 = 1.2, threads = 12, psiCpu = null, psiMem =
     rewind = () => fs.rmSync(path.join(dir, "slept"), { force: true });
     // lsof -a -d cwd -p <pids> -Fpn
     sh(path.join(bin, "lsof"), `echo "$*" >> "${dir}/lsof.log"\nfor p in $(echo "$5" | tr ',' ' '); do case $p in\n${procs.filter((p) => where(p.at)).map((p) => `${p.pid}) printf 'p${p.pid}\\nfcwd\\nn%s\\n' "${where(p.at)}";;`).join("\n")}\n*) :;;\nesac; done\nexit 1`);
-    sh(path.join(bin, "sysctl"), `case "$*" in *loadavg*) echo "{ ${load1} 1.00 1.00 }";; *pagesize*) echo 16384;; *) echo ${threads};; esac`);
+    // Like the real one, it prints the load with the locale's decimal comma unless the caller runs under C.
+    const comma = String(load1).replace(".", ",");
+    sh(path.join(bin, "sysctl"), `case "$*" in *loadavg*) case "$LC_ALL" in C|"") echo "{ ${load1} 1.00 1.00 }";; *) echo "{ ${comma} 1,00 1,00 }";; esac;; *pagesize*) echo 16384;; *) echo ${threads};; esac`);
     sh(path.join(bin, "vm_stat"), `echo "Pages free:                 ${Math.round(availKb / 16)}."`);
   }
   // A stand-in ssh: records the call and gives the command to sh, as the remote login shell would get it.
   sh(path.join(bin, "ssh"), `echo call >> "${dir}/ssh.log"\nshift\ncd "${home}" && exec /bin/sh -c "$1"`);
 
-  const env = { HOME: home, TMPDIR: tmproot, PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, FACTORY_PROC: proc, FACTORY_PROBE_TMP: tmproot };
+  const env = { HOME: home, TMPDIR: tmproot, PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, FACTORY_PROC: proc, FACTORY_PROBE_TMP: tmproot, ...(locale ? { LANG: locale, LC_ALL: locale } : {}) };
   const run = (...args) => {
     rewind();
     const r = spawnSync(process.execPath, [path.join(ctl, "capacity.mjs"), "--verbose", ...args], { cwd: ctl, env, encoding: "utf8", timeout: 60_000 });
@@ -225,6 +227,23 @@ test("a remote host: the probe is one ssh round trip, run by sh, and the figures
   const v = h.run();
   assert.deepEqual([v.foreignLoad, v.measured.own, v.measured.load1, v.heavy], [4, 1, 9, "wait"]);
   assert.equal(fs.readFileSync(path.join(h.dir, "ssh.log"), "utf8").trim().split("\n").length, 2, "one for the probe, one that writes the gate slots");
+});
+
+// --- locale ------------------------------------------------------------------------------------------------------------
+// A Mac with LANG=de_DE.UTF-8: load1 came out as NaN (so everything started), and BSD awk cut "1.50" to 1.
+test("macOS under a comma-decimal locale: load and per-process CPU are measured as under C", () => {
+  const options = { os: "macos", load1: "20.50", procs: [...Array.from({ length: 8 }, (_, i) => busy(i + 1, "other", 0.9, { had: 10.05 })), { ...busy(9, "other", 0.02), had: 10.99 }] };
+  const v = host({ ...options, locale: "de_DE.UTF-8" }).run();
+  assert.deepEqual([v.measured.load1, v.foreignLoad, v.heavy, v.light], [20.5, 7.2, "wait", "wait"], JSON.stringify(v));
+});
+
+test("a load figure that is not a number is unknown: nothing starts", () => {
+  const h = host({ os: "macos", load1: "2,99" });   // as a probe would print it that kept the locale
+  sh(path.join(h.dir, "bin", "sysctl"), `case "$*" in *loadavg*) echo "{ 2,99 1,00 1,00 }";; *pagesize*) echo 16384;; *) echo 12;; esac`);
+  const v = h.run();
+  assert.deepEqual([v.measured.load1, v.heavy, v.light, v.readonly, v.capOnly], [null,"wait", "wait", "wait", false], JSON.stringify(v));
+  assert.match(v.reason, /^probe failed \(load unknown\)/);
+  assert.deepEqual([v.gateUnitSlots, v.gateE2eSlots].map(Number.isFinite), [true, true]);
 });
 
 // --- two classes -------------------------------------------------------------------------------------------------------

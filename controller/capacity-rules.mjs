@@ -22,6 +22,8 @@ export const BUSY_CORES = 0.05;
  */
 export function probeScript({ project, ownDirs }) {
   return `
+# One locale for every tool: with a decimal comma (LANG=de_DE.UTF-8) sysctl prints "2,99" and BSD awk reads "1.50" as 1.
+export LC_ALL=C
 P="\${FACTORY_PROC:-/proc}"
 for k in cpu memory io; do printf "psi_%s=%s\\n" $k "$(awk '/^some/{for(i=1;i<=NF;i++) if($i ~ /^avg10=/){split($i,a,"="); printf "%s", a[2]}}' "$P/pressure/$k" 2>/dev/null)"; done
 printf "avail_kb=%s\\n" "$( (awk '/MemAvailable/{print $2; f=1} END{exit !f}' "$P/meminfo" 2>/dev/null) || (vm_stat 2>/dev/null | awk -v ps="$(sysctl -n hw.pagesize 2>/dev/null || echo 16384)" '/Pages (free|inactive|speculative)/{gsub("\\\\.","",$NF); s+=$NF} END{if (s>0) print int(s*ps/1024)}') )"
