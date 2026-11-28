@@ -90,6 +90,8 @@ if [ -n "$rows" ]; then
     done
   done
 fi
+# Last line: without it the output is cut off.
+echo "probe=end"
 `;
 }
 

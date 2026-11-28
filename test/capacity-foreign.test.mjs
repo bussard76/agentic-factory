@@ -246,6 +246,28 @@ test("a load figure that is not a number is unknown: nothing starts", () => {
   assert.deepEqual([v.gateUnitSlots, v.gateE2eSlots].map(Number.isFinite), [true, true]);
 });
 
+// --- a failed probe ----------------------------------------------------------------------------------------------------
+// It used to read as load 0 on 1 thread with unknown memory: everything started, and a quiet cap rose.
+test("a failed or partial probe: every class waits, and the cap moves in neither direction", () => {
+  const complete = ["load1=1.0", "threads=12", "avail_kb=40000000", "probe=end"];
+  for (const [what, stand] of [
+    ["ssh fails", "exit 255"],
+    ["ssh dies after part of the output", `printf 'load1=1.0\\nthreads=12\\n'; exit 255`],
+    ["output cut off", `printf '${complete.slice(0, -1).join("\\n")}\\n'`],
+    ["no threads", `printf '${complete.filter((l) => !l.startsWith("threads")).join("\\n")}\\n'`],
+    ["no load", `printf '${complete.filter((l) => !l.startsWith("load1")).join("\\n")}\\n'`],
+  ]) for (const cap of [2, 5]) {
+    const h = host({ remote: true });
+    sh(path.join(h.dir, "bin", "ssh"), stand);
+    h.workers(cap); h.setState({ foreignRepair: ago(500), suiteMax: cap, readonlyMax: 2, quietSince: ago(90), roQuietSince: ago(90), history: [] });
+    const v = h.run();
+    assert.deepEqual([v.heavy, v.light, v.readonly, v.caps.suite, v.capOnly], ["wait", "wait", "wait", cap, false], what);
+    assert.match(v.reason, /^probe failed \(/, what); assert.match(v.lightReason, /^probe failed \(/, what);
+    assert.deepEqual(h.state().history, [], what);
+    assert.ok(Date.now() - Date.parse(h.state().quietSince) < 60e3, "an unmeasured time is not a quiet one");
+  }
+});
+
 // --- two classes -------------------------------------------------------------------------------------------------------
 const verdicts = (v) => [v.heavy, v.light];
 for (const os of BOTH) test(`${os} without PSI: heavy up to 0.9 x threads, light up to 1.5 x threads`, () => {

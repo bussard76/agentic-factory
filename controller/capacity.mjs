@@ -34,7 +34,7 @@ const cpu = num(kv.psi_cpu), mem = num(kv.psi_memory), io = num(kv.psi_io);
 const availGb = (num(kv.avail_kb) ?? 0) / 1e6, load1 = num(kv.load1) ?? 0, threads = num(kv.threads) ?? 1;
 const queue = { unit: num(kv.queue_unit) ?? 0, e2e: num(kv.queue_e2e) ?? 0 };
 // What the probe did not deliver. With any of it missing, nothing is known well enough to start a worker.
-const probeGaps = [...(num(kv.load1) === null ? ["load unknown"] : [])];
+const probeGaps = [...(kv.probe !== "end" ? ["no complete answer from the host"] : []), ...(num(kv.load1) === null ? ["load unknown"] : []), ...(num(kv.threads) > 0 ? [] : ["threads unknown"])];
 const probeFailed = probeGaps.length ? [`probe failed (${probeGaps.join(", ")})`] : [];
 // Cores in use over the sample, by owner; null when the processes could not be sampled. Only `foreign` can hold a start.
 const cores = kv.procs === "ok" ? attribute(probe) : null;
@@ -110,7 +110,9 @@ if (setSuite) {
   state.history.push({ ts: state.quietSince, dir: "set", suiteMax: state.suiteMax, why: `set by ${setBy}` });
   journal("decision", "controller", { host: host.name, note: `capacity suiteMax set → ${state.suiteMax} by hand`, by: setBy });
 }
-if (CAL.mode === "auto" && !setSuite) {   // the run that sets the cap by hand makes no automatic step as well
+// An unmeasured host is neither quiet nor overloaded: no step either way, and the quiet time starts again.
+if (probeFailed.length) state.quietSince = state.roQuietSince = new Date().toISOString();
+if (CAL.mode === "auto" && !setSuite && !probeFailed.length) {   // the run that sets the cap by hand makes no automatic step as well
   const now = Date.now(), nowIso = new Date().toISOString();
   const change = (field, dir, why) => { state.history.push({ ts: nowIso, dir, [field]: state[field], why }); journal("decision", "controller", { host: host.name, note: `capacity ${field} ${dir} → ${state[field]} (${why})` }); };
   if (overload.length) {
