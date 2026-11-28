@@ -27,7 +27,9 @@ if (process.argv.includes("--set-suite") && !(/^[1-9]\d*$/.test(setSuite ?? "") 
 const ownDirs = [projectDirOn(host), workspacesOn(host), CONTROLLER_HOME, `~/front-agent/${PROJECT}`, `~/Development/${PROJECT}-preview`, ...(host.kind === "local" ? [DIR, PROJECT_DIR] : [])];
 const script = probeScript({ project: PROJECT, ownDirs });
 // Over ssh the host's login shell reads the command, which need not be sh.
-const probe = parseProbe(onHost(host, host.kind === "local" ? script : `sh -c ${shQuote(script)}`));
+// A probe that hangs (a dead mount, a stuck ssh) must not hang capacity.mjs and with it start.mjs: it counts as failed.
+const PROBE_TIMEOUT_MS = Number(process.env.FACTORY_PROBE_TIMEOUT_MS) || 30_000;   // the variable is for the tests
+const probe = parseProbe(onHost(host, host.kind === "local" ? script : `sh -c ${shQuote(script)}`, { timeout: PROBE_TIMEOUT_MS, killSignal: "SIGKILL" }));
 const kv = probe.kv;
 const num = (v) => (v === "" || v === undefined || !Number.isFinite(Number(v)) ? null : Number(v));   // never NaN
 const cpu = num(kv.psi_cpu), mem = num(kv.psi_memory), io = num(kv.psi_io);
@@ -39,7 +41,10 @@ const probeFailed = probeGaps.length ? [`probe failed (${probeGaps.join(", ")})`
 // Cores in use over the sample, by owner; null when the processes could not be sampled. Only `foreign` can hold a start.
 const cores = kv.procs === "ok" ? attribute(probe) : null;
 const round1 = (v) => (v === null || v === undefined ? null : Number(v.toFixed(1)));
-const foreign = cores?.foreign ?? null;
+// Without working directories nothing can be told apart: foreign load is then unknown, never 0.
+const busyProcs = probe.procs.filter((p) => p.cores > 0);
+const blind = kv.lsof === "missing" ? "lsof is missing" : busyProcs.length && busyProcs.every((p) => !p.cwd) ? "no working directory of a busy process could be read" : null;
+const foreign = blind ? null : cores?.foreign ?? null;
 // Count only running workers on this host (lib.mjs workerStatus): an Orca worker until its dispatch is settled, even if its
 // agent still sits at the prompt; a terminal-runner worker while its pid is alive. Finished workers must not fill the cap.
 // A worker whose state cannot be read counts as running (fail closed). liveTerminals is null when the terminal list fails;
@@ -85,7 +90,7 @@ const hot = pressure.length > 0;
 const notes = memKnown ? [] : ["available memory unknown on this host: memory rule skipped"];
 if (RUNNER === "orca" && statuses.includes("unknown")) notes.push(`${statuses.filter((x) => x === "unknown").length} recorded workers counted as live: state unavailable from orca`);
 const loadNotes = [
-  ...(cores === null ? ["processes could not be sampled: foreign load unknown, its rule skipped"] : []),
+  ...(cores === null ? ["processes could not be sampled: foreign load unknown, its rule skipped"] : blind ? [`${blind}: foreign load unknown, its rule skipped`] : []),
   ...(foreignOver && !foreignHot ? [`foreign load ~${foreign.toFixed(1)} does not hold a start: load1 ${load1} is below ${factor.foreignMinLoad} x ${threads} threads`] : []),
 ];
 
@@ -144,7 +149,7 @@ const scale = probeFailed.length ? 0 : cpu === null ? Math.max(0, 1 - load1 / th
 const slots = { unit: Math.round(uMin + (uMax - uMin) * scale), e2e: Math.round(eMin + (eMax - eMin) * scale) };
 writeJson(`gate-slots.${host.name}.json`, slots);
 if (host.kind === "local") writeJson("gate-slots.json", slots);
-else onHost(host, `mkdir -p ${CONTROLLER_HOME} && printf '%s' '${JSON.stringify(slots)}' > ${CONTROLLER_HOME}/gate-slots.json`);
+else onHost(host, `mkdir -p ${CONTROLLER_HOME} && printf '%s' '${JSON.stringify(slots)}' > ${CONTROLLER_HOME}/gate-slots.json`, { timeout: PROBE_TIMEOUT_MS, killSignal: "SIGKILL" });
 
 // capOnly: a pool waits and only its cap holds it back: the suite cap with nothing else against a Developer, or the
 // read-only cap on a quiet host. The Controller can then ask the human to raise it.

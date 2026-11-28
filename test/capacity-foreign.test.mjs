@@ -88,8 +88,8 @@ function host({ os = "linux", load1 = 1.2, threads = 12, psiCpu = null, psiMem =
     sh(path.join(bin, "ps"), sampleFails ? "exit 1" : `if [ -e "${dir}/slept" ]; then shell=$(cat "${dir}/slept"); cat "${dir}/ps2"; ${own.join("; ")}; else cat "${dir}/ps1"; fi`);
     sh(path.join(bin, "sleep"), `echo "$PPID" > "${dir}/slept"`);
     rewind = () => fs.rmSync(path.join(dir, "slept"), { force: true });
-    // lsof -a -d cwd -p <pids> -Fpn
-    sh(path.join(bin, "lsof"), `echo "$*" >> "${dir}/lsof.log"\nfor p in $(echo "$5" | tr ',' ' '); do case $p in\n${procs.filter((p) => where(p.at)).map((p) => `${p.pid}) printf 'p${p.pid}\\nfcwd\\nn%s\\n' "${where(p.at)}";;`).join("\n")}\n*) :;;\nesac; done\nexit 1`);
+    // lsof -b -w -a -d cwd -p <pids> -Fpn
+    sh(path.join(bin, "lsof"), `echo "$*" >> "${dir}/lsof.log"\nfor p in $(echo "$7"| tr ',' ' '); do case $p in\n${procs.filter((p) => where(p.at)).map((p) => `${p.pid}) printf 'p${p.pid}\\nfcwd\\nn%s\\n' "${where(p.at)}";;`).join("\n")}\n*) :;;\nesac; done\nexit 1`);
     // Like the real one, it prints the load with the locale's decimal comma unless the caller runs under C.
     const comma = String(load1).replace(".", ",");
     sh(path.join(bin, "sysctl"), `case "$*" in *loadavg*) case "$LC_ALL" in C|"") echo "{ ${load1} 1.00 1.00 }";; *) echo "{ ${comma} 1,00 1,00 }";; esac;; *pagesize*) echo 16384;; *) echo ${threads};; esac`);
@@ -101,7 +101,8 @@ function host({ os = "linux", load1 = 1.2, threads = 12, psiCpu = null, psiMem =
   const env = { HOME: home, TMPDIR: tmproot, PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, FACTORY_PROC: proc, FACTORY_PROBE_TMP: tmproot, ...(locale ? { LANG: locale, LC_ALL: locale } : {}) };
   const run = (...args) => {
     rewind();
-    const r = spawnSync(process.execPath, [path.join(ctl, "capacity.mjs"), "--verbose", ...args], { cwd: ctl, env, encoding: "utf8", timeout: 60_000 });
+    const extraEnv = typeof args[0] === "object" ? args.shift() : {};
+    const r = spawnSync(process.execPath, [path.join(ctl, "capacity.mjs"), "--verbose", ...args], { cwd: ctl, env: { ...env, ...extraEnv }, encoding: "utf8", timeout: 60_000 });
     assert.equal(r.status, 0, r.stderr);
     return JSON.parse(r.stdout);
   };
@@ -219,7 +220,34 @@ test("macOS asks lsof once, and only about busy processes and their parents", ()
   const h = host({ os: "macos", procs: [busy(1, "other", 1), { pid: P(2), name: "idle", at: "other", had: 100, uses: 0 }] });
   h.run();
   const calls = fs.readFileSync(path.join(h.dir, "lsof.log"), "utf8").trim().split("\n");
-  assert.deepEqual(calls, [`-a -d cwd -p ${P(1)} -Fpn`]);
+  assert.deepEqual(calls, [`-b -w -a -d cwd -p ${P(1)} -Fpn`]);
+});
+
+// 8 cores really in another checkout, but who they belong to cannot be seen.
+for (const [what, os, tool, body] of [["lsof is not there (exit 127)", "macos", "lsof", "exit 127"], ["lsof gives nothing", "macos", "lsof", "exit 1"], ["readlink is refused for every process", "linux", "readlink", "exit 1"]]) {
+  test(`working directories unreadable, ${what}: foreign load is unknown with a note, never 0`, () => {
+    const h = host({ os, load1: 8, procs: [busy(1, "other", 8)] });
+    sh(path.join(h.dir, "bin", tool), body);
+    const v = h.run();
+    assert.deepEqual([v.foreignLoad, v.unknownLoad, v.heavy], [null, 8, "start"]);
+    assert.match(v.loadNote, /working directory .* could be read: foreign load unknown/);
+  });
+}
+
+// A system without lsof anywhere on the PATH: the probe's own check, run with a PATH that has only what it needs.
+test("macOS without lsof on the PATH: the probe says so", () => {
+  const dir = fs.realpathSync(tempDir("af-capacity-nolsof-"));
+  const r = spawnSync("/bin/sh", ["-c", probeScript({ ownDirs: [], project: "demo" })], { encoding: "utf8", timeout: 60_000, env: { PATH: dir, HOME: dir, FACTORY_PROC: dir, FACTORY_PROBE_TMP: "" } });
+  assert.equal(parseProbe(r.stdout).kv.lsof, "missing", r.stdout);
+});
+
+test("a probe that hangs is cut off and counts as failed", () => {
+  const h = host({ remote: true });
+  sh(path.join(h.dir, "bin", "ssh"), "exec /bin/sleep 20");
+  const started = Date.now();
+  const v = h.run({ FACTORY_PROBE_TIMEOUT_MS: "500" });
+  assert.ok(Date.now() - started < 15_000);
+  assert.deepEqual([v.heavy, v.light, v.readonly], ["wait", "wait", "wait"]); assert.match(v.reason, /^probe failed/);
 });
 
 test("a remote host: the probe is one ssh round trip, run by sh, and the figures are those of that host", () => {

@@ -42,6 +42,7 @@ if [ -r "$P/uptime" ]; then
   sample() { cat "$P"/[0-9]*/stat 2>/dev/null | awk -v hz="$hz" '{ e=0; for (j=length($0); j>0; j--) if (substr($0,j,1)==")") { e=j; break }; if (!e) next; o=index($0,"("); if (split(substr($0,e+2),f," ") < 20) next; printf "%s %s %.2f %.2f %s\\n", $1, f[2], (f[12]+f[13])/hz, f[20]/hz, substr($0,o+1,e-o-1) }'; }
 else
   linux=
+  command -v lsof >/dev/null 2>&1 || echo "lsof=missing"
   now() { perl -MTime::HiRes=time -e 'printf "%.3f\\n", time' 2>/dev/null; }
   sample() { ps -A -o pid=,ppid=,time=,comm= 2>/dev/null | awk '{ d=0; t=$3; if (split(t,x,"-")==2) { d=x[1]; t=x[2] }; n=split(t,c,":"); s=0; for (j=1;j<=n;j++) s=s*60+c[j]; pid=$1; ppid=$2; sub(/^ *[0-9]+ +[0-9]+ +[^ ]+ +/,""); printf "%s %s %.2f - %s\\n", pid, ppid, s+d*86400, $0 }'; }
 fi
@@ -73,7 +74,8 @@ if [ -n "$rows" ]; then
   if [ -n "$linux" ]; then
     cwds=$(printf '%s\\n' "$rows" | while read -r pid rest; do c=$(readlink "$P/$pid/cwd" 2>/dev/null) && printf '%s\\t%s\\n' "$pid" "$c"; done)
   else
-    cwds=$(lsof -a -d cwd -p "$(printf '%s\\n' "$rows" | awk '{printf "%s%s", s, $1; s=","}')" -Fpn 2>/dev/null | awk '/^p/{p=substr($0,2)} /^n\\//{printf "%s\\t%s\\n", p, substr($0,2)}')
+    # -b: no kernel call that can block on a dead network mount; -w: without the warnings that brings.
+    cwds=$(lsof -b -w -a -d cwd -p "$(printf '%s\\n' "$rows" | awk '{printf "%s%s", s, $1; s=","}')" -Fpn 2>/dev/null | awk '/^p/{p=substr($0,2)} /^n\\//{printf "%s\\t%s\\n", p, substr($0,2)}')
   fi
   printf '%s\\n' "$cwds" | sed -n 's/^./cwd=&/p'
   # The git repository a working directory lies in (for a linked worktree, the repository it belongs to). Home itself does not count.
