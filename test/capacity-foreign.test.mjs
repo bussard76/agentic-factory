@@ -105,7 +105,7 @@ function host({ os = "linux", load1 = 1.2, threads = 12, psiCpu = null, psiMem =
   const run = (...args) => {
     rewind();
     const extraEnv = typeof args[0] === "object" ? args.shift() : {};
-    const r = spawnSync(process.execPath, [path.join(ctl, "capacity.mjs"), "--verbose", ...args], { cwd: ctl, env: { ...env, FACTORY_PROBE_TIMEOUT_MS: "3600000", ...extraEnv },encoding: "utf8", timeout: 60_000 });
+    const r = spawnSync(process.execPath, [path.join(ctl, "capacity.mjs"), "--verbose", ...args], { cwd: ctl, env: { ...env, ...extraEnv }, encoding: "utf8", timeout: 60_000 });
     assert.equal(r.status, 0, r.stderr);
     return JSON.parse(r.stdout);
   };
