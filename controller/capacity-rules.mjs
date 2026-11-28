@@ -144,20 +144,41 @@ export function attribute({ procs, own, tmp }) {
 
 /**
  * Before this version the calibration lowered the suite cap whenever the foreign-load figure was over its limit, and that
- * figure was wrong. Gives back the steps whose only recorded reason was foreign load, since the last cap set by hand
- * (--set-suite), never above the cap before the first of them and never above `max`. Steps with any other reason stay.
- * Returns null when there is nothing to give back.
+ * figure was wrong. Replays the history since the last cap set by hand (--set-suite) and keeps what is still owed: a step
+ * down whose only recorded reason was foreign load is owed, a later step up has already won that much back, and a step
+ * down with any other reason stays. The result is never above the cap before the steps still owed, nor above `max`
+ * (calibration.maxSuite), and never below today's cap. A cap that is too low costs time, one that is too high overloads a
+ * shared machine, so in doubt nothing is restored: in `manual` mode, and when the history does not add up to today's cap
+ * or moves in jumps the calibration does not make (someone edited the state).
+ * Returns null when nothing is owed, else { owed, steps, suiteMax } or, restoring nothing, { owed, steps, doubt }.
  */
-export function repairCaps(state, { step, max }) {
+export function repairCaps(state, { step, max, manual = false }) {
   const history = state.history;
   const lastSet = history.map((h) => h.dir).lastIndexOf("set");
-  let lost = 0, peak = 0, steps = 0;
-  history.forEach((h, i) => {
-    if (i <= lastSet || h.dir !== "down" || !Number.isFinite(h.suiteMax) || !String(h.why ?? "").split("; ").every((r) => r.startsWith("foreign load "))) return;
-    const before = history.slice(0, i).reverse().find((x) => Number.isFinite(x.suiteMax))?.suiteMax ?? h.suiteMax + step;
-    if (before <= h.suiteMax) return;
-    lost += before - h.suiteMax; peak = Math.max(peak, before); steps++;
-  });
-  const suiteMax = Math.min(state.suiteMax + lost, peak, max);
-  return steps && suiteMax > state.suiteMax ? { suiteMax, steps } : null;
+  const debts = [];   // the steps still owed, oldest first: { before: the cap before it, lost }
+  let cap = lastSet >= 0 ? history[lastSet].suiteMax : undefined, odd = false, foreignSteps = 0;
+  for (const h of history.slice(lastSet + 1)) {
+    if ((h.dir !== "down" && h.dir !== "up") || !Number.isFinite(h.suiteMax)) continue;
+    // The oldest entry kept has nothing before it: it was one step of the calibration.
+    const before = cap ?? (h.dir === "down" ? h.suiteMax + step : h.suiteMax - step);
+    const change = h.dir === "down" ? before - h.suiteMax : h.suiteMax - before;
+    if (change < 0 || change > step || (cap === undefined && step > 1)) odd = true;
+    cap = h.suiteMax;
+    if (h.dir === "down") {
+      if (change > 0 && String(h.why ?? "").split("; ").every((r) => r.startsWith("foreign load "))) { debts.push({ before, lost: change }); foreignSteps++; }
+    } else {
+      for (let won = change; won > 0 && debts.length;) {
+        const last = debts[debts.length - 1], part = Math.min(won, last.lost);
+        last.lost -= part; won -= part;
+        if (!last.lost) debts.pop();
+      }
+    }
+  }
+  const owed = debts.reduce((sum, d) => sum + d.lost, 0), found = { owed, steps: debts.length };
+  if (cap !== undefined && cap !== state.suiteMax && foreignSteps) return { ...found, doubt: `the cap is ${state.suiteMax} but its history ends at ${cap}: it was changed by hand` };
+  if (odd && foreignSteps) return { ...found, doubt: "the recorded history does not add up: it cannot be told what is owed" };
+  if (!owed) return null;
+  if (manual) return { ...found, doubt: "calibration.mode is manual" };
+  const suiteMax = Math.min(state.suiteMax + owed, Math.max(...debts.map((d) => d.before)), max);
+  return suiteMax > state.suiteMax ? { ...found, suiteMax } : { ...found, doubt: `calibration.maxSuite is ${max}` };
 }

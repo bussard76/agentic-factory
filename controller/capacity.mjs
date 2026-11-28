@@ -100,10 +100,14 @@ const fresh = () => ({ foreignRepair: new Date().toISOString(), suiteMax: CAL.mo
 const saved = process.argv.includes("--reset") ? null : readState(stateName, null);
 const state = saved && Number.isFinite(saved.suiteMax) && Number.isFinite(saved.readonlyMax) && Array.isArray(saved.history) ? saved : fresh();
 // Once per state written by an earlier version: give back what the wrong foreign-load figure took from the suite cap.
-if (!state.foreignRepair) {
-  const given = repairCaps(state, { step: CAL.step, max: SET_MAX });
+// Not while the host is unmeasured or overloaded: it then waits for a later run, and real steps down in between are
+// counted. A run that sets the cap by hand settles it: the human's number is the cap.
+if (!state.foreignRepair && (setSuite || (!probeFailed.length && !overload.length))) {
+  const given = setSuite ? null : repairCaps(state, { step: CAL.step, max: CAL.maxSuite, manual: CAL.mode !== "auto" });
   state.foreignRepair = new Date().toISOString();
-  if (given) {
+  if (given?.doubt) {
+    journal("decision", "controller", { host: host.name, note: `capacity suiteMax NOT restored, stays ${state.suiteMax}: ${given.steps} step-down(s) for the wrongly measured foreign load are recorded, but ${given.doubt}. To raise it: ask the human, then node capacity.mjs --on ${host.name} --set-suite <n> --by "<their words>"` });
+  } else if (given) {
     const why = `${given.steps} earlier step-down(s) had only foreign load as the reason, which was measured wrongly`;
     journal("decision", "controller", { host: host.name, note: `capacity suiteMax restored → ${given.suiteMax}, was ${state.suiteMax} (${why})` });
     state.suiteMax = given.suiteMax; state.quietSince = state.foreignRepair;

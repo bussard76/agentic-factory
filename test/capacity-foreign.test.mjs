@@ -412,6 +412,53 @@ test("update: what the project set by hand and steps with a real reason stay", (
   assert.equal(repairCaps({ suiteMax: 2, history: [] }, { step: 1, max: 12 }), null);
 });
 
+const F = "foreign load ~6.6", M = "memory 3.0 GB available";
+test("update: a foreign step that was already won back is not given back again", () => {
+  const given = (history, suiteMax, options = {}) => repairCaps({ suiteMax, history }, { step: 1, max: 12, ...options });
+  assert.equal(given([up(5), down(4, F), up(5), down(4, M), down(3, M)], 3), null, "one real memory step stays");
+  assert.equal(given([up(5), down(4, F), up(5), down(4, F), up(5), down(4, M), down(3, M), down(2, M)], 2), null, "three real memory steps stay");
+  assert.equal(given([up(5), down(4, F), down(3, M), up(4), up(5)], 5), null);
+  assert.equal(given([up(5), down(4, F), down(3, F), up(4), down(3, M)], 3).suiteMax, 4, "two taken, one won back, one still owed");
+  // In doubt nothing is restored.
+  assert.match(given(BUG, 1).doubt, /changed by hand/);
+  assert.match(given([up(5), down(2, F)], 2).doubt, /does not add up/, "a jump the calibration does not make: edited between two steps");
+  assert.match(given([down(4, F)], 4, { step: 2 }).doubt, /does not add up/, "the oldest entry with a step above 1: the cap before it is unknown");
+  assert.match(given(BUG, 2, { manual: true }).doubt, /manual/);
+  assert.match(given(BUG, 2, { max: 2 }).doubt, /maxSuite is 2/);
+});
+
+test("update on a host: within maxSuite only, not in manual mode and not over a hand edit, each said once in the journal", () => {
+  const first = (capacity, suiteMax = 2) => {
+    const h = host({ capacity });
+    h.setState({ suiteMax, readonlyMax: 2, quietSince: ago(1), history: BUG });
+    const caps = [h.run().caps.suite, h.run().caps.suite];
+    return { caps, notes: h.journal().filter((e) => e.type === "decision").map((e) => e.note) };
+  };
+  assert.deepEqual(first({ suiteWorkersMax: 8, calibration: { maxSuite: 3 } }).caps, [3, 3]);
+  for (const [what, r, cap] of [["manual", first({ suiteWorkersMax: 2, calibration: { mode: "manual" } }), 2], ["hand edit", first({}, 1), 1]]) {
+    assert.deepEqual(r.caps, [cap, cap], what);
+    assert.equal(r.notes.length, 1, what);
+    assert.match(r.notes[0], new RegExp(`NOT restored, stays ${cap}: .*node capacity\\.mjs --on local --set-suite <n> --by`), what);
+  }
+});
+
+test("update: no restore while the host is unmeasured or short of memory; it comes on a later run; --set-suite settles it", () => {
+  const old = { suiteMax: 2, readonlyMax: 2, quietSince: ago(1), history: BUG };
+  const h = host({ availKb: 1_000_000 }); h.setState(old);
+  assert.equal(h.run().caps.suite, 2);
+  assert.equal(h.state().foreignRepair, undefined, "still to be done");
+  assert.ok(!h.journal().some((e) => e.type === "decision"));
+  fs.writeFileSync(path.join(h.dir, "proc", "meminfo"), "MemAvailable: 40000000 kB\n");
+  assert.equal(h.run().caps.suite, 5);
+  const failed = host({ remote: true }); failed.setState(old);
+  sh(path.join(failed.dir, "bin", "ssh"), "exit 255");
+  assert.equal(failed.run().caps.suite, 2); assert.equal(failed.state().foreignRepair, undefined);
+  const set = host({}); set.setState(old);
+  assert.equal(set.run("--set-suite", "2", "--by", "two only").caps.suite, 2);
+  assert.equal(set.run().caps.suite, 2);
+  assert.deepEqual(set.journal().filter((e) => e.type === "decision").map((e) => e.note), ["capacity suiteMax set → 2 by hand"]);
+});
+
 test("update: a set cap stays set, a fresh or reset state restores nothing", () => {
   const h = host({});
   h.setState({ suiteMax: 1, readonlyMax: 2, quietSince: ago(1), history: [...BUG, { ts: ago(50), dir: "set", suiteMax: 1, why: "set by Alex" }] });
